@@ -23,8 +23,9 @@ pub use phase::DwPhase;
 pub use registry::{DwFrameDef, DwFrameFn, DwFrameRegistry};
 pub use session::{
     CompareTrace, DwDecisionCommitState, DwDecisionKey, DwDecisionTraceEntry, DwFrameCtx,
-    DwRunStatus, DwRuntimeChunk, DwRuntimeFrame, DwSession, DwTickResult, DwTickTraceEntry,
-    DwTraceComparison, DwWaitChunk, FormatComparison, FormatTrace, FormatTraceEntry,
+    DwRootPolicy, DwRunStatus, DwRuntimeChunk, DwRuntimeFrame, DwSession, DwTickResult,
+    DwTickTraceEntry, DwTraceComparison, DwWaitChunk, FormatComparison, FormatTrace,
+    FormatTraceEntry,
 };
 
 pub fn ProjectName() -> &'static str {
@@ -1134,6 +1135,184 @@ mod tests {
             blocked.Status,
             DwRunStatus::Steady,
             "run-until-blocked should stop on steady status"
+        );
+    }
+
+    #[test]
+    fn KeepRootFrameTransformsRootCompleteIntoSteady() {
+        let root = DwFrameId {
+            Domain: 51,
+            Local: 1,
+        };
+        fn RootF(_: &mut DwFrameCtx) -> DwControl {
+            Dw::Complete()
+        }
+        let mut reg = DwFrameRegistry::New();
+        reg.Register(DwFrameDef {
+            Id: root,
+            Step: RootF,
+            DebugName: "RootComplete",
+        })
+        .unwrap();
+        let mut session =
+            DwSession::NewWithRootPolicy(reg, root, 0, DwRootPolicy::KeepRootFrame).unwrap();
+        let first = session.Tick().unwrap();
+        assert_eq!(
+            first.Status,
+            DwRunStatus::Steady,
+            "root complete under keep-root policy should become steady"
+        );
+        assert_eq!(first.StackDepth, 1, "root frame should remain on stack");
+        assert_eq!(first.Frame, Some(root), "root frame should stay active");
+        assert_eq!(
+            first.Control,
+            Some(DwControlSummary::Complete),
+            "control summary should still indicate original complete control"
+        );
+        let second = session.Tick().unwrap();
+        assert_eq!(
+            second.Status,
+            DwRunStatus::Steady,
+            "repeated ticks should remain deterministic under keep-root complete behavior"
+        );
+    }
+
+    #[test]
+    fn KeepRootFrameRejectsRootPopAndRootReplace() {
+        let root_pop = DwFrameId {
+            Domain: 51,
+            Local: 2,
+        };
+        fn RootPop(_: &mut DwFrameCtx) -> DwControl {
+            Dw::Pop()
+        }
+        let mut reg_pop = DwFrameRegistry::New();
+        reg_pop
+            .Register(DwFrameDef {
+                Id: root_pop,
+                Step: RootPop,
+                DebugName: "RootPop",
+            })
+            .unwrap();
+        let mut session_pop =
+            DwSession::NewWithRootPolicy(reg_pop, root_pop, 0, DwRootPolicy::KeepRootFrame)
+                .unwrap();
+        let pop_tick = session_pop.Tick().unwrap();
+        assert_eq!(
+            pop_tick.Status,
+            DwRunStatus::Failed,
+            "root pop under keep-root policy should fail loudly"
+        );
+        assert_eq!(
+            pop_tick.FailureReason,
+            Some("cannot pop root frame under keep-root policy"),
+            "root pop failure reason should identify keep-root policy violation"
+        );
+
+        let root_replace = DwFrameId {
+            Domain: 51,
+            Local: 3,
+        };
+        let child = DwFrameId {
+            Domain: 51,
+            Local: 4,
+        };
+        fn RootReplace(_: &mut DwFrameCtx) -> DwControl {
+            Dw::Replace(DwFrameId {
+                Domain: 51,
+                Local: 4,
+            })
+        }
+        fn Child(_: &mut DwFrameCtx) -> DwControl {
+            Dw::Complete()
+        }
+        let mut reg_replace = DwFrameRegistry::New();
+        reg_replace
+            .Register(DwFrameDef {
+                Id: root_replace,
+                Step: RootReplace,
+                DebugName: "RootReplace",
+            })
+            .unwrap();
+        reg_replace
+            .Register(DwFrameDef {
+                Id: child,
+                Step: Child,
+                DebugName: "Child",
+            })
+            .unwrap();
+        let mut session_replace =
+            DwSession::NewWithRootPolicy(reg_replace, root_replace, 0, DwRootPolicy::KeepRootFrame)
+                .unwrap();
+        let replace_tick = session_replace.Tick().unwrap();
+        assert_eq!(
+            replace_tick.Status,
+            DwRunStatus::Failed,
+            "root replace under keep-root policy should fail loudly"
+        );
+        assert_eq!(
+            replace_tick.FailureReason,
+            Some("cannot replace root frame under keep-root policy"),
+            "root replace failure reason should identify keep-root policy violation"
+        );
+    }
+
+    #[test]
+    fn KeepRootFramePersistsAcrossChunkRestoreAndRunUntilBlocked() {
+        let root = DwFrameId {
+            Domain: 51,
+            Local: 5,
+        };
+        fn RootF(_: &mut DwFrameCtx) -> DwControl {
+            Dw::Complete()
+        }
+        let mut reg = DwFrameRegistry::New();
+        reg.Register(DwFrameDef {
+            Id: root,
+            Step: RootF,
+            DebugName: "RootChunk",
+        })
+        .unwrap();
+
+        let mut session =
+            DwSession::NewWithRootPolicy(reg, root, 0, DwRootPolicy::KeepRootFrame).unwrap();
+        let first = session.Tick().unwrap();
+        assert_eq!(
+            first.Status,
+            DwRunStatus::Steady,
+            "root complete should steady"
+        );
+        let chunk = session.ExportChunk();
+        assert_eq!(
+            chunk.RootPolicy,
+            DwRootPolicy::KeepRootFrame,
+            "runtime chunk should persist keep-root policy"
+        );
+
+        let mut reg_restore = DwFrameRegistry::New();
+        reg_restore
+            .Register(DwFrameDef {
+                Id: root,
+                Step: RootF,
+                DebugName: "RootChunk",
+            })
+            .unwrap();
+        let mut restored = DwSession::FromChunk(reg_restore, chunk).unwrap();
+        assert_eq!(
+            restored.RootPolicy(),
+            DwRootPolicy::KeepRootFrame,
+            "restored session should keep keep-root policy"
+        );
+
+        let blocked = restored.RunUntilBlocked(2).unwrap();
+        assert_eq!(
+            blocked.Status,
+            DwRunStatus::Steady,
+            "run-until-blocked should stop on keep-root steady state"
+        );
+        assert_eq!(
+            blocked.StackDepth, 1,
+            "restored keep-root session should retain root frame"
         );
     }
 }

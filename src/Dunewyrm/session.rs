@@ -45,6 +45,12 @@ pub enum DwRunStatus {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DwRootPolicy {
+    Normal,
+    KeepRootFrame,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DwRuntimeFrame {
     pub Id: DwFrameId,
     pub Pc: u32,
@@ -362,6 +368,7 @@ pub struct DwSession {
     DecisionMemory: Vec<DwDecisionCommitState>,
     ImmediateActs: Vec<DwActRequest>,
     PendingDeferredActs: Vec<DwDeferredAct>,
+    RootPolicy: DwRootPolicy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -380,6 +387,7 @@ pub struct DwRuntimeChunk {
     pub Mailbox: DwMailboxChunk,
     pub DecisionMemory: Vec<DwDecisionCommitState>,
     pub PendingDeferredActs: Vec<DwDeferredAct>,
+    pub RootPolicy: DwRootPolicy,
 }
 
 impl DwSession {
@@ -387,6 +395,14 @@ impl DwSession {
         registry: DwFrameRegistry,
         root: DwFrameId,
         initial_pc: u32,
+    ) -> Result<Self, &'static str> {
+        Self::NewWithRootPolicy(registry, root, initial_pc, DwRootPolicy::Normal)
+    }
+    pub fn NewWithRootPolicy(
+        registry: DwFrameRegistry,
+        root: DwFrameId,
+        initial_pc: u32,
+        root_policy: DwRootPolicy,
     ) -> Result<Self, &'static str> {
         if registry.Find(root).is_none() {
             return Err("root frame not found");
@@ -408,6 +424,7 @@ impl DwSession {
             DecisionMemory: Vec::new(),
             ImmediateActs: Vec::new(),
             PendingDeferredActs: Vec::new(),
+            RootPolicy: root_policy,
         })
     }
     pub fn Tick(&mut self) -> Result<DwTickResult, &'static str> {
@@ -540,6 +557,7 @@ impl DwSession {
             Mailbox: self.Mailbox.ExportChunk(),
             DecisionMemory: self.DecisionMemory.clone(),
             PendingDeferredActs: self.PendingDeferredActs.clone(),
+            RootPolicy: self.RootPolicy,
         }
     }
     pub fn FromChunk(
@@ -565,6 +583,7 @@ impl DwSession {
             DecisionMemory: chunk.DecisionMemory,
             ImmediateActs: Vec::new(),
             PendingDeferredActs: chunk.PendingDeferredActs,
+            RootPolicy: chunk.RootPolicy,
         })
     }
     fn ApplyControl(&mut self, control: DwControl) {
@@ -600,12 +619,20 @@ impl DwSession {
             }
             DwControl::Pop => {
                 if self.Stack.len() == 1 {
-                    self.FailNow("cannot pop root frame");
+                    if self.RootPolicy == DwRootPolicy::KeepRootFrame {
+                        self.FailNow("cannot pop root frame under keep-root policy");
+                    } else {
+                        self.FailNow("cannot pop root frame");
+                    }
                     return;
                 }
                 self.Stack.pop();
             }
             DwControl::Replace { Target } => {
+                if self.Stack.len() == 1 && self.RootPolicy == DwRootPolicy::KeepRootFrame {
+                    self.FailNow("cannot replace root frame under keep-root policy");
+                    return;
+                }
                 if self.Registry.Find(Target).is_none() {
                     self.FailNow("replace target frame not found");
                     return;
@@ -616,7 +643,11 @@ impl DwSession {
             DwControl::Stay => {}
             DwControl::Complete => {
                 if self.Stack.len() == 1 {
-                    self.Status = DwRunStatus::Completed;
+                    if self.RootPolicy == DwRootPolicy::KeepRootFrame {
+                        self.Status = DwRunStatus::Steady;
+                    } else {
+                        self.Status = DwRunStatus::Completed;
+                    }
                 } else {
                     self.Stack.pop();
                 }
@@ -696,5 +727,9 @@ impl DwSession {
                 | DwRunStatus::Completed
                 | DwRunStatus::Failed
         )
+    }
+
+    pub fn RootPolicy(&self) -> DwRootPolicy {
+        self.RootPolicy
     }
 }
