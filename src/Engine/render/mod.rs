@@ -15,6 +15,7 @@ pub mod upload_execution;
 pub mod wgpu;
 pub mod wgpu_pipeline;
 pub mod wgpu_shader_module;
+pub mod wgpu_wgsl_pipeline;
 pub use backend::*;
 pub use buffering::*;
 pub use buffering_lifecycle::*;
@@ -28,5 +29,6 @@ pub use pipeline::*;
 pub use upload::*;
 pub use upload_execution::*;
 pub use wgpu_shader_module::*;
+pub use wgpu_wgsl_pipeline::*;
 
 pub use backend::wgpu::*;
