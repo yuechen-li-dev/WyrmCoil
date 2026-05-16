@@ -83,6 +83,26 @@ M21 remains intentionally narrow:
 This milestone is a resource descriptor scaffold only, preserving GPU-free testability in normal `cargo test` runs.
 
 
+
+
+## M23 GPU buffer upload scaffold boundary
+
+M23 adds the next deterministic CPU-to-GPU boundary after M22 extraction:
+
+- `BuildVertexBufferUploadPlan(label, &ExtractedRenderBatch)` produces `VertexBufferUploadPlan` plain data (`Label`, packed `Bytes`, `VertexCount`, `StrideBytes`, usage intent).
+- Plan construction reuses M22 packing/layout helpers (`PackSpriteVertices`, `SpriteVertexStrideBytes`, `SpriteVertexBufferLayout`) and validates key contract errors (empty labels, byte-length mismatches, stride mismatches).
+- Empty batches are intentionally allowed so empty frames still produce valid zero-byte upload plans.
+- The boundary remains GPU-free and deterministic: normal tests require no `wgpu::Device`, surface/window, or DXC.
+
+M23 remains intentionally narrow:
+
+- no real `wgpu::Buffer` creation path required yet
+- no queue upload/write path
+- no command encoder or render pass
+- no draw-call submission
+
+Future milestones can consume the upload plan boundary for real buffer creation/submission without changing extraction semantics.
+
 ## M22 CPU render extraction boundary
 
 M22 adds the next renderer-side CPU boundary after M5 snapshots and M20/M21 layout planning:
