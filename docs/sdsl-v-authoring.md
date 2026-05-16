@@ -30,8 +30,6 @@ Current implemented test path for `.sdslvtest`:
 ```
 
 Not implemented yet:
-- no DXC invocation
-- no SPIR-V generation
 - no renderer shader integration pipeline
 
 ## 2) Compiler API quick reference
@@ -281,14 +279,12 @@ Current non-goals (still true):
 | Shader flows | Parse/validate only |
 | Flow boards + board reads/writes | Parse/validate only (no lowering/execution) |
 | Flow lowering | Implemented for acyclic value-returning subset (M13) |
-| DXC/SPIR-V | Not implemented |
+| DXC/SPIR-V boundary | Implemented (optional DXC probe, non-mandatory) |
 | Renderer shader integration | Not implemented |
 
 ## 12) Non-goals / future work
 
 Known future work items:
-- DXC invocation
-- SPIR-V generation
 - renderer pipeline integration for compiled shader artifacts
 - fuller expression/type checking
 - shader-body control flow (`if`/loops) expansion as scoped milestones
@@ -351,3 +347,36 @@ Still out of scope in M14:
 - no SPIR-V generation
 - no renderer integration
 - no shader reflection
+
+
+## 14) M15 DXC boundary (optional backend probe)
+
+M15 adds an optional DXC compile boundary on top of M14 artifacts.
+
+Current boundary path:
+
+```text
+SdslvShaderArtifact + SdslvEntryPoint
+→ DxcCompileRequest
+→ optional external DXC invocation
+→ DxcCompileResult
+```
+
+APIs now include:
+- `DxcOptions` (default: `DxcPath = "dxc"`, `OutputSpirv = true`)
+- `DxcCompileRequest::FromArtifactEntry(...)`
+- `FindDxc(...)`
+- `BuildDxcCommand(...)`
+- `CompileHlslWithDxc(...)`
+- `CompileArtifactEntryWithDxc(...)`
+
+Behavior notes:
+- DXC is optional; unavailable tools return structured `DxcError::ToolUnavailable`.
+- normal `cargo test` does not require DXC.
+- command-shape and artifact-request mapping are covered by non-DXC tests.
+- optional real-DXC test is ignored and gated with `WYRMCOIL_RUN_DXC_TESTS=1`.
+
+Still out of scope in M15:
+- renderer / `wgpu` pipeline wiring of shader binaries
+- reflection/resource binding extraction
+- asset pipeline integration

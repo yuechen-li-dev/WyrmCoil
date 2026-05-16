@@ -694,3 +694,30 @@ M14 remains metadata-only:
 - no SPIR-V generation
 - no renderer integration
 - no reflection/bind-layout extraction
+
+
+## SDSL-V M15 — DXC boundary / toolchain probe (implemented)
+
+M15 adds an optional backend toolchain boundary from M14 shader artifacts to DXC invocation.
+
+Public API surface in `Engine::shader::sdslv`:
+- `DxcOptions` (`DxcPath`, `OutputSpirv`, `ExtraArgs`)
+- `DxcCompileRequest` + `DxcCompileRequest::FromArtifactEntry(...)`
+- `DxcCompileResult`
+- `DxcError` (`ToolUnavailable`, `IoError`, `CompileFailed`, `OutputMissing`, `EntryPointNotFound`)
+- `FindDxc(...)`
+- `BuildDxcCommand(...)`
+- `CompileHlslWithDxc(...)`
+- `CompileArtifactEntryWithDxc(...)`
+
+M15 boundary behavior:
+- DXC is optional and tool-detected; normal tests do not require DXC.
+- Command construction is deterministic/testable without spawning processes.
+- Artifact entry metadata (`Name`, `TargetProfile`) feeds request construction directly.
+- `OutputSpirv` defaults to `true` and adds `-spirv` when enabled.
+- Real DXC invocation is isolated and writes temporary input/output files with best-effort cleanup.
+
+Still intentionally out of scope after M15:
+- renderer / `wgpu` pipeline integration
+- shader reflection and bind-layout extraction
+- asset pipeline/caching/discovery
