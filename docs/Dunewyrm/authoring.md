@@ -32,6 +32,7 @@ Examples:
 
 - `Dw::Continue`
 - `Dw::WaitTicks`
+- `Dw::Steady`
 - `DwSession::New`
 - `ctx.Phase`
 - `ctx.BoardMut`
@@ -174,6 +175,11 @@ Core stack controls:
 - `Dw::Complete()`:
   - If current frame is child, it behaves like successful pop.
   - If current frame is root, session status becomes `Completed`.
+- `Dw::Steady()`:
+  - Leaves the current frame active with the same PC.
+  - Reports a quiescent `Steady` tick status.
+  - Does not start a wait timer and does not change stack shape.
+  - Preferred for persistent root/controller idle loops instead of fake long waits.
 
 Again: one frame call per tick. A control return schedules transitions; it does not execute multiple frame steps in one tick.
 
