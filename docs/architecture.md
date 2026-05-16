@@ -42,6 +42,24 @@ This pass establishes explicit timing domains and counters (`ControlTick`, `Simu
 
 
 
+
+## M9 minimal `wgpu` renderer backend scaffold
+
+M9 adds the first renderer-backend boundary while preserving the existing timing contract.
+
+- `Engine::render::wgpu` introduces a minimal `RenderBackend` plus `RendererConfig`, `ClearColor`, and `RenderStats`.
+- The backend consumes immutable `RenderSnapshot` data and reports deterministic observed frame/item stats.
+- The backend can build a minimal clear-pass operation descriptor (`wgpu::Operations<wgpu::Color>`) as a bounded foundation for future surface/device submission work.
+- Renderer consumption does not mutate `World` and does not advance `ControlTick` or `SimulationTick`.
+- Render remains observer-only: control/simulation cadence stays engine-owned and explicit.
+
+Intentional non-goals remain explicit:
+
+- No shader language or SDSL-V pipeline in M9.
+- No material/texture asset pipeline.
+- No render graph rollout.
+- No renderer-owned app loop or simulation clock ownership.
+
 ## M7 real `winit` window/input shell
 
 M7 keeps the existing engine-owned timing contract while adding the first real platform event source via `winit`.

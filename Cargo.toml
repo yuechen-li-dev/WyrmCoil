@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 winit = "0.30"
+wgpu = "24"
 
 [lib]
 name = "wyrmcoil"
