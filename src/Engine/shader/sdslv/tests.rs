@@ -537,3 +537,91 @@ fn CompileSourceToHlslM6BlocksInvalidCoordinateMismatch() {
     let d = CompileSourceToHlsl(src).unwrap_err();
     assert!(d.iter().any(|x| x.Message.contains("return type mismatch")));
 }
+
+#[test]
+fn ParseTestSourceValidFactAndAsserts() {
+    let src = include_str!("../../../../examples/sdslv/basic_asserts.sdslvtest");
+    let module = ParseTestSource(src).unwrap();
+    assert_eq!(module.Tests.len(), 1);
+    assert_eq!(module.Tests[0].Attributes[0].Name, "Fact");
+    assert!(matches!(
+        module.Tests[0].Body.Statements.last().unwrap(),
+        SdslvStatement::Expression { .. }
+    ));
+}
+
+#[test]
+fn ParseTestSourceInvalidCases() {
+    assert!(ParseTestSource("[Fact fn A() {}").is_err());
+    assert!(ParseTestSource("[Fact]").is_err());
+    assert!(ParseTestSource("[Fact] fn A() { Assert.True(, \"x\"); }").is_err());
+}
+
+#[test]
+fn ValidateTestSourceValid() {
+    let src = r#"
+namespace T;
+[Fact]
+fn A() {
+    let a: f32 = 1.0;
+    Assert.True(true, "truth holds");
+    Assert.Equals(a, 1.0, "values equal");
+    Assert.Near(a, 1.0, 0.1, "values near");
+}
+"#;
+    assert!(ValidateTestSource(src).is_ok());
+}
+
+#[test]
+fn ValidateTestSourceInvalidRules() {
+    let src = r#"
+namespace T;
+[Fact]
+fn A(x: f32) {
+    Assert.True(true);
+    Assert.Equals(1.0, 1.0, 42);
+    Assert.Near(1.0, 1.0, 0.01);
+    Assert.Approximately(1.0, 1.0, "x");
+    NotAssert();
+}
+[Fact(one)]
+fn A() { Assert.True(true, "ok"); }
+"#;
+    let d = ValidateTestSource(src).unwrap_err();
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("[Fact] does not accept arguments"))
+    );
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("must not declare parameters"))
+    );
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("[Fact] does not accept arguments"))
+    );
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("duplicate test function 'A'"))
+    );
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("Assert.True requires 2 arguments"))
+    );
+    assert!(d.iter().any(|x| {
+        x.Message
+            .contains("Assert.Equals requires a custom message string argument")
+    }));
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("Assert.Near requires 4 arguments"))
+    );
+    assert!(d.iter().any(|x| {
+        x.Message
+            .contains("unsupported Assert method 'Assert.Approximately'")
+    }));
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("non-assert expression statement"))
+    );
+}

@@ -333,7 +333,7 @@ Explicit future-only list:
 - exhaustive `match`
 - default interface methods
 - `base.Method()`
-- embedded `#test` shader tests
+- `.sdslvtest` test files with `[Fact]` + `Assert.*` validation (M7a parse/validate only)
 - DXC invocation integration
 - SPIR-V output integration
 - WGSL output path
@@ -520,3 +520,35 @@ This M0 document intentionally narrows implementation risk:
 ## M1 implementation note
 
 Current M1 parser behavior parses declaration structure only and does not semantically parse function bodies. Function and stage bodies are accepted as balanced brace blocks and preserved as raw body spans/text for future milestones.
+
+
+## SDSL-V M7a test-file syntax seed
+
+M7a introduces parse/validation support for dedicated test files with extension `.sdslvtest`.
+
+Current test syntax:
+- top-level `namespace` and `use`
+- attributes before functions (only `[Fact]` is supported)
+- `[Fact] fn TestName() { ... }` test functions
+- local `let` declarations and `Assert.*(...)` expression statements
+
+Supported assertions in M7a:
+- `Assert.True(condition, "message")`
+- `Assert.Equals(actual, expected, "message")`
+- `Assert.Near(actual, expected, tolerance, "message")`
+
+Validation rules in M7a:
+- only `[Fact]` is supported; unknown attributes plus `[Theory]`/`[Case]` are rejected
+- `[Fact]` cannot have arguments and test functions cannot declare parameters
+- duplicate test function names are rejected
+- assertion custom message is mandatory and must be a string literal
+- unknown `Assert.*` methods are rejected
+- non-assert expression statements are rejected
+
+Intentional non-goals in M7a:
+- no test execution/runtime
+- no CPU evaluator
+- no DXC/SPIR-V integration
+- no renderer integration
+
+Compiler development and validation continue to use Rust `cargo test`.

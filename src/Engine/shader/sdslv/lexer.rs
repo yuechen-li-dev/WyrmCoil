@@ -78,6 +78,34 @@ impl<'a> Lexer<'a> {
                 }
                 continue;
             }
+            if c == '"' {
+                self.bump('"');
+                let mut text = String::new();
+                while self.I < self.S.len() {
+                    let ch = self.S[self.I] as char;
+                    if ch == '"' {
+                        self.bump('"');
+                        break;
+                    }
+                    if ch == '\n' {
+                        self.Diagnostics.push(SdslvDiagnostic::New(
+                            "unterminated string literal",
+                            self.span(st, self.I),
+                        ));
+                        break;
+                    }
+                    text.push(ch);
+                    self.bump(ch);
+                }
+                if self.I >= self.S.len() && self.peek(0).is_none() {
+                    self.Diagnostics.push(SdslvDiagnostic::New(
+                        "unterminated string literal",
+                        self.span(st, self.I),
+                    ));
+                }
+                self.push(SdslvTokenKind::StringLiteral(text), st);
+                continue;
+            }
             if c == '-' && self.peek(1) == Some('>') {
                 self.bump('-');
                 self.bump('>');

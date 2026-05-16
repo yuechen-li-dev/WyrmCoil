@@ -298,6 +298,9 @@ impl<'a> HlslEmitter<'a> {
             SdslvStatement::Return { Value } => {
                 format!("return {};", self.EmitExpression(Value, 0))
             }
+            SdslvStatement::Expression { Value } => {
+                format!("{};", self.EmitExpression(Value, 0))
+            }
             SdslvStatement::Empty => ";".to_string(),
         }
     }
@@ -307,6 +310,7 @@ impl<'a> HlslEmitter<'a> {
             SdslvExpression::Identifier(x) => x.clone(),
             SdslvExpression::IntegerLiteral(x) => x.clone(),
             SdslvExpression::FloatLiteral(x) => x.clone(),
+            SdslvExpression::StringLiteral(x) => format!("\"{}\"", x),
             SdslvExpression::BoolLiteral(v) => {
                 if *v {
                     "true".to_string()

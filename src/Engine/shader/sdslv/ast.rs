@@ -15,6 +15,29 @@ pub struct SdslvModule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvTestModule {
+    pub Namespace: Option<SdslvPath>,
+    pub Uses: Vec<SdslvUseDecl>,
+    pub Tests: Vec<SdslvTestFunction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvTestFunction {
+    pub Attributes: Vec<SdslvAttribute>,
+    pub Name: String,
+    pub Parameters: Vec<SdslvFunctionParameter>,
+    pub Body: SdslvBody,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvAttribute {
+    pub Name: String,
+    pub Arguments: Vec<SdslvExpression>,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvUseDecl {
     pub Path: SdslvPath,
 }
@@ -104,6 +127,9 @@ pub enum SdslvStatement {
     Return {
         Value: SdslvExpression,
     },
+    Expression {
+        Value: SdslvExpression,
+    },
     Empty,
 }
 
@@ -112,6 +138,7 @@ pub enum SdslvExpression {
     Identifier(String),
     IntegerLiteral(String),
     FloatLiteral(String),
+    StringLiteral(String),
     BoolLiteral(bool),
     FieldAccess {
         Base: Box<SdslvExpression>,
