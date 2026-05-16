@@ -47,6 +47,156 @@ pub struct CompiledPipelineDesc {
     pub Pixel: CompiledShaderModuleDesc,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertexFormat {
+    Float32x2,
+    Float32x3,
+    Float32x4,
+    Uint32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VertexAttributeDesc {
+    pub Name: String,
+    pub Location: u32,
+    pub Format: VertexFormat,
+    pub OffsetBytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertexStepMode {
+    Vertex,
+    Instance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VertexBufferLayoutDesc {
+    pub StrideBytes: u64,
+    pub StepMode: VertexStepMode,
+    pub Attributes: Vec<VertexAttributeDesc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorTargetFormat {
+    Bgra8UnormSrgb,
+    Rgba8UnormSrgb,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColorTargetDesc {
+    pub Format: ColorTargetFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepthFormat {
+    Depth24Plus,
+    Depth32Float,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DepthStencilDesc {
+    pub Format: DepthFormat,
+    pub DepthWriteEnabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderPipelineLayoutOptions {
+    pub Name: String,
+    pub VertexBuffers: Vec<VertexBufferLayoutDesc>,
+    pub ColorTarget: ColorTargetDesc,
+    pub Depth: Option<DepthStencilDesc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderPipelineLayoutPlan {
+    pub Name: String,
+    pub Shaders: CompiledPipelineDesc,
+    pub VertexBuffers: Vec<VertexBufferLayoutDesc>,
+    pub ColorTarget: ColorTargetDesc,
+    pub Depth: Option<DepthStencilDesc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenderPipelineLayoutPlanError {
+    EmptyName,
+    MissingVertexBuffers,
+    EmptyVertexBufferAttributes {
+        BufferIndex: usize,
+    },
+    DuplicateAttributeLocation {
+        Location: u32,
+    },
+    DuplicateAttributeName {
+        Name: String,
+    },
+    AttributeOffsetOutOfBounds {
+        Name: String,
+        OffsetBytes: u64,
+        StrideBytes: u64,
+    },
+    ZeroStride {
+        BufferIndex: usize,
+    },
+    MissingShaderBytes,
+}
+
+pub fn BuildRenderPipelineLayoutPlan(
+    compiled: CompiledPipelineDesc,
+    options: RenderPipelineLayoutOptions,
+) -> Result<RenderPipelineLayoutPlan, RenderPipelineLayoutPlanError> {
+    if options.Name.trim().is_empty() {
+        return Err(RenderPipelineLayoutPlanError::EmptyName);
+    }
+    if options.VertexBuffers.is_empty() {
+        return Err(RenderPipelineLayoutPlanError::MissingVertexBuffers);
+    }
+    if compiled.Vertex.SpirvBytes.is_empty() || compiled.Pixel.SpirvBytes.is_empty() {
+        return Err(RenderPipelineLayoutPlanError::MissingShaderBytes);
+    }
+
+    let mut seen_locations = std::collections::BTreeSet::new();
+    let mut seen_names = std::collections::BTreeSet::new();
+    for (buffer_index, buffer) in options.VertexBuffers.iter().enumerate() {
+        if buffer.StrideBytes == 0 {
+            return Err(RenderPipelineLayoutPlanError::ZeroStride {
+                BufferIndex: buffer_index,
+            });
+        }
+        if buffer.Attributes.is_empty() {
+            return Err(RenderPipelineLayoutPlanError::EmptyVertexBufferAttributes {
+                BufferIndex: buffer_index,
+            });
+        }
+        for attribute in &buffer.Attributes {
+            if attribute.OffsetBytes >= buffer.StrideBytes {
+                return Err(RenderPipelineLayoutPlanError::AttributeOffsetOutOfBounds {
+                    Name: attribute.Name.clone(),
+                    OffsetBytes: attribute.OffsetBytes,
+                    StrideBytes: buffer.StrideBytes,
+                });
+            }
+            if !seen_locations.insert(attribute.Location) {
+                return Err(RenderPipelineLayoutPlanError::DuplicateAttributeLocation {
+                    Location: attribute.Location,
+                });
+            }
+            if !seen_names.insert(attribute.Name.clone()) {
+                return Err(RenderPipelineLayoutPlanError::DuplicateAttributeName {
+                    Name: attribute.Name.clone(),
+                });
+            }
+        }
+    }
+
+    Ok(RenderPipelineLayoutPlan {
+        Name: options.Name,
+        Shaders: compiled,
+        VertexBuffers: options.VertexBuffers,
+        ColorTarget: options.ColorTarget,
+        Depth: options.Depth,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompilePipelineShadersError {
     Request(PipelineDxcRequestError),
@@ -1009,6 +1159,201 @@ mod tests {
                 Found: "ps_6_7".to_string()
             },
             "pixel target mismatch should be rejected"
+        );
+    }
+}
+
+#[cfg(test)]
+mod m20_layout_tests {
+    use super::*;
+
+    fn BuildFakeCompiledPipelineDesc() -> CompiledPipelineDesc {
+        CompiledPipelineDesc {
+            Name: "FlatColorPlan".to_string(),
+            SourceName: "flat_color.sdslv".to_string(),
+            Vertex: CompiledShaderModuleDesc {
+                EntryPoint: "FlatColor_VS".to_string(),
+                TargetProfile: "vs_6_0".to_string(),
+                SpirvBytes: vec![1, 2, 3],
+            },
+            Pixel: CompiledShaderModuleDesc {
+                EntryPoint: "FlatColor_PS".to_string(),
+                TargetProfile: "ps_6_0".to_string(),
+                SpirvBytes: vec![4, 5, 6],
+            },
+        }
+    }
+
+    fn BuildValidOptions() -> RenderPipelineLayoutOptions {
+        RenderPipelineLayoutOptions {
+            Name: "SpriteLayout".to_string(),
+            VertexBuffers: vec![VertexBufferLayoutDesc {
+                StrideBytes: 12,
+                StepMode: VertexStepMode::Vertex,
+                Attributes: vec![
+                    VertexAttributeDesc {
+                        Name: "Position".to_string(),
+                        Location: 0,
+                        Format: VertexFormat::Float32x2,
+                        OffsetBytes: 0,
+                    },
+                    VertexAttributeDesc {
+                        Name: "SpriteId".to_string(),
+                        Location: 1,
+                        Format: VertexFormat::Uint32,
+                        OffsetBytes: 8,
+                    },
+                ],
+            }],
+            ColorTarget: ColorTargetDesc {
+                Format: ColorTargetFormat::Bgra8UnormSrgb,
+            },
+            Depth: None,
+        }
+    }
+
+    #[test]
+    fn BuildRenderPipelineLayoutPlanValidPlanPreservesFields() {
+        let compiled = BuildFakeCompiledPipelineDesc();
+        let options = BuildValidOptions();
+
+        let plan = BuildRenderPipelineLayoutPlan(compiled.clone(), options.clone())
+            .expect("valid inputs should build a deterministic plain-data layout plan");
+
+        assert_eq!(plan.Name, "SpriteLayout", "name should be preserved");
+        assert_eq!(
+            plan.Shaders, compiled,
+            "compiled shader metadata should be preserved"
+        );
+        assert_eq!(
+            plan.VertexBuffers, options.VertexBuffers,
+            "vertex buffer layouts should be preserved"
+        );
+        assert_eq!(
+            plan.ColorTarget, options.ColorTarget,
+            "color target metadata should be preserved"
+        );
+        assert_eq!(
+            plan.Depth, None,
+            "missing depth metadata should remain None"
+        );
+    }
+
+    #[test]
+    fn BuildRenderPipelineLayoutPlanValidationErrors() {
+        let compiled = BuildFakeCompiledPipelineDesc();
+
+        let mut empty_name = BuildValidOptions();
+        empty_name.Name = "   ".to_string();
+        assert_eq!(
+            BuildRenderPipelineLayoutPlan(compiled.clone(), empty_name).unwrap_err(),
+            RenderPipelineLayoutPlanError::EmptyName,
+            "empty plan names should be rejected"
+        );
+
+        let mut missing_buffers = BuildValidOptions();
+        missing_buffers.VertexBuffers.clear();
+        assert_eq!(
+            BuildRenderPipelineLayoutPlan(compiled.clone(), missing_buffers).unwrap_err(),
+            RenderPipelineLayoutPlanError::MissingVertexBuffers,
+            "missing vertex buffers should be rejected"
+        );
+
+        let mut zero_stride = BuildValidOptions();
+        zero_stride.VertexBuffers[0].StrideBytes = 0;
+        assert_eq!(
+            BuildRenderPipelineLayoutPlan(compiled.clone(), zero_stride).unwrap_err(),
+            RenderPipelineLayoutPlanError::ZeroStride { BufferIndex: 0 },
+            "zero vertex stride should be rejected"
+        );
+
+        let mut empty_attrs = BuildValidOptions();
+        empty_attrs.VertexBuffers[0].Attributes.clear();
+        assert_eq!(
+            BuildRenderPipelineLayoutPlan(compiled.clone(), empty_attrs).unwrap_err(),
+            RenderPipelineLayoutPlanError::EmptyVertexBufferAttributes { BufferIndex: 0 },
+            "empty attribute lists should be rejected"
+        );
+
+        let mut dup_location = BuildValidOptions();
+        dup_location.VertexBuffers.push(VertexBufferLayoutDesc {
+            StrideBytes: 4,
+            StepMode: VertexStepMode::Vertex,
+            Attributes: vec![VertexAttributeDesc {
+                Name: "ExtraAttr".to_string(),
+                Location: 1,
+                Format: VertexFormat::Uint32,
+                OffsetBytes: 0,
+            }],
+        });
+        assert_eq!(
+            BuildRenderPipelineLayoutPlan(compiled.clone(), dup_location).unwrap_err(),
+            RenderPipelineLayoutPlanError::DuplicateAttributeLocation { Location: 1 },
+            "duplicate locations across buffers should be rejected"
+        );
+
+        let mut dup_name = BuildValidOptions();
+        dup_name.VertexBuffers.push(VertexBufferLayoutDesc {
+            StrideBytes: 4,
+            StepMode: VertexStepMode::Vertex,
+            Attributes: vec![VertexAttributeDesc {
+                Name: "Position".to_string(),
+                Location: 4,
+                Format: VertexFormat::Uint32,
+                OffsetBytes: 0,
+            }],
+        });
+        assert_eq!(
+            BuildRenderPipelineLayoutPlan(compiled.clone(), dup_name).unwrap_err(),
+            RenderPipelineLayoutPlanError::DuplicateAttributeName {
+                Name: "Position".to_string()
+            },
+            "duplicate names across buffers should be rejected"
+        );
+
+        let mut bad_offset = BuildValidOptions();
+        bad_offset.VertexBuffers[0].Attributes[1].OffsetBytes = 12;
+        assert_eq!(
+            BuildRenderPipelineLayoutPlan(compiled.clone(), bad_offset).unwrap_err(),
+            RenderPipelineLayoutPlanError::AttributeOffsetOutOfBounds {
+                Name: "SpriteId".to_string(),
+                OffsetBytes: 12,
+                StrideBytes: 12,
+            },
+            "attribute offsets must remain below stride"
+        );
+
+        let mut empty_bytes = BuildFakeCompiledPipelineDesc();
+        empty_bytes.Vertex.SpirvBytes.clear();
+        assert_eq!(
+            BuildRenderPipelineLayoutPlan(empty_bytes, BuildValidOptions()).unwrap_err(),
+            RenderPipelineLayoutPlanError::MissingShaderBytes,
+            "compiled descriptors with missing bytes should be rejected"
+        );
+    }
+
+    #[test]
+    fn BuildRenderPipelineLayoutPlanOptionalDepthAndDeterminism() {
+        let compiled = BuildFakeCompiledPipelineDesc();
+        let mut with_depth = BuildValidOptions();
+        with_depth.Depth = Some(DepthStencilDesc {
+            Format: DepthFormat::Depth24Plus,
+            DepthWriteEnabled: true,
+        });
+
+        let a = BuildRenderPipelineLayoutPlan(compiled.clone(), with_depth.clone())
+            .expect("depth-enabled plan should be accepted");
+        let b = BuildRenderPipelineLayoutPlan(compiled, with_depth)
+            .expect("same depth-enabled inputs should produce equivalent outputs");
+
+        assert_eq!(a, b, "layout planning should be deterministic");
+        assert_eq!(
+            a.Depth,
+            Some(DepthStencilDesc {
+                Format: DepthFormat::Depth24Plus,
+                DepthWriteEnabled: true,
+            }),
+            "depth metadata should be preserved"
         );
     }
 }

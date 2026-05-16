@@ -814,3 +814,36 @@ M19 remains intentionally scaffold-only:
 - no `wgpu::RenderPipeline` creation
 - no reflection/resource-layout extraction
 - no material or asset-pipeline expansion
+
+
+## SDSL-V M20 — Render pipeline layout contract (implemented)
+
+M20 adds the next renderer metadata layer after M19:
+
+```text
+CompiledPipelineDesc
++ vertex buffer layout metadata
++ color/depth target metadata
+→ RenderPipelineLayoutPlan
+```
+
+Implemented APIs in `Engine::render` include:
+
+- `VertexFormat`, `VertexAttributeDesc`, `VertexStepMode`, `VertexBufferLayoutDesc`
+- `ColorTargetFormat`, `ColorTargetDesc`, `DepthFormat`, `DepthStencilDesc`
+- `RenderPipelineLayoutOptions`, `RenderPipelineLayoutPlan`
+- `RenderPipelineLayoutPlanError`
+- `BuildRenderPipelineLayoutPlan(compiled, options)`
+
+M20 behavior:
+
+- deterministic plain-data plan construction
+- validation for empty name, missing vertex buffers, zero stride, empty attributes, duplicate attribute locations, duplicate attribute names, out-of-bounds attribute offsets, and missing compiled shader bytes
+- no DXC or GPU requirements in tests
+
+M20 remains intentionally scaffold-only:
+
+- no shader reflection or automatic input-layout extraction
+- no `wgpu` pipeline-layout/render-pipeline creation
+- no material, bind-group, or asset-pipeline expansion
+- no conversion from runtime `RenderSnapshot` into draw buffers yet
