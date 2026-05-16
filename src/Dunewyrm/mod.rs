@@ -11,6 +11,7 @@ mod session;
 pub use board::{DwBoard, DwBoardChunk, DwBoardKind, DwBoardValue, DwKey, DwSlotCollision};
 pub use control::{
     Dw, DwControl, DwControlSummary, DwDecideOptions, DwScoreFn, DwTieBreak, DwUtilityCandidate,
+    SelectHighestUtilityTarget,
 };
 pub use ids::{DwActId, DwActRequest, DwDeferredAct, DwFrameId};
 pub use mailbox::{DwMailbox, DwMailboxChunk, DwMessage};
