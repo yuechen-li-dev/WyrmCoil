@@ -194,6 +194,7 @@ impl<'a> Lexer<'a> {
             "goto" => SdslvTokenKind::KeywordGoto,
             "let" => SdslvTokenKind::KeywordLet,
             "return" => SdslvTokenKind::KeywordReturn,
+            "with" => SdslvTokenKind::KeywordWith,
             _ => SdslvTokenKind::Identifier(t.to_string()),
         }
     }

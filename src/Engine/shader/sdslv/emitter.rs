@@ -181,9 +181,11 @@ impl<'a> HlslEmitter<'a> {
             parameters.join(", ")
         ));
         if let Some(body) = &method.Body {
+            let mut with_counter = 0usize;
             for statement in &body.Statements {
-                self.Lines
-                    .push(format!("    {}", self.EmitStatement(statement)));
+                for line in self.EmitStatementLines(statement, &mut with_counter) {
+                    self.Lines.push(format!("    {}", line));
+                }
             }
         }
         self.Lines.push("}".to_string());
@@ -228,17 +230,20 @@ impl<'a> HlslEmitter<'a> {
         signature.push_str(" {");
         self.Lines.push(signature);
         if let Some(body) = &local_method.Body {
+            let mut with_counter = 0usize;
             for statement in &body.Statements {
-                let mut text = self.EmitStatement(statement);
-                if text.contains("mat.BaseColor(")
-                    && let Some(first) = compile.TypeArguments.first()
-                {
-                    text = text.replace(
-                        "mat.BaseColor(",
-                        &format!("{}_BaseColor(", first.Segments.join(".")),
-                    );
+                for line in self.EmitStatementLines(statement, &mut with_counter) {
+                    let mut text = line;
+                    if text.contains("mat.BaseColor(")
+                        && let Some(first) = compile.TypeArguments.first()
+                    {
+                        text = text.replace(
+                            "mat.BaseColor(",
+                            &format!("{}_BaseColor(", first.Segments.join(".")),
+                        );
+                    }
+                    self.Lines.push(format!("    {}", text));
                 }
-                self.Lines.push(format!("    {}", text));
             }
         }
         self.Lines.push("}".to_string());
@@ -280,9 +285,11 @@ impl<'a> HlslEmitter<'a> {
         self.Lines.push(signature);
 
         if let Some(body) = &method.Body {
+            let mut with_counter = 0usize;
             for statement in &body.Statements {
-                self.Lines
-                    .push(format!("    {}", self.EmitStatement(statement)));
+                for line in self.EmitStatementLines(statement, &mut with_counter) {
+                    self.Lines.push(format!("    {}", line));
+                }
             }
         } else {
             self.Lines
@@ -294,7 +301,11 @@ impl<'a> HlslEmitter<'a> {
         self.Lines.push("}".to_string());
     }
 
-    fn EmitStatement(&self, statement: &SdslvStatement) -> String {
+    fn EmitStatementLines(
+        &mut self,
+        statement: &SdslvStatement,
+        with_counter: &mut usize,
+    ) -> Vec<String> {
         match statement {
             SdslvStatement::Let {
                 Name,
@@ -304,23 +315,86 @@ impl<'a> HlslEmitter<'a> {
                 let type_name = TypeName.Segments.join(".");
                 let rendered = self.MapBuiltinType(&type_name).unwrap_or(&type_name);
                 if let Some(init) = Initializer {
-                    format!("{} {} = {};", rendered, Name, self.EmitExpression(init, 0))
+                    if let SdslvExpression::With { Base, Updates } = init {
+                        let mut lines = vec![format!(
+                            "{} {} = {};",
+                            rendered,
+                            Name,
+                            self.EmitExpression(Base, 0)
+                        )];
+                        for update in Updates {
+                            lines.push(format!(
+                                "{}.{} = {};",
+                                Name,
+                                update.Field,
+                                self.EmitExpression(&update.Value, 0)
+                            ));
+                        }
+                        lines
+                    } else {
+                        vec![format!(
+                            "{} {} = {};",
+                            rendered,
+                            Name,
+                            self.EmitExpression(init, 0)
+                        )]
+                    }
                 } else {
-                    format!("{} {};", rendered, Name)
+                    vec![format!("{} {};", rendered, Name)]
                 }
             }
-            SdslvStatement::Assign { Target, Value } => format!(
-                "{} = {};",
-                self.EmitExpression(Target, 0),
-                self.EmitExpression(Value, 0)
-            ),
+            SdslvStatement::Assign { Target, Value } => {
+                if let SdslvExpression::With { Base, Updates } = Value {
+                    let target_text = self.EmitExpression(Target, 0);
+                    let mut lines = vec![format!(
+                        "{} = {};",
+                        target_text,
+                        self.EmitExpression(Base, 0)
+                    )];
+                    for update in Updates {
+                        lines.push(format!(
+                            "{}.{} = {};",
+                            target_text,
+                            update.Field,
+                            self.EmitExpression(&update.Value, 0)
+                        ));
+                    }
+                    lines
+                } else {
+                    vec![format!(
+                        "{} = {};",
+                        self.EmitExpression(Target, 0),
+                        self.EmitExpression(Value, 0)
+                    )]
+                }
+            }
             SdslvStatement::Return { Value } => {
-                format!("return {};", self.EmitExpression(Value, 0))
+                if let SdslvExpression::With { Base, Updates } = Value {
+                    let temp_name = format!("__with{}", *with_counter);
+                    *with_counter += 1;
+                    let mut lines = vec![format!(
+                        "auto {} = {};",
+                        temp_name,
+                        self.EmitExpression(Base, 0)
+                    )];
+                    for update in Updates {
+                        lines.push(format!(
+                            "{}.{} = {};",
+                            temp_name,
+                            update.Field,
+                            self.EmitExpression(&update.Value, 0)
+                        ));
+                    }
+                    lines.push(format!("return {};", temp_name));
+                    lines
+                } else {
+                    vec![format!("return {};", self.EmitExpression(Value, 0))]
+                }
             }
             SdslvStatement::Expression { Value } => {
-                format!("{};", self.EmitExpression(Value, 0))
+                vec![format!("{};", self.EmitExpression(Value, 0))]
             }
-            SdslvStatement::Empty => ";".to_string(),
+            SdslvStatement::Empty => vec![";".to_string()],
         }
     }
 
@@ -383,6 +457,7 @@ impl<'a> HlslEmitter<'a> {
                     text
                 }
             }
+            SdslvExpression::With { .. } => "/*with-unsupported*/".to_string(),
         }
     }
     fn IsPositionField(&self, field: &SdslvFieldDecl) -> bool {

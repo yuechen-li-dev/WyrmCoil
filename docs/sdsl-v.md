@@ -256,7 +256,18 @@ Record-lowering notes:
 
 - records do not emit stage semantics (`SV_Position`, `TEXCOORDn`, etc.).
 - records are plain value structs usable in function signatures and local declarations.
-- stream/record immutable update features (for example `with`) remain future work.
+- `with` copy-update expressions are supported in M53b for records and streams in bounded contexts.
+
+M53b `with` expression:
+
+```sdslv
+let adjusted: SurfaceData = surface with {
+    Roughness: 0.5,
+};
+```
+
+Semantics: copy base value, apply listed field updates, return updated value.
+Current lowering contexts: local initializers, assignment RHS, and return expressions.
 
 ## 7) Shader classes and stages
 

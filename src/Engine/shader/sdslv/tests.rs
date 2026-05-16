@@ -889,6 +889,92 @@ fn ParserBodySubsetFailuresProduceDiagnostics() {
 }
 
 #[test]
+fn ParserBodySubsetParsesWithExpression() {
+    let src = r#"
+        record SurfaceData { Roughness: f32; BaseColor: float4; }
+        shader S {
+            fn F(surface: SurfaceData) -> SurfaceData {
+                let adjusted: SurfaceData = surface with { Roughness: 0.5, BaseColor: surface.BaseColor, };
+                return adjusted;
+            }
+        }
+    "#;
+    let module = ParseSource(src).expect("with expression should parse");
+    let shader = module
+        .Declarations
+        .iter()
+        .find_map(|d| {
+            if let SdslvDecl::Shader(s) = d {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    let body = shader.Methods[0].Body.as_ref().unwrap();
+    match &body.Statements[0] {
+        SdslvStatement::Let {
+            Initializer: Some(SdslvExpression::With { Updates, .. }),
+            ..
+        } => {
+            assert_eq!(Updates.len(), 2, "with updates should parse");
+        }
+        _ => panic!("expected with expression initializer"),
+    }
+}
+
+#[test]
+fn ValidationWithExpressionDiagnostics() {
+    let src = r#"
+        record SurfaceData { Roughness: f32; }
+        shader S {
+            fn F(surface: SurfaceData, color: float4) -> SurfaceData {
+                let a: SurfaceData = surface with { Missing: 0.5 };
+                let b: SurfaceData = surface with { Roughness: 0.5, Roughness: 0.8 };
+                let c: SurfaceData = surface with { Roughness: color };
+                return c;
+            }
+        }
+    "#;
+    let diagnostics = ValidateSource(src).expect_err("invalid with usage should fail");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.Message.contains("does not exist on type 'SurfaceData'"))
+    );
+    assert!(diagnostics.iter().any(|d| {
+        d.Message
+            .contains("duplicate with field update 'Roughness'")
+    }));
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.Message.contains("expects f32, found float4"))
+    );
+}
+
+#[test]
+fn EmitHlslWithExpressionLowersDeterministically() {
+    let src = r#"
+        record SurfaceData { Roughness: f32; }
+        shader S {
+            fn F(surface: SurfaceData) -> SurfaceData {
+                let adjusted: SurfaceData = surface with { Roughness: 0.5 };
+                adjusted = surface with { Roughness: 0.25 };
+                return surface with { Roughness: 0.75 };
+            }
+        }
+    "#;
+    let hlsl_a = CompileSourceToHlsl(src).expect("with emission should compile");
+    let hlsl_b = CompileSourceToHlsl(src).expect("with emission should be deterministic");
+    assert!(hlsl_a.contains("SurfaceData adjusted = surface;"));
+    assert!(hlsl_a.contains("adjusted.Roughness = 0.5;"));
+    assert!(hlsl_a.contains("adjusted = surface;"));
+    assert!(hlsl_a.contains("__with0"));
+    assert_eq!(hlsl_a, hlsl_b, "same source should emit identical hlsl");
+}
+
+#[test]
 fn EmitHlslBodySubsetDeterministicFormatting() {
     let src = r#"
         type ClipPosition4 = float4 @space(clip.position);

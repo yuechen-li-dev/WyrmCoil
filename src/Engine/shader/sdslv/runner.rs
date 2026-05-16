@@ -286,6 +286,11 @@ fn eval_expression(
                 .to_string(),
             Span: None,
         }),
+        SdslvExpression::With { .. } => Err(SdslvAssertFailure {
+            Message: "with expression is not supported in SDSL-V M7b expression evaluation"
+                .to_string(),
+            Span: None,
+        }),
     }
 }
 
