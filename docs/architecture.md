@@ -103,6 +103,24 @@ M23 remains intentionally narrow:
 
 Future milestones can consume the upload plan boundary for real buffer creation/submission without changing extraction semantics.
 
+## M27 optional `wgpu` vertex buffer creation probe
+
+M27 adds a narrow optional resource-creation seam on top of the M23 upload plan:
+
+- `BuildWgpuVertexBufferCreateDesc(&VertexBufferUploadPlan)` converts validated upload plans into a GPU create descriptor (`Label`, `Bytes`, `Usage`, `VertexCount`, `StrideBytes`) using deterministic CPU-only logic.
+- `CreateWgpuVertexBuffer(&wgpu::Device, &VertexBufferUploadPlan)` optionally creates an initialized `wgpu::Buffer` when a caller provides a real device.
+- Empty upload plans remain valid at the M23 planning boundary, but M27 rejects empty bytes for real GPU vertex-buffer creation (`EmptyUpload`).
+- Default tests remain GPU-free and validate descriptor conversion + structured errors without requiring adapter/device/window/surface/DXC.
+
+M27 remains intentionally narrow:
+
+- no command encoder or render pass
+- no draw submission path
+- no render-pipeline creation
+- no lifecycle-act execution wiring to GPU resources yet
+
+Lifecycle simulation (M25/M26) remains recorded intent and deterministic telemetry/trace behavior; binding those acts to real GPU resource execution is future work.
+
 ## M24 render buffering strategy planner (CPU policy only)
 
 M24 adds a deterministic CPU-side buffering strategy planner over `VertexBufferUploadPlan` metadata:
