@@ -24,12 +24,12 @@ After M5:
 - Generic shader templates are not emitted directly; compile declarations emit monomorphized concrete stage entry points.
 - Interface calls on constrained generic parameters are statically rewritten during emission for the M5 pattern `mat.Method(args) -> ConcreteShader_Method(args)`.
 
-Still intentionally absent after M5:
+Still intentionally absent after M6:
 
 - DXC invocation
 - SPIR-V integration
 - Default interface methods / `base.Method()`
-- Coordinate-space expression typechecking
+- Full shader-wide type inference/typechecking
 
 SDSL-V is inspired by Stride SDSL, but it is not required to be source-compatible with SDSL.
 
@@ -468,6 +468,29 @@ Design/implement embedded shader tests after sufficient compiler infrastructure 
 ### SDSL-V M8 — DXC / renderer integration
 
 Feed generated HLSL into the downstream runtime pipeline.
+
+### SDSL-V M6 — Coordinate-space type checking (implemented)
+
+M6 adds a bounded body-validation pass for coordinate-space semantic aliases (`type X = floatN @space(...)`).
+
+Current M6 checks:
+- local `let` initializer compatibility
+- assignment compatibility
+- return-expression compatibility
+- function-call argument compatibility
+- stream field type propagation through field access
+
+Compatibility behavior:
+- semantic aliases are nominally distinct from each other
+- plain aliases are transparent through underlying type mapping
+- explicit conversion functions are allowed via declared signatures
+- known/known mismatches produce diagnostics; unknown expression types stay permissive
+
+Current limits:
+- no full expression/global inference
+- built-in function modeling is limited
+- semantic swizzle typing is conservative (swizzle resolves to builtin vector/scalar types)
+- no DXC/SPIR-V integration
 
 ## 17) Non-goals (M0)
 

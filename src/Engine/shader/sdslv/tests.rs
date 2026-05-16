@@ -480,3 +480,60 @@ fn EmitHlslBodySubsetDeterministicFormatting() {
     assert!(hlsl.contains("    output.Position = float4(pos, 1.0);"));
     assert!(hlsl.contains("    return input.Color;"));
 }
+
+#[test]
+fn ValidationM6CoordinateSpaceCallAssignmentReturnMismatches() {
+    let src = r#"
+        type WorldPosition3 = float3 @space(world.position);
+        type ClipPosition4 = float4 @space(clip.position);
+
+        shader S {
+            fn UseWorld(p: WorldPosition3) -> WorldPosition3 { return p; }
+            fn Bad(c: ClipPosition4) -> WorldPosition3 {
+                let world: WorldPosition3 = c;
+                return UseWorld(c);
+            }
+        }
+    "#;
+    let d = ValidateSource(src).unwrap_err();
+    assert!(d.iter().any(|x| {
+        x.Message
+            .contains("expected WorldPosition3, found ClipPosition4")
+    }));
+    assert!(d.iter().any(|x| {
+        x.Message
+            .contains("argument 1 of UseWorld expects WorldPosition3, found ClipPosition4")
+    }));
+}
+
+#[test]
+fn ValidationM6CoordinateSpaceSameUnderlyingStillMismatch() {
+    let src = r#"
+        type WorldVector3 = float3 @space(world.vector);
+        type WorldNormal3 = float3 @space(world.normal);
+
+        shader S {
+            fn Bad(v: WorldVector3) -> WorldNormal3 {
+                return v;
+            }
+        }
+    "#;
+    let d = ValidateSource(src).unwrap_err();
+    assert!(d.iter().any(|x| {
+        x.Message
+            .contains("expected WorldNormal3, found WorldVector3")
+    }));
+}
+
+#[test]
+fn CompileSourceToHlslM6BlocksInvalidCoordinateMismatch() {
+    let src = r#"
+        type WorldPosition3 = float3 @space(world.position);
+        type ClipPosition4 = float4 @space(clip.position);
+        shader S {
+            fn Bad(c: ClipPosition4) -> WorldPosition3 { return c; }
+        }
+    "#;
+    let d = CompileSourceToHlsl(src).unwrap_err();
+    assert!(d.iter().any(|x| x.Message.contains("return type mismatch")));
+}
