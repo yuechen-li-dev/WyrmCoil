@@ -59,6 +59,9 @@ impl<'a> HlslEmitter<'a> {
                 SdslvDecl::TypeAlias(alias) => self.EmitTypeAlias(alias),
                 SdslvDecl::Stream(stream) => self.EmitStream(stream),
                 SdslvDecl::Shader(shader) => self.EmitShader(shader),
+                SdslvDecl::Flow(_) => {
+                    self.err("flow emission is not implemented in SDSL-V M8");
+                }
                 SdslvDecl::Compile(compile) => self.EmitCompile(compile),
                 SdslvDecl::Interface(interface) => {
                     self.Lines.push(format!(

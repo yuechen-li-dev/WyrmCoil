@@ -48,8 +48,51 @@ pub enum SdslvDecl {
     Stream(SdslvStreamDecl),
     Interface(SdslvInterfaceDecl),
     Shader(SdslvShaderDecl),
+    Flow(SdslvFlowDecl),
     Compile(SdslvCompileDecl),
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvFlowDecl {
+    pub Name: String,
+    pub Parameters: Vec<SdslvFunctionParameter>,
+    pub ReturnType: SdslvPath,
+    pub States: Vec<SdslvFlowState>,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvFlowState {
+    pub Name: String,
+    pub Statements: Vec<SdslvFlowStatement>,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SdslvFlowStatement {
+    When(SdslvFlowWhen),
+    Goto(SdslvPath),
+    Return(SdslvExpression),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvFlowWhen {
+    pub Cases: Vec<SdslvFlowCase>,
+    pub ElseAction: Option<SdslvFlowAction>,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvFlowCase {
+    pub Condition: SdslvExpression,
+    pub Action: SdslvFlowAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SdslvFlowAction {
+    Goto(SdslvPath),
+    Return(SdslvExpression),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvCompileDecl {
     pub GenericShader: SdslvPath,

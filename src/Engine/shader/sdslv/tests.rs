@@ -361,6 +361,116 @@ fn CompileSourceToHlslInvalidSourceReturnsDiagnostics() {
 }
 
 #[test]
+fn ParserFlowShapes() {
+    let src = r#"
+flow SelectShadow(mode: i32) -> float4 {
+    state Select {
+        when {
+            case mode == 1 -> goto Hard
+            case mode == 2 -> return 2
+            else -> goto None
+        }
+    }
+    state None { return 0; }
+    state Hard { goto None; }
+}
+"#;
+    let module = ParseSource(src).expect("flow source should parse");
+    let flow = module
+        .Declarations
+        .iter()
+        .find_map(|d| match d {
+            SdslvDecl::Flow(flow) => Some(flow),
+            _ => None,
+        })
+        .expect("expected flow declaration");
+    assert_eq!(flow.Parameters.len(), 1, "expected one flow parameter");
+    assert_eq!(flow.States.len(), 3, "expected three states");
+}
+
+#[test]
+fn ValidationFlowRules() {
+    let valid = r#"
+type Color = float4;
+stream S { C: Color; }
+shader P { stage pixel fn PS() -> float4 { return float4(0, 0, 0, 1); } }
+flow F(mode: i32) -> i32 {
+    state A {
+        when {
+            case mode == 1 -> goto B
+            else -> return 0
+        }
+    }
+    state B { return 1; }
+}
+"#;
+    assert!(ValidateSource(valid).is_ok(), "valid flow should validate");
+
+    let bad = r#"
+flow F() -> i32 {
+    state A {
+        when {
+            case 1 == 1 -> goto Missing
+        }
+    }
+    state A {}
+}
+"#;
+    let diagnostics = ValidateSource(bad).unwrap_err();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.Message.contains("duplicate state 'A'"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.Message.contains("unknown state 'Missing'"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.Message.contains("must include else"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.Message.contains("must contain at least one statement"))
+    );
+}
+
+#[test]
+fn ParserFlowRejectsUnsupportedStateStatement() {
+    let src = r#"
+flow F() -> i32 {
+    state A {
+        let x: i32 = 1;
+    }
+}
+"#;
+    let diagnostics = ParseSource(src).unwrap_err();
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("unsupported statement in flow state body")),
+        "unsupported flow-state statement should produce diagnostic"
+    );
+}
+
+#[test]
+fn EmitHlslFlowDeclarationReturnsDiagnostic() {
+    let module =
+        ParseSource("flow F() -> i32 { state A { return 1; } }").expect("flow source should parse");
+    let diagnostics = EmitHlsl(&module).unwrap_err();
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("flow emission is not implemented in SDSL-V M8")),
+        "flow modules should fail emission clearly in M8"
+    );
+}
+
+#[test]
 fn EmitHlslIsDeterministic() {
     let src = include_str!("../../../../examples/sdslv/flat_color.sdslv");
     let module = ValidateSource(src).unwrap();

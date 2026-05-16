@@ -233,6 +233,7 @@ impl<'a> Validator<'a> {
                 SdslvDecl::Stream(stream) => self.ValidateStream(stream),
                 SdslvDecl::Interface(interface) => self.ValidateInterface(interface),
                 SdslvDecl::Shader(shader) => self.ValidateShader(shader),
+                SdslvDecl::Flow(flow) => self.ValidateFlow(flow),
                 SdslvDecl::Compile(compile) => self.ValidateCompile(compile),
             }
         }
@@ -320,6 +321,7 @@ impl<'a> Validator<'a> {
                 SdslvDecl::Stream(x) => (&x.Name, "stream"),
                 SdslvDecl::Interface(x) => (&x.Name, "interface"),
                 SdslvDecl::Shader(x) => (&x.Name, "shader"),
+                SdslvDecl::Flow(x) => (&x.Name, "flow"),
                 SdslvDecl::Compile(x) => (&x.Alias, "compile"),
             };
             if let Some(existing_kind) = self.TopLevelKinds.insert(name.clone(), kind) {
@@ -472,6 +474,85 @@ impl<'a> Validator<'a> {
                     self.ValidateFunctionBody(shader, stage_method);
                 }
             }
+        }
+    }
+    fn ValidateFlow(&mut self, flow: &SdslvFlowDecl) {
+        if flow.States.is_empty() {
+            self.err(&format!(
+                "flow '{}' must declare at least one state",
+                flow.Name
+            ));
+            return;
+        }
+        let mut names = HashSet::new();
+        for state in &flow.States {
+            if !names.insert(state.Name.clone()) {
+                self.err(&format!(
+                    "duplicate state '{}' in flow '{}'",
+                    state.Name, flow.Name
+                ));
+            }
+        }
+        for state in &flow.States {
+            if state.Statements.is_empty() {
+                self.err(&format!(
+                    "state '{}' in flow '{}' must contain at least one statement",
+                    state.Name, flow.Name
+                ));
+            }
+            for statement in &state.Statements {
+                self.ValidateFlowStatement(flow, state, statement, &names);
+            }
+        }
+    }
+    fn ValidateFlowStatement(
+        &mut self,
+        flow: &SdslvFlowDecl,
+        state: &SdslvFlowState,
+        statement: &SdslvFlowStatement,
+        state_names: &HashSet<String>,
+    ) {
+        match statement {
+            SdslvFlowStatement::Goto(path) => self.ValidateFlowGoto(flow, path, state_names),
+            SdslvFlowStatement::Return(_) => {}
+            SdslvFlowStatement::When(when) => {
+                if when.Cases.is_empty() {
+                    self.err(&format!(
+                        "guard when in state '{}' must include at least one case",
+                        state.Name
+                    ));
+                }
+                if when.ElseAction.is_none() {
+                    self.err(&format!(
+                        "guard when in state '{}' must include else",
+                        state.Name
+                    ));
+                }
+                for case in &when.Cases {
+                    if let SdslvFlowAction::Goto(path) = &case.Action {
+                        self.ValidateFlowGoto(flow, path, state_names);
+                    }
+                }
+                if let Some(action) = &when.ElseAction
+                    && let SdslvFlowAction::Goto(path) = action
+                {
+                    self.ValidateFlowGoto(flow, path, state_names);
+                }
+            }
+        }
+    }
+    fn ValidateFlowGoto(
+        &mut self,
+        flow: &SdslvFlowDecl,
+        path: &SdslvPath,
+        state_names: &HashSet<String>,
+    ) {
+        let target = path.Segments.join(".");
+        if !state_names.contains(&target) {
+            self.err(&format!(
+                "goto targets unknown state '{}' in flow '{}'",
+                target, flow.Name
+            ));
         }
     }
 
