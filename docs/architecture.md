@@ -37,3 +37,19 @@ Current `Engine` prototype phase boundaries:
 - `Tick()` remains a convenience wrapper for one control tick followed by one simulation tick.
 
 This pass establishes explicit timing domains and counters (`ControlTick`, `SimulationTick`, `RenderFrame`) but intentionally does **not** add a scheduler, wall-clock cadence model, renderer backend, physics backend, or ECS framework.
+
+
+## M4 input boundary contract (mailbox bridge)
+
+M4 adds an engine-owned normalized input boundary without adding any platform backend dependency.
+
+- External adapters enqueue normalized `InputEvent` values into the engine queue.
+- `TickControl()` drains that queue at the beginning of the control phase and converts each input event into a Dunewyrm `DwMessage` mailbox message.
+- Dunewyrm frame logic consumes mailbox messages during control ticks and emits acts.
+- Input does not mutate world stores directly.
+- `TickSimulation()` and `RenderSnapshot()` do not process queued input.
+
+Current intentional scope:
+
+- No platform/window backend integration (`winit`, GameInput, Steam Input, etc. are still out of scope).
+- No async event loop.

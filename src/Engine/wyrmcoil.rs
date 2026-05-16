@@ -234,6 +234,15 @@ pub mod MailKinds {
     pub const NudgeGuardUp: u32 = 5;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputEvent {
+    MoveRightPressed,
+    MoveLeftPressed,
+    StopPressed,
+    AlertGuardPressed,
+    NudgeGuardPressed,
+}
+
 #[derive(Clone, Copy)]
 enum RootPhase {
     Player,
@@ -450,6 +459,7 @@ pub struct Engine {
     pub Player: EntityId,
     pub Guard: EntityId,
     pub Clock: EngineClock,
+    pub InputQueue: Vec<InputEvent>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct EngineChunk {
@@ -458,6 +468,7 @@ pub struct EngineChunk {
     pub Player: EntityId,
     pub Guard: EntityId,
     pub Clock: EngineClock,
+    pub InputQueue: Vec<InputEvent>,
 }
 #[allow(dead_code)]
 pub struct TickResult {
@@ -479,6 +490,32 @@ impl Engine {
             Player: player,
             Guard: guard,
             Clock: EngineClock::default(),
+            InputQueue: Vec::new(),
+        }
+    }
+
+    pub fn EnqueueInput(&mut self, event: InputEvent) {
+        self.InputQueue.push(event);
+    }
+
+    pub fn InputQueueLen(&self) -> usize {
+        self.InputQueue.len()
+    }
+
+    pub fn InputQueueSnapshot(&self) -> Vec<InputEvent> {
+        self.InputQueue.clone()
+    }
+
+    fn BridgeInputIntoMailbox(&mut self) {
+        for event in self.InputQueue.drain(..) {
+            let message = match event {
+                InputEvent::MoveRightPressed => MoveRightMessage(),
+                InputEvent::MoveLeftPressed => MoveLeftMessage(),
+                InputEvent::StopPressed => StopMessage(),
+                InputEvent::AlertGuardPressed => AlertGuardMessage(),
+                InputEvent::NudgeGuardPressed => NudgeGuardMessage(),
+            };
+            self.Session.MailboxMut().Enqueue(message);
         }
     }
 
@@ -487,6 +524,7 @@ impl Engine {
     }
 
     pub fn TickControl(&mut self) -> DwTickResult {
+        self.BridgeInputIntoMailbox();
         self.World.RefreshSelectionBoard(self.Session.BoardMut());
         let runtime = self
             .Session
@@ -532,6 +570,7 @@ impl Engine {
             Player: self.Player,
             Guard: self.Guard,
             Clock: self.Clock,
+            InputQueue: self.InputQueue.clone(),
         }
     }
     pub fn FromChunk(chunk: EngineChunk) -> Self {
@@ -543,6 +582,7 @@ impl Engine {
             Player: chunk.Player,
             Guard: chunk.Guard,
             Clock: chunk.Clock,
+            InputQueue: chunk.InputQueue,
         }
     }
 }
