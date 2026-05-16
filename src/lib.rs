@@ -3,13 +3,10 @@
 
 pub const ProjectName: fn() -> &'static str = || "WyrmCoil";
 
-pub mod Dunewyrm {
-    pub const ModuleName: &str = "Dunewyrm";
-}
+pub mod Dunewyrm;
+pub mod Engine;
 
-pub mod Engine {
-    pub const ModuleName: &str = "WyrmCoilEngine";
-}
+pub use Dunewyrm::*;
 
 #[cfg(test)]
 mod tests {

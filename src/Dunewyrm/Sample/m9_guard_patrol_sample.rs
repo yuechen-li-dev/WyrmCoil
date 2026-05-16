@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use dunewyrm::{CompareTrace, DwActRequest};
+use crate::Dunewyrm::{CompareTrace, DwActRequest};
 
 #[path = "../samples/wyrmcoil.rs"]
 mod wyrmcoil;
