@@ -57,6 +57,10 @@ impl<'a> Parser<'a> {
                 if let Some(d) = self.parse_shader() {
                     m.Declarations.push(SdslvDecl::Shader(d));
                 }
+            } else if self.match_kw(SdslvTokenKind::KeywordCompile) {
+                if let Some(d) = self.parse_compile() {
+                    m.Declarations.push(SdslvDecl::Compile(d));
+                }
             } else {
                 self.err_here("unexpected token at top level");
                 self.I += 1;
@@ -67,6 +71,40 @@ impl<'a> Parser<'a> {
         } else {
             Err(self.Diagnostics)
         }
+    }
+    fn parse_compile(&mut self) -> Option<SdslvCompileDecl> {
+        let generic_shader = self.parse_path_req("expected shader path after compile")?;
+        self.expect(
+            SdslvTokenKind::LeftAngle,
+            "expected '<' in compile declaration",
+        );
+        let mut type_arguments = vec![];
+        while !self.check(SdslvTokenKind::RightAngle) && self.I < self.Tokens.len() {
+            let arg = self.parse_path_req("expected type argument path")?;
+            type_arguments.push(arg);
+            if !self.match_kw(SdslvTokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(
+            SdslvTokenKind::RightAngle,
+            "expected '>' after type arguments",
+        );
+        let as_keyword = self.ident()?;
+        if as_keyword != "as" {
+            self.err_here("expected 'as' in compile declaration");
+            return None;
+        }
+        let alias = self.ident()?;
+        self.expect(
+            SdslvTokenKind::Semicolon,
+            "expected ';' after compile declaration",
+        );
+        Some(SdslvCompileDecl {
+            GenericShader: generic_shader,
+            TypeArguments: type_arguments,
+            Alias: alias,
+        })
     }
     fn parse_type(&mut self) -> Option<SdslvTypeAliasDecl> {
         let n = self.ident()?;

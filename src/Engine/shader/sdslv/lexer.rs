@@ -131,6 +131,7 @@ impl<'a> Lexer<'a> {
             "implements" => SdslvTokenKind::KeywordImplements,
             "where" => SdslvTokenKind::KeywordWhere,
             "override" => SdslvTokenKind::KeywordOverride,
+            "compile" => SdslvTokenKind::KeywordCompile,
             "let" => SdslvTokenKind::KeywordLet,
             "return" => SdslvTokenKind::KeywordReturn,
             _ => SdslvTokenKind::Identifier(t.to_string()),

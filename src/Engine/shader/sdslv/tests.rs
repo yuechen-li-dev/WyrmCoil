@@ -75,7 +75,9 @@ fn ParserGenericWhereConstraints() {
         .Declarations
         .iter()
         .find_map(|d| {
-            if let SdslvDecl::Shader(s) = d {
+            if let SdslvDecl::Shader(s) = d
+                && s.Name == "ForwardPass"
+            {
                 Some(s)
             } else {
                 None
@@ -84,6 +86,18 @@ fn ParserGenericWhereConstraints() {
         .unwrap();
     assert_eq!(shader.GenericParameters[0], "TMat");
     assert_eq!(shader.Constraints[0].Bounds[0].Segments[0], "IBaseColor");
+    let compile = m
+        .Declarations
+        .iter()
+        .find_map(|d| {
+            if let SdslvDecl::Compile(c) = d {
+                Some(c)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(compile.Alias, "ForwardFlatMaterial");
 }
 
 #[test]
@@ -181,9 +195,31 @@ shader Forward<TMat> implements IBaseColor where TMat: Missing {
 }
 "#;
     let d = ValidateSource(src).unwrap_err();
+    assert!(d.iter().any(|x| x.Message.contains("Missing")));
+}
+
+#[test]
+fn ValidationCompileRules() {
+    let valid = include_str!("../../../../examples/sdslv/generic_forward_pass.sdslv");
     assert!(
-        d.iter()
-            .any(|x| x.Message.contains("interface 'Missing' is unknown"))
+        ValidateSource(valid).is_ok(),
+        "valid compile declaration should validate"
+    );
+
+    let unknown_generic = "shader Flat {} compile Missing<Flat> as X;";
+    assert!(
+        ValidateSource(unknown_generic)
+            .unwrap_err()
+            .iter()
+            .any(|d| d.Message.contains("unknown generic shader"))
+    );
+
+    let nongeneric = "shader Flat {} compile Flat<Flat> as X;";
+    assert!(
+        ValidateSource(nongeneric)
+            .unwrap_err()
+            .iter()
+            .any(|d| d.Message.contains("not generic"))
     );
 }
 
@@ -286,26 +322,29 @@ fn CompileSourceToHlslFlatColorContainsExpectedShape() {
 }
 
 #[test]
-fn EmitHlslGenericShaderReturnsDiagnostic() {
-    let src = r#"
-        interface IBaseColor { fn BaseColor(s: Surface) -> float4; }
-        interface INormalProvider { fn Normal(s: Surface) -> float3; }
-        stream Surface { Color: float4; }
-        shader ForwardPass<TMat>
-            where TMat : IBaseColor, INormalProvider
-        {
-            stage pixel fn PS(s: Surface, mat: TMat) -> float4 {
-                return mat.BaseColor(s);
-            }
-        }
-    "#;
+fn EmitHlslCompileMonomorphizationShape() {
+    let src = include_str!("../../../../examples/sdslv/generic_forward_pass.sdslv");
     let module = ValidateSource(src).unwrap();
-    let diagnostics = EmitHlsl(&module).unwrap_err();
+    let hlsl = EmitHlsl(&module).unwrap();
     assert!(
-        diagnostics.iter().any(|x| x
-            .Message
-            .contains("cannot emit generic shader 'ForwardPass' in SDSL-V M3")),
-        "expected generic emission diagnostic"
+        hlsl.contains("FlatMaterial_BaseColor"),
+        "expected concrete helper method"
+    );
+    assert!(
+        hlsl.contains("ForwardFlatMaterial_PS"),
+        "expected compile alias stage name"
+    );
+    assert!(
+        !hlsl.contains("ForwardPass_PS"),
+        "generic stage should not emit directly"
+    );
+    assert!(
+        hlsl.contains("FlatMaterial mat"),
+        "expected substituted parameter type"
+    );
+    assert!(
+        hlsl.contains("FlatMaterial_BaseColor(s)"),
+        "expected rewritten interface call"
     );
 }
 

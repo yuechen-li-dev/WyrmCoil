@@ -17,11 +17,19 @@ After M3:
 
 - Minimal deterministic HLSL emitter is implemented for declaration-level modules (type aliases, streams, vertex/pixel stage signatures, raw preserved bodies).
 
-Still intentionally absent after M3:
+After M5:
+
+- Explicit compile-time shader instantiation is supported with `compile GenericShader<ConcreteShader> as Alias;`.
+- Generic shader `where` interface constraints are validated against concrete shader `implements` declarations.
+- Generic shader templates are not emitted directly; compile declarations emit monomorphized concrete stage entry points.
+- Interface calls on constrained generic parameters are statically rewritten during emission for the M5 pattern `mat.Method(args) -> ConcreteShader_Method(args)`.
+
+Still intentionally absent after M5:
 
 - DXC invocation
 - SPIR-V integration
-- Generic monomorphization
+- Default interface methods / `base.Method()`
+- Coordinate-space expression typechecking
 
 SDSL-V is inspired by Stride SDSL, but it is not required to be source-compatible with SDSL.
 

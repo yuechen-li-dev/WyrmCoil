@@ -59,6 +59,7 @@ impl<'a> HlslEmitter<'a> {
                 SdslvDecl::TypeAlias(alias) => self.EmitTypeAlias(alias),
                 SdslvDecl::Stream(stream) => self.EmitStream(stream),
                 SdslvDecl::Shader(shader) => self.EmitShader(shader),
+                SdslvDecl::Compile(compile) => self.EmitCompile(compile),
                 SdslvDecl::Interface(interface) => {
                     self.Lines.push(format!(
                         "// interface {} omitted in HLSL M3",
@@ -118,17 +119,110 @@ impl<'a> HlslEmitter<'a> {
     }
 
     fn EmitShader(&mut self, shader: &SdslvShaderDecl) {
+        for method in &shader.Methods {
+            self.EmitShaderMethodNamed(&shader.Name, method);
+        }
         if !shader.GenericParameters.is_empty() {
-            self.err(&format!(
-                "cannot emit generic shader '{}' in SDSL-V M3",
-                shader.Name
-            ));
             return;
         }
 
         for stage_method in &shader.StageMethods {
             self.EmitStageMethod(shader, stage_method);
         }
+    }
+    fn EmitCompile(&mut self, compile: &SdslvCompileDecl) {
+        let generic_name = compile.GenericShader.Segments.join(".");
+        let generic_shader = self.Module.Declarations.iter().find_map(|d| match d {
+            SdslvDecl::Shader(s) if s.Name == generic_name => Some(s),
+            _ => None,
+        });
+        let Some(shader) = generic_shader else {
+            return;
+        };
+        for stage_method in &shader.StageMethods {
+            self.EmitStageMethodAlias(shader, &compile.Alias, stage_method, compile);
+        }
+    }
+    fn EmitShaderMethodNamed(&mut self, shader_name: &str, method: &SdslvFunctionDecl) {
+        let Some(return_type) = self.MapTypeFromPath(&method.ReturnType) else {
+            return;
+        };
+        let mut parameters = vec![];
+        for parameter in &method.Parameters {
+            let Some(mapped) = self.MapTypeFromPath(&parameter.TypeName) else {
+                return;
+            };
+            parameters.push(format!("{} {}", mapped, parameter.Name));
+        }
+        self.Lines.push(format!(
+            "{} {}_{}({}) {{",
+            return_type,
+            shader_name,
+            method.Name,
+            parameters.join(", ")
+        ));
+        if let Some(body) = &method.Body {
+            for statement in &body.Statements {
+                self.Lines
+                    .push(format!("    {}", self.EmitStatement(statement)));
+            }
+        }
+        self.Lines.push("}".to_string());
+    }
+    fn EmitStageMethodAlias(
+        &mut self,
+        shader: &SdslvShaderDecl,
+        alias: &str,
+        method: &SdslvFunctionDecl,
+        compile: &SdslvCompileDecl,
+    ) {
+        let mut local_method = method.clone();
+        if let Some(first) = compile.TypeArguments.first() {
+            if let Some(param) = local_method.Parameters.iter_mut().find(|p| {
+                shader
+                    .GenericParameters
+                    .contains(&p.TypeName.Segments.join("."))
+            }) {
+                param.TypeName = first.clone();
+            }
+        }
+        let Some(return_type) = self.MapTypeFromPath(&local_method.ReturnType) else {
+            return;
+        };
+        let mut parameters = vec![];
+        for parameter in &local_method.Parameters {
+            let Some(mapped) = self.MapTypeFromPath(&parameter.TypeName) else {
+                return;
+            };
+            parameters.push(format!("{} {}", mapped, parameter.Name));
+        }
+        let mut signature = format!(
+            "{} {}_{}({})",
+            return_type,
+            alias,
+            local_method.Name,
+            parameters.join(", ")
+        );
+        if local_method.Stage.as_deref() == Some("pixel") {
+            signature.push_str(" : SV_Target");
+        }
+        signature.push_str(" {");
+        self.Lines.push(signature);
+        if let Some(body) = &local_method.Body {
+            for statement in &body.Statements {
+                let mut text = self.EmitStatement(statement);
+                if text.contains("mat.BaseColor(")
+                    && let Some(first) = compile.TypeArguments.first()
+                {
+                    text = text.replace(
+                        "mat.BaseColor(",
+                        &format!("{}_BaseColor(", first.Segments.join(".")),
+                    );
+                }
+                self.Lines.push(format!("    {}", text));
+            }
+        }
+        self.Lines.push("}".to_string());
     }
 
     fn EmitStageMethod(&mut self, shader: &SdslvShaderDecl, method: &SdslvFunctionDecl) {
@@ -306,6 +400,7 @@ impl<'a> HlslEmitter<'a> {
     fn IsKnownStream(&self, type_name: &str) -> bool {
         self.Module.Declarations.iter().any(|decl| match decl {
             SdslvDecl::Stream(stream) => stream.Name == type_name,
+            SdslvDecl::Shader(shader) => shader.Name == type_name,
             _ => false,
         })
     }
