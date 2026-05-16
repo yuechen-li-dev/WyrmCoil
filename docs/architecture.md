@@ -87,6 +87,29 @@ This milestone is a resource descriptor scaffold only, preserving GPU-free testa
 
 
 
+
+## M35 shader source strategy policy (implemented)
+
+M35 adds an explicit shader source policy-selection seam without creating shader modules or invoking compilation:
+
+- `SelectShaderSourceStrategy(...)` chooses between `SdslV`, `Wgsl`, and `NoShaderSourceFeasible` using Dunewyrm utility selection (`SelectHighestUtilityTarget`).
+- `ShaderSourceStrategyConstraints` controls allow/require behavior plus `PreferWgsl` override while default behavior still prefers SDSL-V when both inputs are feasible.
+- `ShaderSourceStrategyDecision` returns structured selection reason, rejected-mode reasons, and explicit feasibility flags for both source paths.
+- Availability checks are intentionally minimal (source present and non-whitespace), preserving M35 as policy/metadata only.
+
+M35 intentionally remains narrow:
+
+- no SDSL-V artifact compilation in selector execution
+- no DXC invocation
+- no WGSL parsing/validation/compilation
+- no `wgpu::ShaderModule` creation
+- no render pass, pipeline integration, or draw submission changes
+
+Expected next-step seams remain explicit:
+
+- `SdslV` selection continues toward artifact/build pipeline stages
+- `Wgsl` selection targets a future direct `wgpu` shader-module path
+
 ## M34 optional headless draw submission probe
 
 M34 adds the first optional real-device headless/offscreen draw submission seam while preserving GPU-free default tests:

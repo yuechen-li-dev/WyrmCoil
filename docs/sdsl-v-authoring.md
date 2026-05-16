@@ -4,6 +4,7 @@ This guide documents what SDSL-V can do **today** in WyrmCoil, how to author sou
 
 Use this alongside `docs/sdsl-v.md`:
 - `docs/sdsl-v.md` is the language/design reference and milestone history.
+- M35 shader source policy selects between SDSL-V and WGSL source inputs with Dunewyrm utility scoring; this pass is policy-only and does not compile either path.
 - this file is the practical “what works right now” checkpoint.
 
 ## 1) Current pipeline
