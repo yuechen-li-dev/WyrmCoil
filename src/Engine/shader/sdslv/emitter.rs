@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::ast::*;
 use super::diagnostic::SdslvDiagnostic;
@@ -21,6 +21,12 @@ pub fn CompileSourceToHlsl(source: &str) -> Result<String, Vec<SdslvDiagnostic>>
     let module = super::parser::ParseSource(source)?;
     ValidateModule(&module)?;
     EmitHlsl(&module)
+}
+
+#[derive(Clone)]
+struct FlowLowerContext<'a> {
+    StateByName: HashMap<String, &'a SdslvFlowState>,
+    Visiting: HashSet<String>,
 }
 
 struct HlslEmitter<'a> {
@@ -59,9 +65,7 @@ impl<'a> HlslEmitter<'a> {
                 SdslvDecl::TypeAlias(alias) => self.EmitTypeAlias(alias),
                 SdslvDecl::Stream(stream) => self.EmitStream(stream),
                 SdslvDecl::Shader(shader) => self.EmitShader(shader),
-                SdslvDecl::Flow(_) => {
-                    self.err("flow emission is not implemented in SDSL-V M12");
-                }
+                SdslvDecl::Flow(flow) => self.EmitFlow(flow),
                 SdslvDecl::Compile(compile) => self.EmitCompile(compile),
                 SdslvDecl::Interface(interface) => {
                     self.Lines.push(format!(
@@ -440,6 +444,358 @@ impl<'a> HlslEmitter<'a> {
             "bool" => "false",
             _ => "0",
         }
+    }
+
+    fn EmitFlow(&mut self, flow: &SdslvFlowDecl) {
+        let Some(return_type) = self.MapTypeFromPath(&flow.ReturnType) else {
+            return;
+        };
+        if !Self::IsLowerableValueType(&return_type) {
+            self.err(&format!("flow '{}' returns '{}', which cannot be lowered to an HLSL value function in SDSL-V M13", flow.Name, flow.ReturnType.Segments.join(".")));
+            return;
+        }
+        let mut state_by_name = HashMap::new();
+        for state in &flow.States {
+            state_by_name.insert(state.Name.clone(), state);
+        }
+        if let Some(cycle_state) = self.FindFlowCycle(flow, &state_by_name) {
+            self.err(&format!(
+                "flow '{}' contains a state cycle involving '{}'",
+                flow.Name, cycle_state
+            ));
+            return;
+        }
+        let mut memo = HashMap::new();
+        for state in &flow.States {
+            if !self.StateAlwaysReturns(flow, state, &state_by_name, &mut memo) {
+                self.err(&format!(
+                    "flow '{}' has a non-returning path through state '{}'",
+                    flow.Name, state.Name
+                ));
+                return;
+            }
+        }
+        let mut parameters = vec![];
+        for p in &flow.Parameters {
+            let Some(mapped) = self.MapTypeFromPath(&p.TypeName) else {
+                return;
+            };
+            parameters.push(format!("{} {}", mapped, p.Name));
+        }
+        self.Lines.push(format!(
+            "{} {}({}) {{",
+            return_type,
+            flow.Name,
+            parameters.join(", ")
+        ));
+        if let Some(board) = &flow.Board {
+            for field in &board.Fields {
+                let Some(mapped) = self.MapTypeFromPath(&field.TypeName) else {
+                    return;
+                };
+                let Some(default) = Self::DefaultValueForType(&mapped) else {
+                    self.err(&format!("flow '{}' board field '{}' of type '{}' cannot be lowered with a default value in SDSL-V M13", flow.Name, field.Name, field.TypeName.Segments.join(".")));
+                    return;
+                };
+                self.Lines
+                    .push(format!("    {} {} = {};", mapped, field.Name, default));
+            }
+            if !board.Fields.is_empty() {
+                self.Lines.push(String::new());
+            }
+        }
+        let entry = &flow.States[0];
+        let mut ctx = FlowLowerContext {
+            StateByName: state_by_name,
+            Visiting: HashSet::new(),
+        };
+        self.EmitFlowStateStatements(flow, &entry.Statements, 1, &mut ctx);
+        self.Lines.push("}".to_string());
+    }
+
+    fn EmitFlowStateStatements(
+        &mut self,
+        flow: &SdslvFlowDecl,
+        statements: &[SdslvFlowStatement],
+        indent: usize,
+        ctx: &mut FlowLowerContext<'_>,
+    ) {
+        for statement in statements {
+            match statement {
+                SdslvFlowStatement::BoardAssign { Field, Value, .. } => {
+                    self.Lines.push(format!(
+                        "{}{} = {};",
+                        Self::Indent(indent),
+                        Field,
+                        self.EmitFlowExpression(Value)
+                    ));
+                }
+                SdslvFlowStatement::Return(value) => {
+                    self.Lines.push(format!(
+                        "{}return {};",
+                        Self::Indent(indent),
+                        self.EmitFlowExpression(value)
+                    ));
+                }
+                SdslvFlowStatement::Goto(path) => {
+                    let name = path.Segments.join(".");
+                    if let Some(target) = ctx.StateByName.get(&name).copied() {
+                        if !ctx.Visiting.insert(name.clone()) {
+                            self.err(&format!(
+                                "flow '{}' contains a state cycle involving '{}'",
+                                flow.Name, name
+                            ));
+                            return;
+                        }
+                        self.EmitFlowStateStatements(flow, &target.Statements, indent, ctx);
+                        ctx.Visiting.remove(&name);
+                    } else {
+                        self.err(&format!(
+                            "goto targets unknown state '{}' in flow '{}'",
+                            name, flow.Name
+                        ));
+                    }
+                }
+                SdslvFlowStatement::When(when) => {
+                    for (index, case) in when.Cases.iter().enumerate() {
+                        let kw = if index == 0 { "if" } else { "else if" };
+                        self.Lines.push(format!(
+                            "{}{} ({}) {{",
+                            Self::Indent(indent),
+                            kw,
+                            self.EmitFlowExpression(&case.Condition)
+                        ));
+                        self.EmitFlowAction(flow, &case.Action, indent + 1, ctx);
+                        self.Lines.push(format!("{}}}", Self::Indent(indent)));
+                    }
+                    if let Some(action) = &when.ElseAction {
+                        self.Lines.push(format!("{}else {{", Self::Indent(indent)));
+                        self.EmitFlowAction(flow, action, indent + 1, ctx);
+                        self.Lines.push(format!("{}}}", Self::Indent(indent)));
+                    }
+                }
+            }
+        }
+    }
+
+    fn EmitFlowAction(
+        &mut self,
+        flow: &SdslvFlowDecl,
+        action: &SdslvFlowAction,
+        indent: usize,
+        ctx: &mut FlowLowerContext<'_>,
+    ) {
+        match action {
+            SdslvFlowAction::Return(v) => self.Lines.push(format!(
+                "{}return {};",
+                Self::Indent(indent),
+                self.EmitFlowExpression(v)
+            )),
+            SdslvFlowAction::Goto(path) => {
+                let name = path.Segments.join(".");
+                if let Some(target) = ctx.StateByName.get(&name).copied() {
+                    if !ctx.Visiting.insert(name.clone()) {
+                        self.err(&format!(
+                            "flow '{}' contains a state cycle involving '{}'",
+                            flow.Name, name
+                        ));
+                        return;
+                    }
+                    self.EmitFlowStateStatements(flow, &target.Statements, indent, ctx);
+                    ctx.Visiting.remove(&name);
+                } else {
+                    self.err(&format!(
+                        "goto targets unknown state '{}' in flow '{}'",
+                        name, flow.Name
+                    ));
+                }
+            }
+        }
+    }
+
+    fn EmitFlowExpression(&self, expression: &SdslvExpression) -> String {
+        self.EmitExpression(&Self::RewriteBoardRefs(expression), 0)
+    }
+    fn RewriteBoardRefs(expression: &SdslvExpression) -> SdslvExpression {
+        match expression {
+            SdslvExpression::FieldAccess { Base, Field } => {
+                if let SdslvExpression::Identifier(name) = &**Base
+                    && name == "board"
+                {
+                    return SdslvExpression::Identifier(Field.clone());
+                }
+                SdslvExpression::FieldAccess {
+                    Base: Box::new(Self::RewriteBoardRefs(Base)),
+                    Field: Field.clone(),
+                }
+            }
+            SdslvExpression::Call { Callee, Arguments } => SdslvExpression::Call {
+                Callee: Box::new(Self::RewriteBoardRefs(Callee)),
+                Arguments: Arguments.iter().map(Self::RewriteBoardRefs).collect(),
+            },
+            SdslvExpression::Binary {
+                Left,
+                Operator,
+                Right,
+            } => SdslvExpression::Binary {
+                Left: Box::new(Self::RewriteBoardRefs(Left)),
+                Operator: *Operator,
+                Right: Box::new(Self::RewriteBoardRefs(Right)),
+            },
+            SdslvExpression::Unary { Operator, Operand } => SdslvExpression::Unary {
+                Operator: *Operator,
+                Operand: Box::new(Self::RewriteBoardRefs(Operand)),
+            },
+            _ => expression.clone(),
+        }
+    }
+    fn FindFlowCycle(
+        &self,
+        flow: &SdslvFlowDecl,
+        states: &HashMap<String, &SdslvFlowState>,
+    ) -> Option<String> {
+        let mut visited = HashSet::new();
+        let mut stack = HashSet::new();
+        for state in &flow.States {
+            if self.VisitCycleState(state, states, &mut visited, &mut stack) {
+                return Some(state.Name.clone());
+            }
+        }
+        None
+    }
+    fn VisitCycleState(
+        &self,
+        state: &SdslvFlowState,
+        states: &HashMap<String, &SdslvFlowState>,
+        visited: &mut HashSet<String>,
+        stack: &mut HashSet<String>,
+    ) -> bool {
+        if stack.contains(&state.Name) {
+            return true;
+        }
+        if !visited.insert(state.Name.clone()) {
+            return false;
+        }
+        stack.insert(state.Name.clone());
+        for target in Self::CollectGotoTargets(&state.Statements) {
+            if let Some(next) = states.get(&target)
+                && self.VisitCycleState(next, states, visited, stack)
+            {
+                return true;
+            }
+        }
+        stack.remove(&state.Name);
+        false
+    }
+    fn CollectGotoTargets(statements: &[SdslvFlowStatement]) -> Vec<String> {
+        let mut out = vec![];
+        for st in statements {
+            match st {
+                SdslvFlowStatement::Goto(path) => out.push(path.Segments.join(".")),
+                SdslvFlowStatement::When(when) => {
+                    for c in &when.Cases {
+                        if let SdslvFlowAction::Goto(path) = &c.Action {
+                            out.push(path.Segments.join("."));
+                        }
+                    }
+                    if let Some(SdslvFlowAction::Goto(path)) = &when.ElseAction {
+                        out.push(path.Segments.join("."));
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+    fn StateAlwaysReturns(
+        &self,
+        flow: &SdslvFlowDecl,
+        state: &SdslvFlowState,
+        states: &HashMap<String, &SdslvFlowState>,
+        memo: &mut HashMap<String, bool>,
+    ) -> bool {
+        if let Some(v) = memo.get(&state.Name) {
+            return *v;
+        }
+        let result = self.StatementsAlwaysReturn(flow, &state.Statements, states, memo);
+        memo.insert(state.Name.clone(), result);
+        result
+    }
+    fn StatementsAlwaysReturn(
+        &self,
+        flow: &SdslvFlowDecl,
+        statements: &[SdslvFlowStatement],
+        states: &HashMap<String, &SdslvFlowState>,
+        memo: &mut HashMap<String, bool>,
+    ) -> bool {
+        for st in statements {
+            match st {
+                SdslvFlowStatement::Return(_) => return true,
+                SdslvFlowStatement::BoardAssign { .. } => {}
+                SdslvFlowStatement::Goto(path) => {
+                    let name = path.Segments.join(".");
+                    let Some(target) = states.get(&name) else {
+                        return false;
+                    };
+                    return self.StateAlwaysReturns(flow, target, states, memo);
+                }
+                SdslvFlowStatement::When(when) => {
+                    let mut ok = true;
+                    for c in &when.Cases {
+                        ok &= self.ActionAlwaysReturns(flow, &c.Action, states, memo);
+                    }
+                    ok &= when
+                        .ElseAction
+                        .as_ref()
+                        .map(|x| self.ActionAlwaysReturns(flow, x, states, memo))
+                        .unwrap_or(false);
+                    if ok {
+                        return true;
+                    } else {
+                        return false;
+                    }
+                }
+            }
+        }
+        false
+    }
+    fn ActionAlwaysReturns(
+        &self,
+        flow: &SdslvFlowDecl,
+        action: &SdslvFlowAction,
+        states: &HashMap<String, &SdslvFlowState>,
+        memo: &mut HashMap<String, bool>,
+    ) -> bool {
+        match action {
+            SdslvFlowAction::Return(_) => true,
+            SdslvFlowAction::Goto(path) => {
+                let name = path.Segments.join(".");
+                let Some(target) = states.get(&name) else {
+                    return false;
+                };
+                self.StateAlwaysReturns(flow, target, states, memo)
+            }
+        }
+    }
+    fn IsLowerableValueType(type_name: &str) -> bool {
+        matches!(
+            type_name,
+            "bool" | "int" | "uint" | "float" | "float2" | "float3" | "float4" | "float4x4"
+        )
+    }
+    fn DefaultValueForType(type_name: &str) -> Option<&'static str> {
+        match type_name {
+            "bool" => Some("false"),
+            "int" | "uint" => Some("0"),
+            "float" => Some("0.0"),
+            "float2" => Some("float2(0.0, 0.0)"),
+            "float3" => Some("float3(0.0, 0.0, 0.0)"),
+            "float4" => Some("float4(0.0, 0.0, 0.0, 0.0)"),
+            _ => None,
+        }
+    }
+    fn Indent(level: usize) -> String {
+        "    ".repeat(level)
     }
 
     fn err(&mut self, message: &str) {

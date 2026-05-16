@@ -639,7 +639,7 @@ Current limits in M10:
 - full flow expression typechecking remains future work.
 
 Emitter behavior in M10:
-- HLSL emission returns a diagnostic when a module contains flow declarations: `flow emission is not implemented in SDSL-V M12`.
+- HLSL emission returns a diagnostic when a module contains flow declarations: `flow emission supports acyclic value-returning subset in SDSL-V M13`.
 
 
 ## SDSL-V M12 flow board writes and bounded flow type validation
@@ -662,4 +662,4 @@ M12 intentionally still does not implement:
 - utility `when`, `suspend`, `remember`, `resume`
 
 Emitter behavior remains parse/validate-only for flows:
-- modules with flows return `flow emission is not implemented in SDSL-V M12`.
+- modules with flows return `flow emission supports acyclic value-returning subset in SDSL-V M13`.
