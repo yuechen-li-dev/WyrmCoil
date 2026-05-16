@@ -3,6 +3,7 @@
 use crate::Engine::render::extract::{
     ExtractedRenderBatch, PackSpriteVertices, SpriteVertexStrideBytes,
 };
+use wgpu::util::DeviceExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GpuBufferUsageIntent {
@@ -23,6 +24,28 @@ pub enum VertexBufferUploadPlanError {
     EmptyLabel,
     ByteLengthMismatch { Expected: usize, Actual: usize },
     StrideMismatch { Expected: u64, Actual: u64 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WgpuVertexBufferCreateDesc {
+    pub Label: String,
+    pub Bytes: Vec<u8>,
+    pub Usage: wgpu::BufferUsages,
+    pub VertexCount: usize,
+    pub StrideBytes: u64,
+}
+
+pub struct WgpuVertexBufferResource {
+    pub Label: String,
+    pub VertexCount: usize,
+    pub StrideBytes: u64,
+    pub Buffer: wgpu::Buffer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WgpuUploadError {
+    InvalidPlan(VertexBufferUploadPlanError),
+    EmptyUpload,
 }
 
 pub fn BuildVertexBufferUploadPlan(
@@ -68,6 +91,42 @@ pub fn ValidateVertexBufferUploadPlan(
     }
 
     Ok(())
+}
+
+pub fn BuildWgpuVertexBufferCreateDesc(
+    plan: &VertexBufferUploadPlan,
+) -> Result<WgpuVertexBufferCreateDesc, WgpuUploadError> {
+    ValidateVertexBufferUploadPlan(plan).map_err(WgpuUploadError::InvalidPlan)?;
+    if plan.Bytes.is_empty() {
+        return Err(WgpuUploadError::EmptyUpload);
+    }
+
+    Ok(WgpuVertexBufferCreateDesc {
+        Label: plan.Label.clone(),
+        Bytes: plan.Bytes.clone(),
+        Usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        VertexCount: plan.VertexCount,
+        StrideBytes: plan.StrideBytes,
+    })
+}
+
+pub fn CreateWgpuVertexBuffer(
+    device: &wgpu::Device,
+    plan: &VertexBufferUploadPlan,
+) -> Result<WgpuVertexBufferResource, WgpuUploadError> {
+    let desc = BuildWgpuVertexBufferCreateDesc(plan)?;
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(&desc.Label),
+        contents: &desc.Bytes,
+        usage: desc.Usage,
+    });
+
+    Ok(WgpuVertexBufferResource {
+        Label: desc.Label,
+        VertexCount: desc.VertexCount,
+        StrideBytes: desc.StrideBytes,
+        Buffer: buffer,
+    })
 }
 
 #[cfg(test)]
@@ -272,6 +331,91 @@ mod tests {
             plan.Bytes.len() as u64,
             plan.StrideBytes * plan.VertexCount as u64,
             "byte payload length should align to vertex count and stride"
+        );
+    }
+
+    #[test]
+    fn BuildWgpuVertexBufferCreateDescRejectsInvalidPlans() {
+        let invalid = VertexBufferUploadPlan {
+            Label: "Invalid".to_string(),
+            Bytes: vec![1, 2, 3],
+            VertexCount: 1,
+            StrideBytes: 999,
+            Usage: GpuBufferUsageIntent::Vertex,
+        };
+
+        assert_eq!(
+            BuildWgpuVertexBufferCreateDesc(&invalid).unwrap_err(),
+            WgpuUploadError::InvalidPlan(VertexBufferUploadPlanError::StrideMismatch {
+                Expected: SpriteVertexStrideBytes() as u64,
+                Actual: 999,
+            }),
+            "descriptor build should reject invalid upload plans"
+        );
+    }
+
+    #[test]
+    fn BuildWgpuVertexBufferCreateDescRejectsEmptyUploadBytes() {
+        let empty = VertexBufferUploadPlan {
+            Label: "Empty".to_string(),
+            Bytes: Vec::new(),
+            VertexCount: 0,
+            StrideBytes: SpriteVertexStrideBytes() as u64,
+            Usage: GpuBufferUsageIntent::Vertex,
+        };
+
+        assert_eq!(
+            BuildWgpuVertexBufferCreateDesc(&empty).unwrap_err(),
+            WgpuUploadError::EmptyUpload,
+            "GPU vertex-buffer creation should reject empty upload bytes"
+        );
+    }
+
+    #[test]
+    fn BuildWgpuVertexBufferCreateDescPreservesMetadataAndByteOrder() {
+        let batch = ExtractedRenderBatch {
+            Frame: 2,
+            Vertices: vec![
+                SpriteVertex {
+                    X: 3.5,
+                    Y: -6.25,
+                    SpriteId: 42,
+                },
+                SpriteVertex {
+                    X: -9.0,
+                    Y: 11.75,
+                    SpriteId: 5,
+                },
+            ],
+        };
+        let plan = BuildVertexBufferUploadPlan("Probe", &batch)
+            .expect("non-empty batch should build a valid upload plan");
+        let desc = BuildWgpuVertexBufferCreateDesc(&plan)
+            .expect("non-empty valid upload plan should build create descriptor");
+
+        assert_eq!(desc.Label, "Probe", "descriptor should preserve plan label");
+        assert_eq!(
+            desc.VertexCount,
+            batch.Vertices.len(),
+            "descriptor should preserve vertex count"
+        );
+        assert_eq!(
+            desc.StrideBytes,
+            SpriteVertexStrideBytes() as u64,
+            "descriptor should preserve stride bytes"
+        );
+        assert_eq!(
+            desc.Bytes,
+            PackSpriteVertices(&batch.Vertices),
+            "descriptor should preserve packed byte order exactly"
+        );
+        assert!(
+            desc.Usage.contains(wgpu::BufferUsages::VERTEX),
+            "descriptor usage should include VERTEX for vertex-buffer binding"
+        );
+        assert!(
+            desc.Usage.contains(wgpu::BufferUsages::COPY_DST),
+            "descriptor usage should include COPY_DST for future queue writes"
         );
     }
 }
