@@ -39,6 +39,25 @@ Current `Engine` prototype phase boundaries:
 This pass establishes explicit timing domains and counters (`ControlTick`, `SimulationTick`, `RenderFrame`) but intentionally does **not** add a scheduler, wall-clock cadence model, renderer backend, physics backend, or ECS framework.
 
 
+
+
+## M6 window/input backend scaffold
+
+M6 adds the first platform-facing backend boundary without adding a renderer or full app loop.
+
+- `Engine::backend` now hosts a small window/input scaffold for future platform adapters.
+- Platform-style input events are translated into normalized engine `InputEvent` values (`MoveRightPressed`, `MoveLeftPressed`, `StopPressed`, `AlertGuardPressed`, `NudgeGuardPressed`).
+- Translation is deterministic and unknown platform inputs are ignored.
+- Backend helpers can enqueue translated input into `Engine` without mutating `World` directly.
+- Enqueueing input does not tick control or simulation clocks.
+- `TickControl()` remains the only boundary that bridges queued input into Dunewyrm mailbox messages.
+
+Intentional non-goals remain explicit:
+
+- No `wgpu` or renderer integration.
+- No shader language/compiler pipeline.
+- No real windowed game loop requirement in tests.
+
 ## M5 render snapshot / extraction contract
 
 M5 strengthens the render boundary while still keeping rendering backends out of scope.
