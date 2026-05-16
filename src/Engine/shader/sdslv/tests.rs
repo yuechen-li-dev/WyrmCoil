@@ -186,3 +186,146 @@ shader Forward<TMat> implements IBaseColor where TMat: Missing {
             .any(|x| x.Message.contains("interface 'Missing' is unknown"))
     );
 }
+
+#[test]
+fn EmitHlslTypeAliasMappings() {
+    let src = r#"
+        type Color = float4;
+        type Scalar = f32;
+        type Count = i32;
+        type Mask = u32;
+        type ClipPosition4 = float4 @space(clip.position);
+    "#;
+    let module = ValidateSource(src).unwrap();
+    let hlsl = EmitHlsl(&module).unwrap();
+
+    assert!(
+        hlsl.contains("typedef float4 Color;"),
+        "expected float4 alias"
+    );
+    assert!(
+        hlsl.contains("typedef float Scalar;"),
+        "expected f32->float alias"
+    );
+    assert!(
+        hlsl.contains("typedef int Count;"),
+        "expected i32->int alias"
+    );
+    assert!(
+        hlsl.contains("typedef uint Mask;"),
+        "expected u32->uint alias"
+    );
+    assert!(
+        hlsl.contains("// @space(clip.position)"),
+        "expected space annotation comment"
+    );
+}
+
+#[test]
+fn EmitHlslStreamSemanticsAreDeterministic() {
+    let src = r#"
+        type ClipPosition4 = float4 @space(clip.position);
+        type WorldPosition3 = float3 @space(world.position);
+        stream VertexOut {
+            Position: ClipPosition4;
+            WorldPos: WorldPosition3;
+            Color: float4;
+        }
+    "#;
+    let module = ValidateSource(src).unwrap();
+    let hlsl = EmitHlsl(&module).unwrap();
+
+    assert!(
+        hlsl.contains("struct VertexOut {"),
+        "expected stream struct"
+    );
+    assert!(
+        hlsl.contains("float4 Position : SV_Position;"),
+        "expected SV_Position mapping"
+    );
+    assert!(
+        hlsl.contains("float3 WorldPos : TEXCOORD0;"),
+        "expected first TEXCOORD mapping"
+    );
+    assert!(
+        hlsl.contains("float4 Color : TEXCOORD1;"),
+        "expected second TEXCOORD mapping"
+    );
+}
+
+#[test]
+fn CompileSourceToHlslFlatColorContainsExpectedShape() {
+    let src = r#"
+        type ClipPosition4 = float4 @space(clip.position);
+        stream VertexOut {
+            Position: ClipPosition4;
+            Color: float4;
+        }
+        shader FlatColor {
+            stage vertex fn VS(pos: float3, color: float4) -> VertexOut {
+                let output: VertexOut;
+                return output;
+            }
+            stage pixel fn PS(input: VertexOut) -> float4 {
+                return input.Color;
+            }
+        }
+    "#;
+    let hlsl = CompileSourceToHlsl(src).unwrap();
+
+    assert!(hlsl.contains("struct VertexOut"), "expected stream struct");
+    assert!(hlsl.contains("SV_Position"), "expected position semantic");
+    assert!(hlsl.contains("TEXCOORD0"), "expected texcoord semantic");
+    assert!(hlsl.contains("FlatColor_VS"), "expected vertex signature");
+    assert!(hlsl.contains("FlatColor_PS"), "expected pixel signature");
+    assert!(hlsl.contains("SV_Target"), "expected pixel return semantic");
+    assert!(
+        hlsl.contains("return input.Color;"),
+        "expected raw body preservation"
+    );
+}
+
+#[test]
+fn EmitHlslGenericShaderReturnsDiagnostic() {
+    let src = r#"
+        interface IBaseColor { fn BaseColor(s: Surface) -> float4; }
+        interface INormalProvider { fn Normal(s: Surface) -> float3; }
+        stream Surface { Color: float4; }
+        shader ForwardPass<TMat>
+            where TMat : IBaseColor, INormalProvider
+        {
+            stage pixel fn PS(s: Surface, mat: TMat) -> float4 {
+                return mat.BaseColor(s);
+            }
+        }
+    "#;
+    let module = ValidateSource(src).unwrap();
+    let diagnostics = EmitHlsl(&module).unwrap_err();
+    assert!(
+        diagnostics.iter().any(|x| x
+            .Message
+            .contains("cannot emit generic shader 'ForwardPass' in SDSL-V M3")),
+        "expected generic emission diagnostic"
+    );
+}
+
+#[test]
+fn CompileSourceToHlslInvalidSourceReturnsDiagnostics() {
+    let src = "shader S { stage pixel fn PS() -> float4; }";
+    let diagnostics = CompileSourceToHlsl(src).unwrap_err();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|x| x.Message.contains("must have a body")),
+        "expected validation failure before emission"
+    );
+}
+
+#[test]
+fn EmitHlslIsDeterministic() {
+    let src = include_str!("../../../../examples/sdslv/flat_color.sdslv");
+    let module = ValidateSource(src).unwrap();
+    let hlsl_a = EmitHlsl(&module).unwrap();
+    let hlsl_b = EmitHlsl(&module).unwrap();
+    assert_eq!(hlsl_a, hlsl_b, "expected deterministic output");
+}
