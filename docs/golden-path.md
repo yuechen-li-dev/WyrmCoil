@@ -1,9 +1,6 @@
-# Golden Path Checkpoint (M42/M43)
+# Golden Path Checkpoint (M42/M43, post M45b split)
 
-This document captures the current visible-window golden path status after:
-
-- **M42:** first visible primitive in a real window.
-- **M43:** architecture/status documentation checkpoint.
+This document captures the current visible-window bootstrap path after the Engine/Demo split.
 
 ## Status
 
@@ -17,6 +14,12 @@ The current golden path is complete for its intended bootstrap scope:
 - Present visible pixels.
 
 This is an **optional manual path**, not a default test path.
+
+## Split-aware ownership
+
+- `Engine` owns generic timing/orchestration contracts and render/shader/backend seams.
+- `Demo` owns sample world/game-specific data and demo bootstrap flow.
+- The golden-path example combines both: generic Engine core + Demo world/bootstrap bridge.
 
 ## Run command
 
@@ -67,7 +70,7 @@ The example exercises these integration seams in order:
 WyrmCoil timing semantics remain:
 
 - **Control ticks decide behavior.**
-- **Simulation ticks update dense stores.**
+- **Simulation ticks update stores.**
 - **Render frames observe snapshots.**
 
 The example loop is a bootstrap integration shell. It does not redefine engine timing as render-frame-driven simulation.
@@ -78,7 +81,7 @@ The following are intentional scope limits, not omissions by mistake:
 
 - WGSL is the current visible-pixel bootstrap path.
 - SDSL-V remains the preferred high-level shader authoring language.
-- `BuildVisiblePrimitiveDemoBatch(...)` is a demo bridge.
+- `BuildVisiblePrimitiveDemoBatch(...)` remains a demo visible-primitive bridge, not a full sprite/material renderer.
 - No material system.
 - No texture system.
 - No camera/projection system.
@@ -91,33 +94,11 @@ The following are intentional scope limits, not omissions by mistake:
 Current stack shape:
 
 Dunewyrm kernel
-→ engine timing/input/world/render snapshot
-→ renderer extraction/upload/buffering/lifecycle seams
-→ shader-source strategy (SDSL-V preferred, WGSL valid native path)
+→ Engine generic timing/input/world/render snapshot contracts
+→ Engine render extraction/upload/command/backends seams
+→ Engine shader-source strategy seams (SDSL-V preferred, WGSL bootstrap path)
 → `wgpu` bootstrap backend adapter
+→ Demo visible-primitive bridge (`BuildVisiblePrimitiveDemoBatch`)
 → visible window primitive
 
 `wgpu` is the current bootstrap backend. A native Vulkan backend remains a future seam and is not implemented.
-
-Backend-neutral render contracts should remain independent of `wgpu` policy details.
-
-## Current limitations (explicit)
-
-- No material bindings.
-- No textures.
-- No uniform-buffer scene path.
-- No camera/projection path.
-- No production sprite batching.
-- No production renderer lifecycle framework.
-- No native Vulkan backend implementation.
-- Resize/presentation policy remains basic bootstrap behavior.
-
-## Plausible next-phase options
-
-- Replace demo quad bridge with a real sprite/quad lane.
-- Add camera/projection transform path.
-- Integrate SDSL-V output flow into `wgpu` module/pipeline creation.
-- Seed texture/material binding path.
-- Investigate native Vulkan backend adapter path.
-- Clean up the window loop around current `winit` deprecation warnings.
-- Add optional GPU readback/headless validation where helpful.
