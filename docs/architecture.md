@@ -92,6 +92,26 @@ This milestone is a resource descriptor scaffold only, preserving GPU-free testa
 
 
 
+
+## M42 first visible primitive in window
+
+M42 completes the current visible-pixels golden path with an optional window example (`examples/window_visible_primitive.rs`):
+
+- The example preserves explicit phase timing (`TickControl()`, `TickSimulation()`, `RenderSnapshot()`) on redraw events.
+- Render data flows through snapshot extraction (`BuildVisiblePrimitiveDemoBatch`), upload planning (`BuildVertexBufferUploadPlan`), GPU vertex-buffer creation (`CreateWgpuVertexBuffer`), command planning (`BuildRenderCommandPlan`), and draw recording (`RecordWgpuDrawCommand`).
+- The WGSL fixture path (`MINIMAL_SPRITE_WGSL_FIXTURE`) is used for bootstrap pipeline creation through the M38 seam.
+- The demo extraction helper intentionally expands each render item into a tiny quad (two triangles) as a scoped visible-primitive bridge; this is not a full sprite/material renderer.
+
+M42 intentionally remains narrow:
+
+- no material/bind-group/reflection rollout
+- no textures/sprite-atlas system
+- no camera/projection system
+- no render graph or asset pipeline
+- no hard GPU/window requirement for default `cargo test`
+
+WGSL remains a valid native `wgpu` bootstrap path in M42, while SDSL-V remains the preferred high-level authoring path.
+
 ## M41 optional window render-loop skeleton
 
 M41 adds an opt-in window-loop skeleton example (`examples/window_loop_skeleton.rs`) and keeps default tests GPU/window-free:

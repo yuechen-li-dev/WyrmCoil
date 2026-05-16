@@ -40,6 +40,55 @@ pub fn ExtractSpriteVertices(snapshot: &RenderSnapshot) -> ExtractedRenderBatch 
     }
 }
 
+pub fn BuildVisiblePrimitiveDemoBatch(snapshot: &RenderSnapshot) -> ExtractedRenderBatch {
+    let mut vertices = Vec::with_capacity(snapshot.Items.len() * 6);
+    let half_extent = 0.08_f32;
+
+    for item in &snapshot.Items {
+        let left = item.Position.X - half_extent;
+        let right = item.Position.X + half_extent;
+        let top = item.Position.Y + half_extent;
+        let bottom = item.Position.Y - half_extent;
+        let sprite_id = item.SpriteId;
+
+        vertices.push(SpriteVertex {
+            X: left,
+            Y: top,
+            SpriteId: sprite_id,
+        });
+        vertices.push(SpriteVertex {
+            X: right,
+            Y: top,
+            SpriteId: sprite_id,
+        });
+        vertices.push(SpriteVertex {
+            X: right,
+            Y: bottom,
+            SpriteId: sprite_id,
+        });
+        vertices.push(SpriteVertex {
+            X: left,
+            Y: top,
+            SpriteId: sprite_id,
+        });
+        vertices.push(SpriteVertex {
+            X: right,
+            Y: bottom,
+            SpriteId: sprite_id,
+        });
+        vertices.push(SpriteVertex {
+            X: left,
+            Y: bottom,
+            SpriteId: sprite_id,
+        });
+    }
+
+    ExtractedRenderBatch {
+        Frame: snapshot.Frame,
+        Vertices: vertices,
+    }
+}
+
 pub fn PackSpriteVertices(vertices: &[SpriteVertex]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(vertices.len() * SpriteVertexStrideBytes());
     for vertex in vertices {
@@ -264,5 +313,43 @@ mod tests {
             PackSpriteVertices(&batch.Vertices),
             "batch byte helper should match direct pack helper"
         );
+    }
+
+    #[test]
+    fn BuildVisiblePrimitiveDemoBatchExpandsEachItemToTwoTriangles() {
+        let snapshot = RenderSnapshot {
+            Frame: 12,
+            Items: vec![RenderItem {
+                Entity: EntityId(2),
+                Position: Vec2 { X: 0.5, Y: -0.25 },
+                SpriteId: 9,
+            }],
+        };
+
+        let batch = BuildVisiblePrimitiveDemoBatch(&snapshot);
+        assert_eq!(batch.Frame, 12, "frame should be preserved");
+        assert_eq!(
+            batch.Vertices.len(),
+            6,
+            "one item should expand to six vertices"
+        );
+        assert!(
+            (batch.Vertices[0].X - 0.42).abs() < 0.0001,
+            "first triangle top-left x should use fixed quad extent around snapshot position"
+        );
+        assert!(
+            (batch.Vertices[0].Y + 0.17).abs() < 0.0001,
+            "first triangle top-left y should use fixed quad extent around snapshot position"
+        );
+        assert_eq!(batch.Vertices[0].SpriteId, 9);
+        assert!(
+            (batch.Vertices[5].X - 0.42).abs() < 0.0001,
+            "second triangle bottom-left x should preserve quad extent"
+        );
+        assert!(
+            (batch.Vertices[5].Y + 0.33).abs() < 0.0001,
+            "second triangle bottom-left y should preserve quad extent"
+        );
+        assert_eq!(batch.Vertices[5].SpriteId, 9);
     }
 }
