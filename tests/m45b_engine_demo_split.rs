@@ -67,7 +67,7 @@ fn BuildFakeRegistry() -> DwFrameRegistry {
 }
 
 fn FakeInputToMessage(_i: u8) -> DwMessage {
-    DwMessage { Kind: 0, Value: 0 }
+    DwMessage::I32(0, 0)
 }
 
 #[test]

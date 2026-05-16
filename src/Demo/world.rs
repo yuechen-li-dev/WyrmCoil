@@ -310,34 +310,19 @@ pub enum InputEvent {
 }
 
 pub fn MoveRightMessage() -> DwMessage {
-    DwMessage {
-        Kind: MailKinds::MovePlayerRight,
-        Value: 1,
-    }
+    DwMessage::I32(MailKinds::MovePlayerRight, 1)
 }
 pub fn MoveLeftMessage() -> DwMessage {
-    DwMessage {
-        Kind: MailKinds::MovePlayerLeft,
-        Value: 1,
-    }
+    DwMessage::I32(MailKinds::MovePlayerLeft, 1)
 }
 pub fn StopMessage() -> DwMessage {
-    DwMessage {
-        Kind: MailKinds::StopPlayer,
-        Value: 1,
-    }
+    DwMessage::I32(MailKinds::StopPlayer, 1)
 }
 pub fn AlertGuardMessage() -> DwMessage {
-    DwMessage {
-        Kind: MailKinds::AlertGuard,
-        Value: 1,
-    }
+    DwMessage::I32(MailKinds::AlertGuard, 1)
 }
 pub fn NudgeGuardMessage() -> DwMessage {
-    DwMessage {
-        Kind: MailKinds::NudgeGuardUp,
-        Value: 1,
-    }
+    DwMessage::I32(MailKinds::NudgeGuardUp, 1)
 }
 pub fn InputToMessage(event: InputEvent) -> DwMessage {
     match event {

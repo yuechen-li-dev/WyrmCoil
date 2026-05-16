@@ -17,7 +17,7 @@ pub use control::{
     SelectHighestUtilityTarget,
 };
 pub use ids::{DwActId, DwActRequest, DwDeferredAct, DwFrameId};
-pub use mailbox::{DwMailbox, DwMailboxChunk, DwMessage};
+pub use mailbox::{DwMailbox, DwMailboxChunk, DwMessage, DwMessagePayload};
 pub use phase::DwPhase;
 pub use registry::{DwFrameDef, DwFrameFn, DwFrameRegistry};
 pub use session::{
@@ -573,21 +573,21 @@ mod tests {
             "expected empty mailbox consume to return None before any seeding"
         );
 
-        mailbox.EnqueueVisibleForTest(DwMessage { Kind: 1, Value: 11 });
-        mailbox.EnqueueVisibleForTest(DwMessage { Kind: 2, Value: 22 });
+        mailbox.EnqueueVisibleForTest(DwMessage::I32(1, 11));
+        mailbox.EnqueueVisibleForTest(DwMessage::I32(2, 22));
         assert_eq!(
             mailbox.PeekFront(),
-            Some(DwMessage { Kind: 1, Value: 11 }),
+            Some(DwMessage::I32(1, 11)),
             "expected peek to show the front visible message without consuming it"
         );
         assert_eq!(
             mailbox.ConsumeFront(),
-            Some(DwMessage { Kind: 1, Value: 11 }),
+            Some(DwMessage::I32(1, 11)),
             "expected consume to remove the earliest visible message first (FIFO)"
         );
         assert_eq!(
             mailbox.ConsumeFront(),
-            Some(DwMessage { Kind: 2, Value: 22 }),
+            Some(DwMessage::I32(2, 22)),
             "expected consume to continue preserving FIFO order"
         );
     }
@@ -624,14 +624,14 @@ mod tests {
                     let before = ctx.Mailbox().PeekFront();
                     assert_eq!(
                         before,
-                        Some(DwMessage { Kind: 7, Value: 70 }),
+                        Some(DwMessage::I32(7, 70)),
                         "expected seeded visible message to be readable at start phase"
                     );
-                    ctx.MailboxMut().Enqueue(DwMessage { Kind: 8, Value: 80 });
+                    ctx.MailboxMut().Enqueue(DwMessage::I32(8, 80));
                     let same_tick = ctx.Mailbox().PeekFront();
                     assert_eq!(
                         same_tick,
-                        Some(DwMessage { Kind: 7, Value: 70 }),
+                        Some(DwMessage::I32(7, 70)),
                         "expected staged message to remain invisible during same tick"
                     );
                     Dw::WaitTicks(1, P::Check)
@@ -640,13 +640,13 @@ mod tests {
                     let consumed = ctx.MailboxMut().ConsumeFront();
                     assert_eq!(
                         consumed,
-                        Some(DwMessage { Kind: 7, Value: 70 }),
+                        Some(DwMessage::I32(7, 70)),
                         "expected old visible message to stay available until explicitly consumed"
                     );
                     let promoted = ctx.Mailbox().PeekFront();
                     assert_eq!(
                         promoted,
-                        Some(DwMessage { Kind: 8, Value: 80 }),
+                        Some(DwMessage::I32(8, 80)),
                         "expected staged message to promote at tick boundary while wait elapsed"
                     );
                     Dw::Continue(P::Done)
@@ -668,17 +668,16 @@ mod tests {
         })
         .unwrap();
         let mut s = DwSession::New(reg, root, 0).unwrap();
-        s.MailboxMut()
-            .EnqueueVisibleForTest(DwMessage { Kind: 7, Value: 70 });
+        s.MailboxMut().EnqueueVisibleForTest(DwMessage::I32(7, 70));
         let t0 = s.Tick().unwrap();
         assert_eq!(
             t0.VisibleMailbox,
-            vec![DwMessage { Kind: 7, Value: 70 }],
+            vec![DwMessage::I32(7, 70)],
             "expected visible snapshot to keep unconsumed visible message after start tick"
         );
         assert_eq!(
             t0.StagedMailbox,
-            vec![DwMessage { Kind: 8, Value: 80 }],
+            vec![DwMessage::I32(8, 80)],
             "expected staged snapshot to include message enqueued during tick"
         );
         let t1 = s.Tick().unwrap();
@@ -689,10 +688,7 @@ mod tests {
         );
         assert_eq!(
             t1.VisibleMailbox,
-            vec![
-                DwMessage { Kind: 7, Value: 70 },
-                DwMessage { Kind: 8, Value: 80 }
-            ],
+            vec![DwMessage::I32(7, 70), DwMessage::I32(8, 80)],
             "expected staged message promotion at tick boundary to preserve FIFO behind existing visible messages"
         );
         assert_eq!(
@@ -734,7 +730,7 @@ mod tests {
                     ctx.BoardMut().Set(Keys::Alerted, true).unwrap();
                     ctx.BoardMut().Set(Keys::Count, 5).unwrap();
                     ctx.BoardMut().Set(Keys::Pressure, 0.5).unwrap();
-                    ctx.MailboxMut().Enqueue(DwMessage { Kind: 2, Value: 20 });
+                    ctx.MailboxMut().Enqueue(DwMessage::I32(2, 20));
                     Dw::WaitTicks(2, P::Wait)
                 }
                 Some(P::Wait) => {
@@ -787,7 +783,7 @@ mod tests {
         );
         assert_eq!(
             chunk.Mailbox.Staged,
-            vec![DwMessage { Kind: 2, Value: 20 }],
+            vec![DwMessage::I32(2, 20)],
             "expected staged mailbox queue to be preserved in exported chunk"
         );
 
@@ -869,7 +865,7 @@ mod tests {
         fn RootF(ctx: &mut DwFrameCtx) -> DwControl {
             if ctx.Pc() == 0 {
                 ctx.BoardMut().Set(Keys::Count, 3).unwrap();
-                ctx.MailboxMut().Enqueue(DwMessage { Kind: 9, Value: 90 });
+                ctx.MailboxMut().Enqueue(DwMessage::I32(9, 90));
                 Dw::WaitTicks(1, RootPhase::Done)
             } else {
                 Dw::Complete()
@@ -902,7 +898,7 @@ mod tests {
         );
         assert_eq!(
             entry0.StagedMailbox,
-            vec![DwMessage { Kind: 9, Value: 90 }],
+            vec![DwMessage::I32(9, 90)],
             "expected trace entry to include staged mailbox snapshot after tick"
         );
         assert_eq!(
@@ -981,10 +977,7 @@ mod tests {
             match ctx.Pc() {
                 0 => {
                     ctx.BoardMut().Set(Keys::Count, 1).unwrap();
-                    ctx.MailboxMut().Enqueue(DwMessage {
-                        Kind: 30,
-                        Value: 300,
-                    });
+                    ctx.MailboxMut().Enqueue(DwMessage::I32(30, 300));
                     Dw::WaitTicks(1, RootPhase::Wait)
                 }
                 1 => {
