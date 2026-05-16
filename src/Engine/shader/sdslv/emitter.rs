@@ -167,12 +167,9 @@ impl<'a> HlslEmitter<'a> {
         self.Lines.push(signature);
 
         if let Some(body) = &method.Body {
-            for line in body.RawText.lines().skip(1) {
-                let trimmed = line.trim_end();
-                if trimmed == "}" {
-                    continue;
-                }
-                self.Lines.push(trimmed.to_string());
+            for statement in &body.Statements {
+                self.Lines
+                    .push(format!("    {}", self.EmitStatement(statement)));
             }
         } else {
             self.Lines
@@ -184,6 +181,87 @@ impl<'a> HlslEmitter<'a> {
         self.Lines.push("}".to_string());
     }
 
+    fn EmitStatement(&self, statement: &SdslvStatement) -> String {
+        match statement {
+            SdslvStatement::Let {
+                Name,
+                TypeName,
+                Initializer,
+            } => {
+                let type_name = TypeName.Segments.join(".");
+                let rendered = self.MapBuiltinType(&type_name).unwrap_or(&type_name);
+                if let Some(init) = Initializer {
+                    format!("{} {} = {};", rendered, Name, self.EmitExpression(init, 0))
+                } else {
+                    format!("{} {};", rendered, Name)
+                }
+            }
+            SdslvStatement::Assign { Target, Value } => format!(
+                "{} = {};",
+                self.EmitExpression(Target, 0),
+                self.EmitExpression(Value, 0)
+            ),
+            SdslvStatement::Return { Value } => {
+                format!("return {};", self.EmitExpression(Value, 0))
+            }
+            SdslvStatement::Empty => ";".to_string(),
+        }
+    }
+
+    fn EmitExpression(&self, expression: &SdslvExpression, parent_prec: u8) -> String {
+        match expression {
+            SdslvExpression::Identifier(x) => x.clone(),
+            SdslvExpression::IntegerLiteral(x) => x.clone(),
+            SdslvExpression::FloatLiteral(x) => x.clone(),
+            SdslvExpression::BoolLiteral(v) => {
+                if *v {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                }
+            }
+            SdslvExpression::FieldAccess { Base, Field } => {
+                format!("{}.{}", self.EmitExpression(Base, 3), Field)
+            }
+            SdslvExpression::Call { Callee, Arguments } => {
+                let mut rendered = vec![];
+                for arg in Arguments {
+                    rendered.push(self.EmitExpression(arg, 0));
+                }
+                format!(
+                    "{}({})",
+                    self.EmitExpression(Callee, 3),
+                    rendered.join(", ")
+                )
+            }
+            SdslvExpression::Unary { Operand, .. } => {
+                format!("-{}", self.EmitExpression(Operand, 3))
+            }
+            SdslvExpression::Binary {
+                Left,
+                Operator,
+                Right,
+            } => {
+                let (op, prec) = match Operator {
+                    SdslvBinaryOperator::Add => ("+", 1),
+                    SdslvBinaryOperator::Subtract => ("-", 1),
+                    SdslvBinaryOperator::Multiply => ("*", 2),
+                    SdslvBinaryOperator::Divide => ("/", 2),
+                };
+                let text = format!(
+                    "{} {} {}",
+                    self.EmitExpression(Left, prec),
+                    op,
+                    self.EmitExpression(Right, prec + 1)
+                );
+                if prec < parent_prec {
+                    format!("({})", text)
+                } else {
+                    text
+                }
+            }
+        }
+    }
     fn IsPositionField(&self, field: &SdslvFieldDecl) -> bool {
         if field.Name == "Position" && field.TypeName.Segments.join(".") == "ClipPosition4" {
             return true;

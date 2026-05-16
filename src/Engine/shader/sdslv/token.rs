@@ -22,6 +22,8 @@ pub enum SdslvTokenKind {
     KeywordImplements,
     KeywordWhere,
     KeywordOverride,
+    KeywordLet,
+    KeywordReturn,
     Identifier(String),
     IntegerLiteral(String),
     FloatLiteral(String),
@@ -39,6 +41,10 @@ pub enum SdslvTokenKind {
     Dot,
     At,
     Equals,
+    Plus,
+    Minus,
+    Star,
+    Slash,
     Arrow,
 }
 

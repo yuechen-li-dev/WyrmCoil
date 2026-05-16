@@ -80,5 +80,60 @@ pub struct SdslvFunctionParameter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvBody {
     pub Span: SdslvSpan,
-    pub RawText: String,
+    pub Statements: Vec<SdslvStatement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SdslvStatement {
+    Let {
+        Name: String,
+        TypeName: SdslvPath,
+        Initializer: Option<SdslvExpression>,
+    },
+    Assign {
+        Target: SdslvExpression,
+        Value: SdslvExpression,
+    },
+    Return {
+        Value: SdslvExpression,
+    },
+    Empty,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SdslvExpression {
+    Identifier(String),
+    IntegerLiteral(String),
+    FloatLiteral(String),
+    BoolLiteral(bool),
+    FieldAccess {
+        Base: Box<SdslvExpression>,
+        Field: String,
+    },
+    Call {
+        Callee: Box<SdslvExpression>,
+        Arguments: Vec<SdslvExpression>,
+    },
+    Binary {
+        Left: Box<SdslvExpression>,
+        Operator: SdslvBinaryOperator,
+        Right: Box<SdslvExpression>,
+    },
+    Unary {
+        Operator: SdslvUnaryOperator,
+        Operand: Box<SdslvExpression>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdslvBinaryOperator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdslvUnaryOperator {
+    Negate,
 }

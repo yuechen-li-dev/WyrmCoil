@@ -329,3 +329,115 @@ fn EmitHlslIsDeterministic() {
     let hlsl_b = EmitHlsl(&module).unwrap();
     assert_eq!(hlsl_a, hlsl_b, "expected deterministic output");
 }
+
+#[test]
+fn ParserBodySubsetParsesLetAssignReturnAndCalls() {
+    let src = r#"shader S {
+        stage vertex fn VS(pos: float3, input: VertexOut) -> VertexOut {
+            let output: VertexOut;
+            let color: float4 = input.Color;
+            output.Position = float4(pos, 1.0);
+            output.Color = color;
+            return output;
+        }
+    }"#;
+    let module = ParseSource(src).unwrap();
+    let shader = module
+        .Declarations
+        .iter()
+        .find_map(|d| {
+            if let SdslvDecl::Shader(s) = d {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    let body = shader.StageMethods[0].Body.as_ref().unwrap();
+    assert_eq!(body.Statements.len(), 5, "expected 5 parsed statements");
+}
+
+#[test]
+fn ParserBodySubsetParsesArithmeticPrecedence() {
+    let src = "shader S { stage pixel fn PS(a: float4) -> float4 { return (1 + 2) * 3; } }";
+    let module = ParseSource(src).unwrap();
+    let shader = module
+        .Declarations
+        .iter()
+        .find_map(|d| {
+            if let SdslvDecl::Shader(s) = d {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    let body = shader.StageMethods[0].Body.as_ref().unwrap();
+    assert!(
+        matches!(&body.Statements[0], SdslvStatement::Return { .. }),
+        "expected return statement"
+    );
+}
+
+#[test]
+fn ParserBodySubsetFailuresProduceDiagnostics() {
+    let missing_semicolon =
+        ParseSource("shader S { stage pixel fn PS() -> float4 { let x: float4 } }").unwrap_err();
+    assert!(
+        missing_semicolon
+            .iter()
+            .any(|d| d.Message.contains("expected ';' after let declaration"))
+    );
+
+    let missing_return_expr =
+        ParseSource("shader S { stage pixel fn PS() -> float4 { return; } }").unwrap_err();
+    assert!(
+        missing_return_expr
+            .iter()
+            .any(|d| d.Message.contains("expected expression after return"))
+    );
+
+    let unsupported_if =
+        ParseSource("shader S { stage pixel fn PS() -> float4 { if (a) { return a; } } }")
+            .unwrap_err();
+    assert!(
+        unsupported_if
+            .iter()
+            .any(|d| d.Message.contains("unsupported statement"))
+    );
+
+    let bad_call =
+        ParseSource("shader S { stage pixel fn PS() -> float4 { return float4(1.0, 0.0; } }")
+            .unwrap_err();
+    assert!(
+        bad_call
+            .iter()
+            .any(|d| d.Message.contains("expected ')' to close function call"))
+    );
+}
+
+#[test]
+fn EmitHlslBodySubsetDeterministicFormatting() {
+    let src = r#"
+        type ClipPosition4 = float4 @space(clip.position);
+        stream VertexOut {
+            Position: ClipPosition4;
+            Color: float4;
+        }
+        shader FlatColor {
+            stage vertex fn VS(pos: float3, color: float4) -> VertexOut {
+                let output: VertexOut;
+                output.Position = float4(pos, 1.0);
+                output.Color = color;
+                return output;
+            }
+            stage pixel fn PS(input: VertexOut) -> float4 {
+                return input.Color;
+            }
+        }
+    "#;
+    let hlsl = CompileSourceToHlsl(src).unwrap();
+    assert!(hlsl.contains("    VertexOut output;"));
+    assert!(hlsl.contains("    output.Position = float4(pos, 1.0);"));
+    assert!(hlsl.contains("    return input.Color;"));
+}
