@@ -1,0 +1,29 @@
+namespace WyrmCoil.Examples;
+
+use WyrmCoil.Core;
+
+type ClipPosition4 = float4 @space(clip.position);
+
+stream VertexOut {
+    Position: ClipPosition4;
+    Color: float4;
+}
+
+interface IBaseColor {
+    fn BaseColor(s: VertexOut) -> float4;
+}
+
+shader FlatColor implements IBaseColor {
+    material {
+        Color: float4;
+    }
+
+    override fn BaseColor(s: VertexOut) -> float4 {
+        return Color;
+    }
+
+    stage vertex fn VS(pos: float3, color: float4) -> VertexOut {
+        let output: VertexOut;
+        return output;
+    }
+}

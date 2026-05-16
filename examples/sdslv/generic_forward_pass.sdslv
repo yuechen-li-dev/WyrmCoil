@@ -1,0 +1,7 @@
+shader ForwardPass<TMat>
+    where TMat : IBaseColor, INormalProvider
+{
+    stage pixel fn PS(s: Surface, mat: TMat) -> float4 {
+        return mat.BaseColor(s);
+    }
+}
