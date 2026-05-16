@@ -14,6 +14,7 @@ WyrmCoil is a deterministic Rust engine-core prototype with an embedded Dunewyrm
 - `src/Engine/`: includes normalized engine input events and queueing, bridged into Dunewyrm mailbox on the control-tick boundary.
 - `src/Engine/`: includes render snapshot extraction (`RenderSnapshot`) so render frames observe immutable plain-data snapshots rather than mutating world state.
 - `docs/architecture.md`: architecture boundary and status document.
+- `docs/sdsl-v.md`: SDSL-V M0 language contract/design reference for future shader-compiler work.
 - `primer/`: repository-authoritative coding and Rust-shape rules.
 
 ## Run tests
@@ -27,6 +28,6 @@ cargo test
 - No production renderer-attached platform runtime yet. M7 adds a minimal `winit` keyboard/window shell boundary that normalizes platform key events into engine `InputEvent`s and queues them, but it does not define engine timing or mutate world state directly.
 - No full renderer yet: M9 adds a minimal `wgpu` backend scaffold that consumes `RenderSnapshot` and can prepare clear-pass operations, but does not add shaders, materials, render graph, or an app-loop-owned clock.
 - No physics backend yet.
-- No shader language/compiler pipeline yet.
+- No shader language/compiler pipeline implementation yet (see `docs/sdsl-v.md` for the M0 design contract).
 - No ECS/archetype/query framework rollout.
 - No production engine claims.
