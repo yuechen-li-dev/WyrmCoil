@@ -38,44 +38,44 @@ impl<'a> Parser<'a> {
             Declarations: vec![],
         };
         while self.I < self.Tokens.len() {
-            if self.match_kw(SdslvTokenKind::KeywordNamespace) {
-                m.Namespace = self.parse_path_req("expected identifier after namespace");
-                self.expect(SdslvTokenKind::Semicolon, "expected ';' after namespace");
-            } else if self.match_kw(SdslvTokenKind::KeywordUse) {
-                if let Some(p) = self.parse_path_req("expected path after use") {
+            if self.MatchKw(SdslvTokenKind::KeywordNamespace) {
+                m.Namespace = self.ParsePathReq("expected identifier after namespace");
+                self.Expect(SdslvTokenKind::Semicolon, "expected ';' after namespace");
+            } else if self.MatchKw(SdslvTokenKind::KeywordUse) {
+                if let Some(p) = self.ParsePathReq("expected path after use") {
                     m.Uses.push(SdslvUseDecl { Path: p });
                 }
-                self.expect(SdslvTokenKind::Semicolon, "expected ';' after use");
-            } else if self.match_kw(SdslvTokenKind::KeywordType) {
-                if let Some(d) = self.parse_type() {
+                self.Expect(SdslvTokenKind::Semicolon, "expected ';' after use");
+            } else if self.MatchKw(SdslvTokenKind::KeywordType) {
+                if let Some(d) = self.ParseType() {
                     m.Declarations.push(SdslvDecl::TypeAlias(d));
                 }
-            } else if self.match_kw(SdslvTokenKind::KeywordStream) {
-                if let Some(d) = self.parse_stream() {
+            } else if self.MatchKw(SdslvTokenKind::KeywordStream) {
+                if let Some(d) = self.ParseStream() {
                     m.Declarations.push(SdslvDecl::Stream(d));
                 }
-            } else if self.match_kw(SdslvTokenKind::KeywordRecord) {
-                if let Some(d) = self.parse_record() {
+            } else if self.MatchKw(SdslvTokenKind::KeywordRecord) {
+                if let Some(d) = self.ParseRecord() {
                     m.Declarations.push(SdslvDecl::Record(d));
                 }
-            } else if self.match_kw(SdslvTokenKind::KeywordInterface) {
-                if let Some(d) = self.parse_interface() {
+            } else if self.MatchKw(SdslvTokenKind::KeywordInterface) {
+                if let Some(d) = self.ParseInterface() {
                     m.Declarations.push(SdslvDecl::Interface(d));
                 }
-            } else if self.match_kw(SdslvTokenKind::KeywordShader) {
-                if let Some(d) = self.parse_shader() {
+            } else if self.MatchKw(SdslvTokenKind::KeywordShader) {
+                if let Some(d) = self.ParseShader() {
                     m.Declarations.push(SdslvDecl::Shader(d));
                 }
-            } else if self.match_kw(SdslvTokenKind::KeywordFlow) {
-                if let Some(d) = self.parse_flow() {
+            } else if self.MatchKw(SdslvTokenKind::KeywordFlow) {
+                if let Some(d) = self.ParseFlow() {
                     m.Declarations.push(SdslvDecl::Flow(d));
                 }
-            } else if self.match_kw(SdslvTokenKind::KeywordCompile) {
-                if let Some(d) = self.parse_compile() {
+            } else if self.MatchKw(SdslvTokenKind::KeywordCompile) {
+                if let Some(d) = self.ParseCompile() {
                     m.Declarations.push(SdslvDecl::Compile(d));
                 }
             } else {
-                self.err_here("unexpected token at top level");
+                self.ErrHere("unexpected token at top level");
                 self.I += 1;
             }
         }
@@ -92,18 +92,18 @@ impl<'a> Parser<'a> {
             Tests: vec![],
         };
         while self.I < self.Tokens.len() {
-            if self.match_kw(SdslvTokenKind::KeywordNamespace) {
-                m.Namespace = self.parse_path_req("expected identifier after namespace");
-                self.expect(SdslvTokenKind::Semicolon, "expected ';' after namespace");
-            } else if self.match_kw(SdslvTokenKind::KeywordUse) {
-                if let Some(p) = self.parse_path_req("expected path after use") {
+            if self.MatchKw(SdslvTokenKind::KeywordNamespace) {
+                m.Namespace = self.ParsePathReq("expected identifier after namespace");
+                self.Expect(SdslvTokenKind::Semicolon, "expected ';' after namespace");
+            } else if self.MatchKw(SdslvTokenKind::KeywordUse) {
+                if let Some(p) = self.ParsePathReq("expected path after use") {
                     m.Uses.push(SdslvUseDecl { Path: p });
                 }
-                self.expect(SdslvTokenKind::Semicolon, "expected ';' after use");
-            } else if self.check(SdslvTokenKind::LeftBracket) {
-                let attributes = self.parse_attributes();
-                let start = self.current_span();
-                if let Some(function) = self.parse_test_fn()
+                self.Expect(SdslvTokenKind::Semicolon, "expected ';' after use");
+            } else if self.Check(SdslvTokenKind::LeftBracket) {
+                let attributes = self.ParseAttributes();
+                let start = self.CurrentSpan();
+                if let Some(function) = self.ParseTestFn()
                     && let Some(body) = function.Body
                 {
                     m.Tests.push(SdslvTestFunction {
@@ -115,7 +115,7 @@ impl<'a> Parser<'a> {
                     });
                 }
             } else {
-                self.err_here("unexpected token at top level in test source");
+                self.ErrHere("unexpected token at top level in test source");
                 self.I += 1;
             }
         }
@@ -125,32 +125,32 @@ impl<'a> Parser<'a> {
             Err(self.Diagnostics)
         }
     }
-    fn parse_attributes(&mut self) -> Vec<SdslvAttribute> {
+    fn ParseAttributes(&mut self) -> Vec<SdslvAttribute> {
         let mut out = vec![];
-        while self.match_kw(SdslvTokenKind::LeftBracket) {
-            let start = self.prev_span();
-            let Some(name) = self.ident_req("expected attribute name") else {
+        while self.MatchKw(SdslvTokenKind::LeftBracket) {
+            let start = self.PrevSpan();
+            let Some(name) = self.IdentReq("expected attribute name") else {
                 break;
             };
             let mut arguments = vec![];
-            if self.match_kw(SdslvTokenKind::LeftParen) {
-                if !self.check(SdslvTokenKind::RightParen) {
+            if self.MatchKw(SdslvTokenKind::LeftParen) {
+                if !self.Check(SdslvTokenKind::RightParen) {
                     loop {
-                        let Some(arg) = self.parse_expression() else {
+                        let Some(arg) = self.ParseExpression() else {
                             break;
                         };
                         arguments.push(arg);
-                        if !self.match_kw(SdslvTokenKind::Comma) {
+                        if !self.MatchKw(SdslvTokenKind::Comma) {
                             break;
                         }
                     }
                 }
-                self.expect(
+                self.Expect(
                     SdslvTokenKind::RightParen,
                     "expected ')' after attribute arguments",
                 );
             }
-            self.expect(SdslvTokenKind::RightBracket, "expected ']' after attribute");
+            self.Expect(SdslvTokenKind::RightBracket, "expected ']' after attribute");
             out.push(SdslvAttribute {
                 Name: name,
                 Arguments: arguments,
@@ -159,31 +159,31 @@ impl<'a> Parser<'a> {
         }
         out
     }
-    fn parse_test_fn(&mut self) -> Option<SdslvFunctionDecl> {
-        self.expect(SdslvTokenKind::KeywordFn, "expected fn");
-        let name = self.ident()?;
-        self.expect(
+    fn ParseTestFn(&mut self) -> Option<SdslvFunctionDecl> {
+        self.Expect(SdslvTokenKind::KeywordFn, "expected fn");
+        let name = self.Ident()?;
+        self.Expect(
             SdslvTokenKind::LeftParen,
             "expected '(' in function signature",
         );
         let mut ps = vec![];
-        while !self.check(SdslvTokenKind::RightParen) && self.I < self.Tokens.len() {
-            let n = self.ident()?;
-            self.expect(SdslvTokenKind::Colon, "expected ':' in parameter");
-            let t = self.parse_path_req("expected parameter type")?;
+        while !self.Check(SdslvTokenKind::RightParen) && self.I < self.Tokens.len() {
+            let n = self.Ident()?;
+            self.Expect(SdslvTokenKind::Colon, "expected ':' in parameter");
+            let t = self.ParsePathReq("expected parameter type")?;
             ps.push(SdslvFunctionParameter {
                 Name: n,
                 TypeName: t,
             });
-            if !self.match_kw(SdslvTokenKind::Comma) {
+            if !self.MatchKw(SdslvTokenKind::Comma) {
                 break;
             }
         }
-        self.expect(SdslvTokenKind::RightParen, "expected ')' after parameters");
-        let body = if self.match_kw(SdslvTokenKind::LeftBrace) {
-            self.parse_body()
+        self.Expect(SdslvTokenKind::RightParen, "expected ')' after parameters");
+        let body = if self.MatchKw(SdslvTokenKind::LeftBrace) {
+            self.ParseBody()
         } else {
-            self.err_here("expected function body");
+            self.ErrHere("expected function body");
             None
         };
         Some(SdslvFunctionDecl {
@@ -197,31 +197,31 @@ impl<'a> Parser<'a> {
             Body: body,
         })
     }
-    fn parse_compile(&mut self) -> Option<SdslvCompileDecl> {
-        let generic_shader = self.parse_path_req("expected shader path after compile")?;
-        self.expect(
+    fn ParseCompile(&mut self) -> Option<SdslvCompileDecl> {
+        let generic_shader = self.ParsePathReq("expected shader path after compile")?;
+        self.Expect(
             SdslvTokenKind::LeftAngle,
             "expected '<' in compile declaration",
         );
         let mut type_arguments = vec![];
-        while !self.check(SdslvTokenKind::RightAngle) && self.I < self.Tokens.len() {
-            let arg = self.parse_path_req("expected type argument path")?;
+        while !self.Check(SdslvTokenKind::RightAngle) && self.I < self.Tokens.len() {
+            let arg = self.ParsePathReq("expected type argument path")?;
             type_arguments.push(arg);
-            if !self.match_kw(SdslvTokenKind::Comma) {
+            if !self.MatchKw(SdslvTokenKind::Comma) {
                 break;
             }
         }
-        self.expect(
+        self.Expect(
             SdslvTokenKind::RightAngle,
             "expected '>' after type arguments",
         );
-        let as_keyword = self.ident()?;
+        let as_keyword = self.Ident()?;
         if as_keyword != "as" {
-            self.err_here("expected 'as' in compile declaration");
+            self.ErrHere("expected 'as' in compile declaration");
             return None;
         }
-        let alias = self.ident()?;
-        self.expect(
+        let alias = self.Ident()?;
+        self.Expect(
             SdslvTokenKind::Semicolon,
             "expected ';' after compile declaration",
         );
@@ -231,32 +231,32 @@ impl<'a> Parser<'a> {
             Alias: alias,
         })
     }
-    fn parse_type(&mut self) -> Option<SdslvTypeAliasDecl> {
-        let n = self.ident()?;
-        self.expect(SdslvTokenKind::Equals, "expected '=' in type alias");
-        let t = self.parse_path_req("expected type name in type alias")?;
+    fn ParseType(&mut self) -> Option<SdslvTypeAliasDecl> {
+        let n = self.Ident()?;
+        self.Expect(SdslvTokenKind::Equals, "expected '=' in type alias");
+        let t = self.ParsePathReq("expected type name in type alias")?;
         let mut s = None;
-        if self.match_kw(SdslvTokenKind::At) {
-            let _ = self.ident();
-            self.expect(SdslvTokenKind::LeftParen, "expected '(' after @annotation");
-            s = self.parse_path_req("expected semantic path");
-            self.expect(
+        if self.MatchKw(SdslvTokenKind::At) {
+            let _ = self.Ident();
+            self.Expect(SdslvTokenKind::LeftParen, "expected '(' after @annotation");
+            s = self.ParsePathReq("expected semantic path");
+            self.Expect(
                 SdslvTokenKind::RightParen,
                 "expected ')' after semantic path",
             );
         }
-        self.expect(SdslvTokenKind::Semicolon, "expected ';' after type alias");
+        self.Expect(SdslvTokenKind::Semicolon, "expected ';' after type alias");
         Some(SdslvTypeAliasDecl {
             Name: n,
             TargetType: t,
             SpaceAnnotation: s,
         })
     }
-    fn parse_stream(&mut self) -> Option<SdslvStreamDecl> {
-        let name = self.ident()?;
-        self.expect(SdslvTokenKind::LeftBrace, "expected '{' after stream name");
-        let fs = self.parse_aggregate_fields("stream field name")?;
-        self.expect(
+    fn ParseStream(&mut self) -> Option<SdslvStreamDecl> {
+        let name = self.Ident()?;
+        self.Expect(SdslvTokenKind::LeftBrace, "expected '{' after stream name");
+        let fs = self.ParseAggregateFields("stream field name")?;
+        self.Expect(
             SdslvTokenKind::RightBrace,
             "expected '}' after stream fields",
         );
@@ -265,11 +265,11 @@ impl<'a> Parser<'a> {
             Fields: fs,
         })
     }
-    fn parse_record(&mut self) -> Option<SdslvRecordDecl> {
-        let name = self.ident()?;
-        self.expect(SdslvTokenKind::LeftBrace, "expected '{' after record name");
-        let fs = self.parse_aggregate_fields("record field name")?;
-        self.expect(
+    fn ParseRecord(&mut self) -> Option<SdslvRecordDecl> {
+        let name = self.Ident()?;
+        self.Expect(SdslvTokenKind::LeftBrace, "expected '{' after record name");
+        let fs = self.ParseAggregateFields("record field name")?;
+        self.Expect(
             SdslvTokenKind::RightBrace,
             "expected '}' after record fields",
         );
@@ -278,13 +278,13 @@ impl<'a> Parser<'a> {
             Fields: fs,
         })
     }
-    fn parse_aggregate_fields(&mut self, field_context: &str) -> Option<Vec<SdslvFieldDecl>> {
+    fn ParseAggregateFields(&mut self, field_context: &str) -> Option<Vec<SdslvFieldDecl>> {
         let mut fs = vec![];
-        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
-            let fname = self.ident_req(&format!("expected {}", field_context))?;
-            self.expect(SdslvTokenKind::Colon, "expected ':' after field name");
-            let t = self.parse_path_req("expected field type")?;
-            self.expect(SdslvTokenKind::Semicolon, "expected ';' after field");
+        while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            let fname = self.IdentReq(&format!("expected {}", field_context))?;
+            self.Expect(SdslvTokenKind::Colon, "expected ':' after field name");
+            let t = self.ParsePathReq("expected field type")?;
+            self.Expect(SdslvTokenKind::Semicolon, "expected ';' after field");
             fs.push(SdslvFieldDecl {
                 Name: fname,
                 TypeName: t,
@@ -292,64 +292,64 @@ impl<'a> Parser<'a> {
         }
         Some(fs)
     }
-    fn parse_interface(&mut self) -> Option<SdslvInterfaceDecl> {
-        let name = self.ident()?;
-        self.expect(
+    fn ParseInterface(&mut self) -> Option<SdslvInterfaceDecl> {
+        let name = self.Ident()?;
+        self.Expect(
             SdslvTokenKind::LeftBrace,
             "expected '{' after interface name",
         );
         let mut ms = vec![];
-        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
-            if let Some(f) = self.parse_fn(None, false) {
+        while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            if let Some(f) = self.ParseFn(None, false) {
                 ms.push(f)
             } else {
                 self.I += 1;
             }
         }
-        self.expect(SdslvTokenKind::RightBrace, "expected '}' after interface");
+        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after interface");
         Some(SdslvInterfaceDecl {
             Name: name,
             Methods: ms,
         })
     }
-    fn parse_shader(&mut self) -> Option<SdslvShaderDecl> {
-        let name = self.ident()?;
+    fn ParseShader(&mut self) -> Option<SdslvShaderDecl> {
+        let name = self.Ident()?;
         let mut gps = vec![];
-        if self.match_kw(SdslvTokenKind::LeftAngle) {
-            while !self.check(SdslvTokenKind::RightAngle) && self.I < self.Tokens.len() {
-                if let Some(p) = self.ident() {
+        if self.MatchKw(SdslvTokenKind::LeftAngle) {
+            while !self.Check(SdslvTokenKind::RightAngle) && self.I < self.Tokens.len() {
+                if let Some(p) = self.Ident() {
                     gps.push(p);
                 }
-                if !self.match_kw(SdslvTokenKind::Comma) {
+                if !self.MatchKw(SdslvTokenKind::Comma) {
                     break;
                 }
             }
-            self.expect(
+            self.Expect(
                 SdslvTokenKind::RightAngle,
                 "expected '>' for generic params",
             );
         }
         let mut imps = vec![];
-        if self.match_kw(SdslvTokenKind::KeywordImplements) {
-            while let Some(p) = self.parse_path_req("expected interface path") {
+        if self.MatchKw(SdslvTokenKind::KeywordImplements) {
+            while let Some(p) = self.ParsePathReq("expected interface path") {
                 imps.push(p);
-                if !self.match_kw(SdslvTokenKind::Comma) {
+                if !self.MatchKw(SdslvTokenKind::Comma) {
                     break;
                 }
             }
         }
         let mut cons = vec![];
-        if self.match_kw(SdslvTokenKind::KeywordWhere) {
+        if self.MatchKw(SdslvTokenKind::KeywordWhere) {
             loop {
-                let n = match self.ident() {
+                let n = match self.Ident() {
                     Some(x) => x,
                     None => break,
                 };
-                self.expect(SdslvTokenKind::Colon, "expected ':' in where constraint");
+                self.Expect(SdslvTokenKind::Colon, "expected ':' in where constraint");
                 let mut bs = vec![];
-                while let Some(p) = self.parse_path_req("expected bound path") {
+                while let Some(p) = self.ParsePathReq("expected bound path") {
                     bs.push(p);
-                    if !self.match_kw(SdslvTokenKind::Comma) {
+                    if !self.MatchKw(SdslvTokenKind::Comma) {
                         break;
                     }
                 }
@@ -357,51 +357,51 @@ impl<'a> Parser<'a> {
                     ParameterName: n,
                     Bounds: bs,
                 });
-                if !self.match_kw(SdslvTokenKind::Comma) {
+                if !self.MatchKw(SdslvTokenKind::Comma) {
                     break;
                 }
             }
         }
-        self.expect(
+        self.Expect(
             SdslvTokenKind::LeftBrace,
             "expected '{' after shader header",
         );
         let mut mat = vec![];
         let mut ms = vec![];
         let mut sm = vec![];
-        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
-            if self.match_kw(SdslvTokenKind::KeywordMaterial) {
-                self.expect(SdslvTokenKind::LeftBrace, "expected '{' after material");
-                while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
-                    let n = self.ident()?;
-                    self.expect(SdslvTokenKind::Colon, "expected ':' after material field");
-                    let t = self.parse_path_req("expected material type")?;
-                    self.expect(SdslvTokenKind::Semicolon, "expected ';'");
+        while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            if self.MatchKw(SdslvTokenKind::KeywordMaterial) {
+                self.Expect(SdslvTokenKind::LeftBrace, "expected '{' after material");
+                while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+                    let n = self.Ident()?;
+                    self.Expect(SdslvTokenKind::Colon, "expected ':' after material field");
+                    let t = self.ParsePathReq("expected material type")?;
+                    self.Expect(SdslvTokenKind::Semicolon, "expected ';'");
                     mat.push(SdslvFieldDecl {
                         Name: n,
                         TypeName: t,
                     });
                 }
-                self.expect(SdslvTokenKind::RightBrace, "expected '}' after material");
-            } else if self.match_kw(SdslvTokenKind::KeywordStage) {
-                let stage = self.ident();
-                if let Some(f) = self.parse_fn(stage, false) {
+                self.Expect(SdslvTokenKind::RightBrace, "expected '}' after material");
+            } else if self.MatchKw(SdslvTokenKind::KeywordStage) {
+                let stage = self.Ident();
+                if let Some(f) = self.ParseFn(stage, false) {
                     sm.push(f);
                 }
-            } else if self.match_kw(SdslvTokenKind::KeywordOverride) {
-                if let Some(f) = self.parse_fn(None, true) {
+            } else if self.MatchKw(SdslvTokenKind::KeywordOverride) {
+                if let Some(f) = self.ParseFn(None, true) {
                     ms.push(f);
                 }
-            } else if self.check(SdslvTokenKind::KeywordFn) {
-                if let Some(f) = self.parse_fn(None, false) {
+            } else if self.Check(SdslvTokenKind::KeywordFn) {
+                if let Some(f) = self.ParseFn(None, false) {
                     ms.push(f);
                 }
             } else {
-                self.err_here("unexpected token in shader body");
+                self.ErrHere("unexpected token in shader body");
                 self.I += 1;
             }
         }
-        self.expect(SdslvTokenKind::RightBrace, "expected '}' after shader");
+        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after shader");
         Some(SdslvShaderDecl {
             Name: name,
             GenericParameters: gps,
@@ -412,35 +412,35 @@ impl<'a> Parser<'a> {
             StageMethods: sm,
         })
     }
-    fn parse_fn(&mut self, stage: Option<String>, ov: bool) -> Option<SdslvFunctionDecl> {
-        self.expect(SdslvTokenKind::KeywordFn, "expected fn");
-        let name = self.ident()?;
-        self.expect(
+    fn ParseFn(&mut self, stage: Option<String>, ov: bool) -> Option<SdslvFunctionDecl> {
+        self.Expect(SdslvTokenKind::KeywordFn, "expected fn");
+        let name = self.Ident()?;
+        self.Expect(
             SdslvTokenKind::LeftParen,
             "expected '(' in function signature",
         );
         let mut ps = vec![];
-        while !self.check(SdslvTokenKind::RightParen) && self.I < self.Tokens.len() {
-            let n = self.ident()?;
-            self.expect(SdslvTokenKind::Colon, "expected ':' in parameter");
-            let t = self.parse_path_req("expected parameter type")?;
+        while !self.Check(SdslvTokenKind::RightParen) && self.I < self.Tokens.len() {
+            let n = self.Ident()?;
+            self.Expect(SdslvTokenKind::Colon, "expected ':' in parameter");
+            let t = self.ParsePathReq("expected parameter type")?;
             ps.push(SdslvFunctionParameter {
                 Name: n,
                 TypeName: t,
             });
-            if !self.match_kw(SdslvTokenKind::Comma) {
+            if !self.MatchKw(SdslvTokenKind::Comma) {
                 break;
             }
         }
-        self.expect(SdslvTokenKind::RightParen, "expected ')' after parameters");
-        self.expect(SdslvTokenKind::Arrow, "expected '->' in function signature");
-        let rt = self.parse_path_req("expected return type")?;
-        let body = if self.match_kw(SdslvTokenKind::Semicolon) {
+        self.Expect(SdslvTokenKind::RightParen, "expected ')' after parameters");
+        self.Expect(SdslvTokenKind::Arrow, "expected '->' in function signature");
+        let rt = self.ParsePathReq("expected return type")?;
+        let body = if self.MatchKw(SdslvTokenKind::Semicolon) {
             None
-        } else if self.match_kw(SdslvTokenKind::LeftBrace) {
-            self.parse_body()
+        } else if self.MatchKw(SdslvTokenKind::LeftBrace) {
+            self.ParseBody()
         } else {
-            self.err_here("expected ';' or function body");
+            self.ErrHere("expected ';' or function body");
             None
         };
         Some(SdslvFunctionDecl {
@@ -452,60 +452,60 @@ impl<'a> Parser<'a> {
             Body: body,
         })
     }
-    fn parse_flow(&mut self) -> Option<SdslvFlowDecl> {
-        let start = self.prev_span();
-        let name = self.ident()?;
-        self.expect(SdslvTokenKind::LeftParen, "expected '(' in flow signature");
+    fn ParseFlow(&mut self) -> Option<SdslvFlowDecl> {
+        let start = self.PrevSpan();
+        let name = self.Ident()?;
+        self.Expect(SdslvTokenKind::LeftParen, "expected '(' in flow signature");
         let mut parameters = vec![];
-        while !self.check(SdslvTokenKind::RightParen) && self.I < self.Tokens.len() {
-            let n = self.ident()?;
-            self.expect(SdslvTokenKind::Colon, "expected ':' in parameter");
-            let t = self.parse_path_req("expected parameter type")?;
+        while !self.Check(SdslvTokenKind::RightParen) && self.I < self.Tokens.len() {
+            let n = self.Ident()?;
+            self.Expect(SdslvTokenKind::Colon, "expected ':' in parameter");
+            let t = self.ParsePathReq("expected parameter type")?;
             parameters.push(SdslvFunctionParameter {
                 Name: n,
                 TypeName: t,
             });
-            if !self.match_kw(SdslvTokenKind::Comma) {
+            if !self.MatchKw(SdslvTokenKind::Comma) {
                 break;
             }
         }
-        self.expect(SdslvTokenKind::RightParen, "expected ')' after parameters");
-        self.expect(SdslvTokenKind::Arrow, "expected '->' in flow signature");
-        let return_type = self.parse_path_req("expected return type in flow declaration")?;
-        self.expect(
+        self.Expect(SdslvTokenKind::RightParen, "expected ')' after parameters");
+        self.Expect(SdslvTokenKind::Arrow, "expected '->' in flow signature");
+        let return_type = self.ParsePathReq("expected return type in flow declaration")?;
+        self.Expect(
             SdslvTokenKind::LeftBrace,
             "expected '{' after flow signature",
         );
         let mut board = None;
         let mut states = vec![];
         let mut saw_state = false;
-        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
-            if self.match_kw(SdslvTokenKind::KeywordBoard) {
+        while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            if self.MatchKw(SdslvTokenKind::KeywordBoard) {
                 if saw_state {
-                    self.err_here("flow board must be declared before states");
+                    self.ErrHere("flow board must be declared before states");
                 }
                 if board.is_some() {
-                    self.err_here("flow can declare at most one board block");
+                    self.ErrHere("flow can declare at most one board block");
                 }
-                if let Some(parsed) = self.parse_flow_board() {
+                if let Some(parsed) = self.ParseFlowBoard() {
                     if board.is_none() {
                         board = Some(parsed);
                     }
                 }
                 continue;
             }
-            if !self.match_kw(SdslvTokenKind::KeywordState) {
-                self.err_here("expected state declaration in flow body");
+            if !self.MatchKw(SdslvTokenKind::KeywordState) {
+                self.ErrHere("expected state declaration in flow body");
                 self.I += 1;
                 continue;
             }
             saw_state = true;
-            if let Some(state) = self.parse_flow_state() {
+            if let Some(state) = self.ParseFlowState() {
                 states.push(state);
             }
         }
-        self.expect(SdslvTokenKind::RightBrace, "expected '}' after flow body");
-        let end = self.prev_span();
+        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after flow body");
+        let end = self.PrevSpan();
         Some(SdslvFlowDecl {
             Name: name,
             Parameters: parameters,
@@ -521,28 +521,28 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_flow_board(&mut self) -> Option<SdslvFlowBoard> {
-        let start = self.prev_span();
-        self.expect(SdslvTokenKind::LeftBrace, "expected '{' after board");
+    fn ParseFlowBoard(&mut self) -> Option<SdslvFlowBoard> {
+        let start = self.PrevSpan();
+        self.Expect(SdslvTokenKind::LeftBrace, "expected '{' after board");
         let mut fields = vec![];
-        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
-            let field_start = self.current_span();
-            let name = self.ident_req("expected board field name")?;
-            self.expect(SdslvTokenKind::Colon, "expected ':' after board field name");
-            let type_name = self.parse_path_req("expected board field type")?;
-            if self.match_kw(SdslvTokenKind::Equals) {
-                self.err_here("unsupported board initializer in SDSL-V M9");
-                let _ = self.parse_expression();
+        while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            let field_start = self.CurrentSpan();
+            let name = self.IdentReq("expected board field name")?;
+            self.Expect(SdslvTokenKind::Colon, "expected ':' after board field name");
+            let type_name = self.ParsePathReq("expected board field type")?;
+            if self.MatchKw(SdslvTokenKind::Equals) {
+                self.ErrHere("unsupported board initializer in SDSL-V M9");
+                let _ = self.ParseExpression();
             }
-            self.expect(SdslvTokenKind::Semicolon, "expected ';' after board field");
+            self.Expect(SdslvTokenKind::Semicolon, "expected ';' after board field");
             fields.push(SdslvFlowBoardField {
                 Name: name,
                 TypeName: type_name,
                 Span: field_start,
             });
         }
-        self.expect(SdslvTokenKind::RightBrace, "expected '}' after board");
-        let end = self.prev_span();
+        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after board");
+        let end = self.PrevSpan();
         Some(SdslvFlowBoard {
             Fields: fields,
             Span: SdslvSpan {
@@ -553,20 +553,20 @@ impl<'a> Parser<'a> {
             },
         })
     }
-    fn parse_flow_state(&mut self) -> Option<SdslvFlowState> {
-        let start = self.prev_span();
-        let name = self.ident()?;
-        self.expect(SdslvTokenKind::LeftBrace, "expected '{' after state name");
+    fn ParseFlowState(&mut self) -> Option<SdslvFlowState> {
+        let start = self.PrevSpan();
+        let name = self.Ident()?;
+        self.Expect(SdslvTokenKind::LeftBrace, "expected '{' after state name");
         let mut statements = vec![];
-        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
-            if let Some(statement) = self.parse_flow_statement() {
+        while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            if let Some(statement) = self.ParseFlowStatement() {
                 statements.push(statement);
             } else {
-                self.recover_statement();
+                self.RecoverStatement();
             }
         }
-        self.expect(SdslvTokenKind::RightBrace, "expected '}' after state body");
-        let end = self.prev_span();
+        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after state body");
+        let end = self.PrevSpan();
         Some(SdslvFlowState {
             Name: name,
             Statements: statements,
@@ -578,15 +578,15 @@ impl<'a> Parser<'a> {
             },
         })
     }
-    fn parse_flow_statement(&mut self) -> Option<SdslvFlowStatement> {
-        if self.check_board_assignment_shape() {
-            let span = self.current_span();
-            self.expect(SdslvTokenKind::KeywordBoard, "expected board");
-            self.expect(SdslvTokenKind::Dot, "expected '.' after board");
-            let field = self.ident_req("expected board field name after board.")?;
-            self.expect(SdslvTokenKind::Equals, "expected '=' in board assignment");
-            let value = self.parse_expression()?;
-            self.expect(
+    fn ParseFlowStatement(&mut self) -> Option<SdslvFlowStatement> {
+        if self.CheckBoardAssignmentShape() {
+            let span = self.CurrentSpan();
+            self.Expect(SdslvTokenKind::KeywordBoard, "expected board");
+            self.Expect(SdslvTokenKind::Dot, "expected '.' after board");
+            let field = self.IdentReq("expected board field name after board.")?;
+            self.Expect(SdslvTokenKind::Equals, "expected '=' in board assignment");
+            let value = self.ParseExpression()?;
+            self.Expect(
                 SdslvTokenKind::Semicolon,
                 "expected ';' after board assignment",
             );
@@ -596,23 +596,23 @@ impl<'a> Parser<'a> {
                 Span: span,
             });
         }
-        if self.match_kw(SdslvTokenKind::KeywordWhen) {
-            return Some(SdslvFlowStatement::When(self.parse_flow_when()?));
+        if self.MatchKw(SdslvTokenKind::KeywordWhen) {
+            return Some(SdslvFlowStatement::When(self.ParseFlowWhen()?));
         }
-        if self.match_kw(SdslvTokenKind::KeywordGoto) {
-            let target = self.parse_path_req("expected state path after goto")?;
-            self.expect(SdslvTokenKind::Semicolon, "expected ';' after goto");
+        if self.MatchKw(SdslvTokenKind::KeywordGoto) {
+            let target = self.ParsePathReq("expected state path after goto")?;
+            self.Expect(SdslvTokenKind::Semicolon, "expected ';' after goto");
             return Some(SdslvFlowStatement::Goto(target));
         }
-        if self.match_kw(SdslvTokenKind::KeywordReturn) {
-            let value = self.parse_expression()?;
-            self.expect(SdslvTokenKind::Semicolon, "expected ';' after return");
+        if self.MatchKw(SdslvTokenKind::KeywordReturn) {
+            let value = self.ParseExpression()?;
+            self.Expect(SdslvTokenKind::Semicolon, "expected ';' after return");
             return Some(SdslvFlowStatement::Return(value));
         }
-        self.err_here("unsupported statement in flow state body");
+        self.ErrHere("unsupported statement in flow state body");
         None
     }
-    fn check_board_assignment_shape(&self) -> bool {
+    fn CheckBoardAssignmentShape(&self) -> bool {
         let Some(token) = self.Tokens.get(self.I) else {
             return false;
         };
@@ -630,32 +630,32 @@ impl<'a> Parser<'a> {
             )
         )
     }
-    fn parse_flow_when(&mut self) -> Option<SdslvFlowWhen> {
-        let start = self.prev_span();
-        self.expect(SdslvTokenKind::LeftBrace, "expected '{' after when");
+    fn ParseFlowWhen(&mut self) -> Option<SdslvFlowWhen> {
+        let start = self.PrevSpan();
+        self.Expect(SdslvTokenKind::LeftBrace, "expected '{' after when");
         let mut cases = vec![];
         let mut else_action = None;
-        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
-            if self.match_kw(SdslvTokenKind::KeywordCase) {
-                let condition = self.parse_expression()?;
-                self.expect(SdslvTokenKind::Arrow, "expected '->' in when case");
-                let action = self.parse_flow_action()?;
+        while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            if self.MatchKw(SdslvTokenKind::KeywordCase) {
+                let condition = self.ParseExpression()?;
+                self.Expect(SdslvTokenKind::Arrow, "expected '->' in when case");
+                let action = self.ParseFlowAction()?;
                 cases.push(SdslvFlowCase {
                     Condition: condition,
                     Action: action,
                 });
                 continue;
             }
-            if self.match_kw(SdslvTokenKind::KeywordElse) {
-                self.expect(SdslvTokenKind::Arrow, "expected '->' after else");
-                else_action = self.parse_flow_action();
+            if self.MatchKw(SdslvTokenKind::KeywordElse) {
+                self.Expect(SdslvTokenKind::Arrow, "expected '->' after else");
+                else_action = self.ParseFlowAction();
                 continue;
             }
-            self.err_here("expected case or else in when");
+            self.ErrHere("expected case or else in when");
             self.I += 1;
         }
-        self.expect(SdslvTokenKind::RightBrace, "expected '}' after when");
-        let end = self.prev_span();
+        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after when");
+        let end = self.PrevSpan();
         Some(SdslvFlowWhen {
             Cases: cases,
             ElseAction: else_action,
@@ -667,33 +667,33 @@ impl<'a> Parser<'a> {
             },
         })
     }
-    fn parse_flow_action(&mut self) -> Option<SdslvFlowAction> {
-        if self.match_kw(SdslvTokenKind::KeywordGoto) {
-            let target = self.parse_path_req("expected goto target")?;
+    fn ParseFlowAction(&mut self) -> Option<SdslvFlowAction> {
+        if self.MatchKw(SdslvTokenKind::KeywordGoto) {
+            let target = self.ParsePathReq("expected goto target")?;
             return Some(SdslvFlowAction::Goto(target));
         }
-        if self.match_kw(SdslvTokenKind::KeywordReturn) {
-            let value = self.parse_expression()?;
+        if self.MatchKw(SdslvTokenKind::KeywordReturn) {
+            let value = self.ParseExpression()?;
             return Some(SdslvFlowAction::Return(value));
         }
-        self.err_here("expected goto or return flow action");
+        self.ErrHere("expected goto or return flow action");
         None
     }
-    fn parse_body(&mut self) -> Option<SdslvBody> {
-        let start = self.prev_span();
+    fn ParseBody(&mut self) -> Option<SdslvBody> {
+        let start = self.PrevSpan();
         let mut statements = vec![];
-        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
-            if let Some(statement) = self.parse_statement() {
+        while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            if let Some(statement) = self.ParseStatement() {
                 statements.push(statement);
             } else {
-                self.recover_statement();
+                self.RecoverStatement();
             }
         }
-        if !self.match_kw(SdslvTokenKind::RightBrace) {
-            self.err_here("unexpected end of file while parsing block");
+        if !self.MatchKw(SdslvTokenKind::RightBrace) {
+            self.ErrHere("unexpected end of file while parsing block");
             return None;
         }
-        let end = self.prev_span();
+        let end = self.PrevSpan();
         Some(SdslvBody {
             Span: SdslvSpan {
                 Start: start.Start,
@@ -704,20 +704,20 @@ impl<'a> Parser<'a> {
             Statements: statements,
         })
     }
-    fn parse_statement(&mut self) -> Option<SdslvStatement> {
-        if self.match_kw(SdslvTokenKind::Semicolon) {
+    fn ParseStatement(&mut self) -> Option<SdslvStatement> {
+        if self.MatchKw(SdslvTokenKind::Semicolon) {
             return Some(SdslvStatement::Empty);
         }
-        if self.match_kw(SdslvTokenKind::KeywordLet) {
-            let name = self.ident_req("expected identifier after let")?;
-            self.expect(SdslvTokenKind::Colon, "expected ':' in let declaration");
-            let t = self.parse_path_req("expected type in let declaration")?;
-            let init = if self.match_kw(SdslvTokenKind::Equals) {
-                Some(self.parse_expression()?)
+        if self.MatchKw(SdslvTokenKind::KeywordLet) {
+            let name = self.IdentReq("expected identifier after let")?;
+            self.Expect(SdslvTokenKind::Colon, "expected ':' in let declaration");
+            let t = self.ParsePathReq("expected type in let declaration")?;
+            let init = if self.MatchKw(SdslvTokenKind::Equals) {
+                Some(self.ParseExpression()?)
             } else {
                 None
             };
-            self.expect(
+            self.Expect(
                 SdslvTokenKind::Semicolon,
                 "expected ';' after let declaration",
             );
@@ -727,17 +727,17 @@ impl<'a> Parser<'a> {
                 Initializer: init,
             });
         }
-        if self.match_kw(SdslvTokenKind::KeywordReturn) {
-            if self.check(SdslvTokenKind::Semicolon) {
-                self.err_here("expected expression after return");
+        if self.MatchKw(SdslvTokenKind::KeywordReturn) {
+            if self.Check(SdslvTokenKind::Semicolon) {
+                self.ErrHere("expected expression after return");
                 return None;
             }
-            let value = self.parse_expression()?;
-            self.expect(SdslvTokenKind::Semicolon, "expected ';' after return");
+            let value = self.ParseExpression()?;
+            self.Expect(SdslvTokenKind::Semicolon, "expected ';' after return");
             return Some(SdslvStatement::Return { Value: value });
         }
-        if self.check(SdslvTokenKind::KeywordStage) || self.check(SdslvTokenKind::KeywordFn) {
-            self.err_here("statement form not supported in SDSL-V M4 body subset");
+        if self.Check(SdslvTokenKind::KeywordStage) || self.Check(SdslvTokenKind::KeywordFn) {
+            self.ErrHere("statement form not supported in SDSL-V M4 body subset");
             return None;
         }
         if let Some(SdslvToken {
@@ -746,57 +746,57 @@ impl<'a> Parser<'a> {
         }) = self.Tokens.get(self.I)
             && (name == "if" || name == "for" || name == "while" || name == "match")
         {
-            self.err_here("unsupported statement in SDSL-V M4 body subset");
+            self.ErrHere("unsupported statement in SDSL-V M4 body subset");
             return None;
         }
-        let target = self.parse_expression()?;
-        if !self.match_kw(SdslvTokenKind::Equals) {
-            self.expect(
+        let target = self.ParseExpression()?;
+        if !self.MatchKw(SdslvTokenKind::Equals) {
+            self.Expect(
                 SdslvTokenKind::Semicolon,
                 "expected ';' after expression statement",
             );
             return Some(SdslvStatement::Expression { Value: target });
         }
-        if !self.is_assignment_target(&target) {
-            self.err_here("invalid assignment target in SDSL-V M4 body subset");
+        if !self.IsAssignmentTarget(&target) {
+            self.ErrHere("invalid assignment target in SDSL-V M4 body subset");
             return None;
         }
-        let value = self.parse_expression()?;
-        self.expect(SdslvTokenKind::Semicolon, "expected ';' after assignment");
+        let value = self.ParseExpression()?;
+        self.Expect(SdslvTokenKind::Semicolon, "expected ';' after assignment");
         Some(SdslvStatement::Assign {
             Target: target,
             Value: value,
         })
     }
-    fn is_assignment_target(&self, expr: &SdslvExpression) -> bool {
+    fn IsAssignmentTarget(&self, expr: &SdslvExpression) -> bool {
         matches!(
             expr,
             SdslvExpression::Identifier(_) | SdslvExpression::FieldAccess { .. }
         )
     }
-    fn parse_expression(&mut self) -> Option<SdslvExpression> {
-        self.parse_comparison()
+    fn ParseExpression(&mut self) -> Option<SdslvExpression> {
+        self.ParseComparison()
     }
-    fn parse_comparison(&mut self) -> Option<SdslvExpression> {
-        let mut left = self.parse_additive()?;
+    fn ParseComparison(&mut self) -> Option<SdslvExpression> {
+        let mut left = self.ParseAdditive()?;
         loop {
-            let op = if self.match_kw(SdslvTokenKind::DoubleEquals) {
+            let op = if self.MatchKw(SdslvTokenKind::DoubleEquals) {
                 Some(SdslvBinaryOperator::Equal)
-            } else if self.match_kw(SdslvTokenKind::BangEquals) {
+            } else if self.MatchKw(SdslvTokenKind::BangEquals) {
                 Some(SdslvBinaryOperator::NotEqual)
-            } else if self.match_kw(SdslvTokenKind::LeftAngleEquals) {
+            } else if self.MatchKw(SdslvTokenKind::LeftAngleEquals) {
                 Some(SdslvBinaryOperator::LessEqual)
-            } else if self.match_kw(SdslvTokenKind::RightAngleEquals) {
+            } else if self.MatchKw(SdslvTokenKind::RightAngleEquals) {
                 Some(SdslvBinaryOperator::GreaterEqual)
-            } else if self.match_kw(SdslvTokenKind::LeftAngle) {
+            } else if self.MatchKw(SdslvTokenKind::LeftAngle) {
                 Some(SdslvBinaryOperator::Less)
-            } else if self.match_kw(SdslvTokenKind::RightAngle) {
+            } else if self.MatchKw(SdslvTokenKind::RightAngle) {
                 Some(SdslvBinaryOperator::Greater)
             } else {
                 None
             };
             let Some(operator) = op else { break };
-            let right = self.parse_additive()?;
+            let right = self.ParseAdditive()?;
             left = SdslvExpression::Binary {
                 Left: Box::new(left),
                 Operator: operator,
@@ -805,18 +805,18 @@ impl<'a> Parser<'a> {
         }
         Some(left)
     }
-    fn parse_additive(&mut self) -> Option<SdslvExpression> {
-        let mut left = self.parse_multiplicative()?;
+    fn ParseAdditive(&mut self) -> Option<SdslvExpression> {
+        let mut left = self.ParseMultiplicative()?;
         loop {
-            let op = if self.match_kw(SdslvTokenKind::Plus) {
+            let op = if self.MatchKw(SdslvTokenKind::Plus) {
                 Some(SdslvBinaryOperator::Add)
-            } else if self.match_kw(SdslvTokenKind::Minus) {
+            } else if self.MatchKw(SdslvTokenKind::Minus) {
                 Some(SdslvBinaryOperator::Subtract)
             } else {
                 None
             };
             let Some(operator) = op else { break };
-            let right = self.parse_multiplicative()?;
+            let right = self.ParseMultiplicative()?;
             left = SdslvExpression::Binary {
                 Left: Box::new(left),
                 Operator: operator,
@@ -825,18 +825,18 @@ impl<'a> Parser<'a> {
         }
         Some(left)
     }
-    fn parse_multiplicative(&mut self) -> Option<SdslvExpression> {
-        let mut left = self.parse_unary()?;
+    fn ParseMultiplicative(&mut self) -> Option<SdslvExpression> {
+        let mut left = self.ParseUnary()?;
         loop {
-            let op = if self.match_kw(SdslvTokenKind::Star) {
+            let op = if self.MatchKw(SdslvTokenKind::Star) {
                 Some(SdslvBinaryOperator::Multiply)
-            } else if self.match_kw(SdslvTokenKind::Slash) {
+            } else if self.MatchKw(SdslvTokenKind::Slash) {
                 Some(SdslvBinaryOperator::Divide)
             } else {
                 None
             };
             let Some(operator) = op else { break };
-            let right = self.parse_unary()?;
+            let right = self.ParseUnary()?;
             left = SdslvExpression::Binary {
                 Left: Box::new(left),
                 Operator: operator,
@@ -845,36 +845,36 @@ impl<'a> Parser<'a> {
         }
         Some(left)
     }
-    fn parse_unary(&mut self) -> Option<SdslvExpression> {
-        if self.match_kw(SdslvTokenKind::Minus) {
-            let o = self.parse_unary()?;
+    fn ParseUnary(&mut self) -> Option<SdslvExpression> {
+        if self.MatchKw(SdslvTokenKind::Minus) {
+            let o = self.ParseUnary()?;
             return Some(SdslvExpression::Unary {
                 Operator: SdslvUnaryOperator::Negate,
                 Operand: Box::new(o),
             });
         }
-        self.parse_postfix()
+        self.ParsePostfix()
     }
-    fn parse_postfix(&mut self) -> Option<SdslvExpression> {
-        let mut expr = self.parse_primary()?;
+    fn ParsePostfix(&mut self) -> Option<SdslvExpression> {
+        let mut expr = self.ParsePrimary()?;
         loop {
-            if self.match_kw(SdslvTokenKind::Dot) {
-                let field = self.ident_req("expected identifier after '.'")?;
+            if self.MatchKw(SdslvTokenKind::Dot) {
+                let field = self.IdentReq("expected identifier after '.'")?;
                 expr = SdslvExpression::FieldAccess {
                     Base: Box::new(expr),
                     Field: field,
                 };
-            } else if self.match_kw(SdslvTokenKind::LeftParen) {
+            } else if self.MatchKw(SdslvTokenKind::LeftParen) {
                 let mut args = vec![];
-                if !self.check(SdslvTokenKind::RightParen) {
+                if !self.Check(SdslvTokenKind::RightParen) {
                     loop {
-                        args.push(self.parse_expression()?);
-                        if !self.match_kw(SdslvTokenKind::Comma) {
+                        args.push(self.ParseExpression()?);
+                        if !self.MatchKw(SdslvTokenKind::Comma) {
                             break;
                         }
                     }
                 }
-                self.expect(
+                self.Expect(
                     SdslvTokenKind::RightParen,
                     "expected ')' to close function call",
                 );
@@ -882,19 +882,19 @@ impl<'a> Parser<'a> {
                     Callee: Box::new(expr),
                     Arguments: args,
                 };
-            } else if self.match_kw(SdslvTokenKind::KeywordWith) {
-                self.expect(SdslvTokenKind::LeftBrace, "expected '{' after with keyword");
+            } else if self.MatchKw(SdslvTokenKind::KeywordWith) {
+                self.Expect(SdslvTokenKind::LeftBrace, "expected '{' after with keyword");
                 let mut updates = Vec::new();
                 loop {
-                    let field = self.ident_req("expected field name in with expression")?;
-                    self.expect(SdslvTokenKind::Colon, "expected ':' after with field name");
-                    let value = self.parse_expression()?;
+                    let field = self.IdentReq("expected field name in with expression")?;
+                    self.Expect(SdslvTokenKind::Colon, "expected ':' after with field name");
+                    let value = self.ParseExpression()?;
                     updates.push(SdslvWithUpdate {
                         Field: field,
                         Value: value,
                     });
-                    if self.match_kw(SdslvTokenKind::Comma) {
-                        if self.check(SdslvTokenKind::RightBrace) {
+                    if self.MatchKw(SdslvTokenKind::Comma) {
+                        if self.Check(SdslvTokenKind::RightBrace) {
                             break;
                         }
                         continue;
@@ -902,10 +902,10 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 if updates.is_empty() {
-                    self.err_here("with expression requires at least one field update");
+                    self.ErrHere("with expression requires at least one field update");
                     return None;
                 }
-                self.expect(
+                self.Expect(
                     SdslvTokenKind::RightBrace,
                     "expected '}' after with updates",
                 );
@@ -919,17 +919,17 @@ impl<'a> Parser<'a> {
         }
         Some(expr)
     }
-    fn parse_primary(&mut self) -> Option<SdslvExpression> {
-        if self.match_kw(SdslvTokenKind::LeftParen) {
-            let expr = self.parse_expression()?;
-            self.expect(
+    fn ParsePrimary(&mut self) -> Option<SdslvExpression> {
+        if self.MatchKw(SdslvTokenKind::LeftParen) {
+            let expr = self.ParseExpression()?;
+            self.Expect(
                 SdslvTokenKind::RightParen,
                 "expected ')' to close grouped expression",
             );
             return Some(expr);
         }
         if self.I >= self.Tokens.len() {
-            self.err_here("unexpected token in expression");
+            self.ErrHere("unexpected token in expression");
             return None;
         }
         match &self.Tokens[self.I].Kind {
@@ -964,44 +964,44 @@ impl<'a> Parser<'a> {
                 Some(SdslvExpression::StringLiteral(out))
             }
             _ => {
-                self.err_here("unexpected token in expression");
+                self.ErrHere("unexpected token in expression");
                 None
             }
         }
     }
-    fn recover_statement(&mut self) {
+    fn RecoverStatement(&mut self) {
         while self.I < self.Tokens.len()
-            && !self.check(SdslvTokenKind::Semicolon)
-            && !self.check(SdslvTokenKind::RightBrace)
+            && !self.Check(SdslvTokenKind::Semicolon)
+            && !self.Check(SdslvTokenKind::RightBrace)
         {
             self.I += 1;
         }
-        if self.check(SdslvTokenKind::Semicolon) {
+        if self.Check(SdslvTokenKind::Semicolon) {
             self.I += 1;
         }
     }
-    fn parse_path_req(&mut self, msg: &str) -> Option<SdslvPath> {
-        let first = match self.ident() {
+    fn ParsePathReq(&mut self, msg: &str) -> Option<SdslvPath> {
+        let first = match self.Ident() {
             Some(x) => x,
             None => {
-                self.err_here(msg);
+                self.ErrHere(msg);
                 return None;
             }
         };
         let mut seg = vec![first];
-        while self.match_kw(SdslvTokenKind::Dot) {
-            seg.push(self.ident_req("expected identifier after '.'")?);
+        while self.MatchKw(SdslvTokenKind::Dot) {
+            seg.push(self.IdentReq("expected identifier after '.'")?);
         }
         Some(SdslvPath { Segments: seg })
     }
-    fn ident_req(&mut self, m: &str) -> Option<String> {
-        let r = self.ident();
+    fn IdentReq(&mut self, m: &str) -> Option<String> {
+        let r = self.Ident();
         if r.is_none() {
-            self.err_here(m);
+            self.ErrHere(m);
         }
         r
     }
-    fn ident(&mut self) -> Option<String> {
+    fn Ident(&mut self) -> Option<String> {
         if self.I >= self.Tokens.len() {
             return None;
         }
@@ -1012,26 +1012,26 @@ impl<'a> Parser<'a> {
             None
         }
     }
-    fn expect(&mut self, k: SdslvTokenKind, m: &str) {
-        if !self.match_kw(k) {
-            self.err_here(m);
+    fn Expect(&mut self, k: SdslvTokenKind, m: &str) {
+        if !self.MatchKw(k) {
+            self.ErrHere(m);
         }
     }
-    fn match_kw(&mut self, k: SdslvTokenKind) -> bool {
-        if self.check(k) {
+    fn MatchKw(&mut self, k: SdslvTokenKind) -> bool {
+        if self.Check(k) {
             self.I += 1;
             true
         } else {
             false
         }
     }
-    fn check(&self, k: SdslvTokenKind) -> bool {
+    fn Check(&self, k: SdslvTokenKind) -> bool {
         if self.I >= self.Tokens.len() {
             return false;
         }
         std::mem::discriminant(&self.Tokens[self.I].Kind) == std::mem::discriminant(&k)
     }
-    fn err_here(&mut self, m: &str) {
+    fn ErrHere(&mut self, m: &str) {
         let s = self
             .Tokens
             .get(self.I)
@@ -1044,10 +1044,10 @@ impl<'a> Parser<'a> {
             });
         self.Diagnostics.push(SdslvDiagnostic::New(m, s));
     }
-    fn prev_span(&self) -> SdslvSpan {
+    fn PrevSpan(&self) -> SdslvSpan {
         self.Tokens[self.I - 1].Span
     }
-    fn current_span(&self) -> SdslvSpan {
+    fn CurrentSpan(&self) -> SdslvSpan {
         self.Tokens
             .get(self.I)
             .map(|x| x.Span)

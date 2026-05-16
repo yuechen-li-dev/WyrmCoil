@@ -332,7 +332,7 @@ impl<'a> Validator<'a> {
                 SdslvDecl::Compile(x) => (&x.Alias, "compile"),
             };
             if let Some(existing_kind) = self.TopLevelKinds.insert(name.clone(), kind) {
-                self.err(&format!(
+                self.Err(&format!(
                     "duplicate top-level declaration '{}' ({} and {})",
                     name, existing_kind, kind
                 ));
@@ -352,14 +352,14 @@ impl<'a> Validator<'a> {
         for use_decl in &self.Module.Uses {
             let key = use_decl.Path.Segments.join(".");
             if !used.insert(key.clone()) {
-                self.err(&format!("duplicate use declaration '{}'", key));
+                self.Err(&format!("duplicate use declaration '{}'", key));
             }
         }
     }
     fn ValidateTypeAlias(&mut self, alias: &SdslvTypeAliasDecl) {
         if let Some(space) = &alias.SpaceAnnotation {
             if space.Segments.is_empty() {
-                self.err(&format!(
+                self.Err(&format!(
                     "type alias '{}' has empty @space() annotation",
                     alias.Name
                 ));
@@ -370,7 +370,7 @@ impl<'a> Validator<'a> {
         let mut names = HashSet::new();
         for field in &stream.Fields {
             if !names.insert(field.Name.clone()) {
-                self.err(&format!(
+                self.Err(&format!(
                     "duplicate stream field '{}' in stream '{}'",
                     field.Name, stream.Name
                 ));
@@ -381,7 +381,7 @@ impl<'a> Validator<'a> {
         let mut names = HashSet::new();
         for field in &record.Fields {
             if !names.insert(field.Name.clone()) {
-                self.err(&format!(
+                self.Err(&format!(
                     "duplicate record field '{}' in record '{}'",
                     field.Name, record.Name
                 ));
@@ -393,13 +393,13 @@ impl<'a> Validator<'a> {
         let mut names = HashSet::new();
         for method in &interface.Methods {
             if !names.insert(method.Name.clone()) {
-                self.err(&format!(
+                self.Err(&format!(
                     "duplicate interface method '{}' in interface '{}'",
                     method.Name, interface.Name
                 ));
             }
             if method.Body.is_some() {
-                self.err(&format!(
+                self.Err(&format!(
                     "interface method '{}' in interface '{}' cannot have a body",
                     method.Name, interface.Name
                 ));
@@ -418,17 +418,17 @@ impl<'a> Validator<'a> {
         if let Some(kind) = self.TopLevelKinds.get(&compile.Alias)
             && *kind != "compile"
         {
-            self.err(&format!(
+            self.Err(&format!(
                 "compile alias '{}' collides with top-level declaration",
                 compile.Alias
             ));
         }
         if !self.CompileAliases.insert(compile.Alias.clone()) {
-            self.err(&format!("duplicate compile alias '{}'", compile.Alias));
+            self.Err(&format!("duplicate compile alias '{}'", compile.Alias));
         }
         let generic_name = compile.GenericShader.Segments.join(".");
         let Some(shader) = self.ShaderByName.get(&generic_name) else {
-            self.err(&format!(
+            self.Err(&format!(
                 "compile references unknown generic shader '{}'",
                 generic_name
             ));
@@ -438,11 +438,11 @@ impl<'a> Validator<'a> {
         let shader_generics = shader.GenericParameters.clone();
         let shader_constraints = shader.Constraints.clone();
         if shader_generics.is_empty() {
-            self.err(&format!("compile target '{}' is not generic", shader.Name));
+            self.Err(&format!("compile target '{}' is not generic", shader.Name));
             return;
         }
         if shader_generics.len() != compile.TypeArguments.len() {
-            self.err(&format!(
+            self.Err(&format!(
                 "compile '{}' expected {} type arguments but got {}",
                 shader_name,
                 shader_generics.len(),
@@ -453,7 +453,7 @@ impl<'a> Validator<'a> {
         for arg in &compile.TypeArguments {
             let arg_name = arg.Segments.join(".");
             if !self.ShaderByName.contains_key(&arg_name) {
-                self.err(&format!(
+                self.Err(&format!(
                     "compile type argument '{}' is not a known shader",
                     arg_name
                 ));
@@ -476,7 +476,7 @@ impl<'a> Validator<'a> {
             let implements = concrete_shader.Implements.clone();
             for bound in &constraint.Bounds {
                 if !implements.iter().any(|x| x == bound) {
-                    self.err(&format!("compile alias '{}' constraint not satisfied: shader '{}' does not implement '{}'", compile.Alias, concrete_name, bound.Segments.join(".")));
+                    self.Err(&format!("compile alias '{}' constraint not satisfied: shader '{}' does not implement '{}'", compile.Alias, concrete_name, bound.Segments.join(".")));
                 }
             }
         }
@@ -496,7 +496,7 @@ impl<'a> Validator<'a> {
     }
     fn ValidateFlow(&mut self, flow: &SdslvFlowDecl) {
         if flow.Parameters.iter().any(|x| x.Name == "board") {
-            self.err(&format!(
+            self.Err(&format!(
                 "flow '{}' declares reserved parameter name 'board'",
                 flow.Name
             ));
@@ -506,7 +506,7 @@ impl<'a> Validator<'a> {
             self.ValidateFlowBoard(flow, board);
         }
         if flow.States.is_empty() {
-            self.err(&format!(
+            self.Err(&format!(
                 "flow '{}' must declare at least one state",
                 flow.Name
             ));
@@ -515,7 +515,7 @@ impl<'a> Validator<'a> {
         let mut names = HashSet::new();
         for state in &flow.States {
             if !names.insert(state.Name.clone()) {
-                self.err(&format!(
+                self.Err(&format!(
                     "duplicate state '{}' in flow '{}'",
                     state.Name, flow.Name
                 ));
@@ -523,7 +523,7 @@ impl<'a> Validator<'a> {
         }
         for state in &flow.States {
             if state.Statements.is_empty() {
-                self.err(&format!(
+                self.Err(&format!(
                     "state '{}' in flow '{}' must contain at least one statement",
                     state.Name, flow.Name
                 ));
@@ -546,7 +546,7 @@ impl<'a> Validator<'a> {
 
     fn ValidateFlowBoard(&mut self, flow: &SdslvFlowDecl, board: &SdslvFlowBoard) {
         if board.Fields.is_empty() {
-            self.err(&format!(
+            self.Err(&format!(
                 "flow '{}' board must declare at least one field",
                 flow.Name
             ));
@@ -554,14 +554,14 @@ impl<'a> Validator<'a> {
         let mut names = HashSet::new();
         for field in &board.Fields {
             if !names.insert(field.Name.clone()) {
-                self.err(&format!(
+                self.Err(&format!(
                     "duplicate board field '{}' in flow '{}'",
                     field.Name, flow.Name
                 ));
             }
             let type_name = field.TypeName.Segments.join(".");
             if !self.IsValidFlowBoardTypeName(&type_name) {
-                self.err(&format!(
+                self.Err(&format!(
                     "unknown or unsupported board field type '{}' in flow '{}'",
                     type_name, flow.Name
                 ));
@@ -588,7 +588,7 @@ impl<'a> Validator<'a> {
                     &return_type,
                     &actual,
                 ) {
-                    self.err(&format!(
+                    self.Err(&format!(
                         "{}: expected {}, found {}",
                         prefix, expected, found
                     ));
@@ -596,14 +596,14 @@ impl<'a> Validator<'a> {
             }
             SdslvFlowStatement::BoardAssign { Field, Value, .. } => {
                 if flow.Board.is_none() {
-                    self.err(&format!(
+                    self.Err(&format!(
                         "flow '{}' does not declare a board, but statement writes board.{}",
                         flow.Name, Field
                     ));
                     return;
                 }
                 let Some(expected) = board_fields.get(Field) else {
-                    self.err(&format!(
+                    self.Err(&format!(
                         "unknown board field '{}' in flow '{}'",
                         Field, flow.Name
                     ));
@@ -614,7 +614,7 @@ impl<'a> Validator<'a> {
                 if let Some((prefix, expected_name, found_name)) =
                     self.TypeMismatch("board assignment type mismatch", expected, &actual)
                 {
-                    self.err(&format!(
+                    self.Err(&format!(
                         "{}: expected {}, found {}",
                         prefix, expected_name, found_name
                     ));
@@ -622,13 +622,13 @@ impl<'a> Validator<'a> {
             }
             SdslvFlowStatement::When(when) => {
                 if when.Cases.is_empty() {
-                    self.err(&format!(
+                    self.Err(&format!(
                         "guard when in state '{}' must include at least one case",
                         state.Name
                     ));
                 }
                 if when.ElseAction.is_none() {
-                    self.err(&format!(
+                    self.Err(&format!(
                         "guard when in state '{}' must include else",
                         state.Name
                     ));
@@ -639,7 +639,7 @@ impl<'a> Validator<'a> {
                     if cond_type.Name().is_some()
                         && !self.AreCompatible(&TypeRef::Named("bool".to_string()), &cond_type)
                     {
-                        self.err(&format!(
+                        self.Err(&format!(
                             "guard condition type mismatch in flow '{}': expected bool, found {}",
                             flow.Name,
                             self.TypeName(&cond_type)
@@ -656,7 +656,7 @@ impl<'a> Validator<'a> {
                             &return_type,
                             &actual,
                         ) {
-                            self.err(&format!(
+                            self.Err(&format!(
                                 "{}: expected {}, found {}",
                                 prefix, expected, found
                             ));
@@ -678,7 +678,7 @@ impl<'a> Validator<'a> {
                         &return_type,
                         &actual,
                     ) {
-                        self.err(&format!(
+                        self.Err(&format!(
                             "{}: expected {}, found {}",
                             prefix, expected, found
                         ));
@@ -714,12 +714,12 @@ impl<'a> Validator<'a> {
     ) {
         if let Some(field_name) = Self::TryGetBoardFieldRead(expression) {
             if flow.Board.is_none() {
-                self.err(&format!(
+                self.Err(&format!(
                     "flow '{}' does not declare a board, but expression references board.{}",
                     flow.Name, field_name
                 ));
             } else if !board_fields.contains_key(&field_name) {
-                self.err(&format!(
+                self.Err(&format!(
                     "unknown board field '{}' in flow '{}'",
                     field_name, flow.Name
                 ));
@@ -826,7 +826,7 @@ impl<'a> Validator<'a> {
     ) {
         let target = path.Segments.join(".");
         if !state_names.contains(&target) {
-            self.err(&format!(
+            self.Err(&format!(
                 "goto targets unknown state '{}' in flow '{}'",
                 target, flow.Name
             ));
@@ -858,7 +858,7 @@ impl<'a> Validator<'a> {
                         self.CheckExpressionCalls(shader, &locals, init);
                         let actual = self.ResolveExpressionType(shader, &locals, init);
                         if let Some(msg) = self.TypeMismatch("type mismatch", &expected, &actual) {
-                            self.err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
+                            self.Err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                         }
                     }
                     locals.insert(Name.clone(), expected);
@@ -871,7 +871,7 @@ impl<'a> Validator<'a> {
                     if let Some(msg) =
                         self.TypeMismatch("assignment type mismatch", &expected, &actual)
                     {
-                        self.err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
+                        self.Err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                     }
                 }
                 SdslvStatement::Return { Value } => {
@@ -882,7 +882,7 @@ impl<'a> Validator<'a> {
                         &return_type,
                         &actual,
                     ) {
-                        self.err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
+                        self.Err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                     }
                 }
                 SdslvStatement::Expression { Value } => {
@@ -910,14 +910,14 @@ impl<'a> Validator<'a> {
             return;
         };
         if self.StreamByName.contains_key(parameter_type_name) {
-            self.err(&format!(
+            self.Err(&format!(
                 "cannot assign to field '{}' of immutable stream parameter '{}'; use with to create a modified copy",
                 target_field_name, base_parameter_name
             ));
             return;
         }
         if self.RecordByName.contains_key(parameter_type_name) {
-            self.err(&format!(
+            self.Err(&format!(
                 "cannot assign to field '{}' of immutable record parameter '{}'; use with to create a modified copy",
                 target_field_name, base_parameter_name
             ));
@@ -966,7 +966,7 @@ impl<'a> Validator<'a> {
                         if let Some((_, expected_name, actual_name)) =
                             self.TypeMismatch("", &signature.Parameters[index], &actual)
                         {
-                            self.err(&format!(
+                            self.Err(&format!(
                                 "argument {} of {} expects {}, found {}",
                                 index + 1,
                                 signature.Name,
@@ -1055,7 +1055,7 @@ impl<'a> Validator<'a> {
     ) {
         let base_type = self.ResolveExpressionType(shader, locals, base);
         let Some(base_name) = base_type.Name() else {
-            self.err("with expression base must be record or stream type");
+            self.Err("with expression base must be record or stream type");
             return;
         };
         let field_types: HashMap<String, TypeRef> =
@@ -1073,13 +1073,13 @@ impl<'a> Validator<'a> {
                 HashMap::new()
             };
         if field_types.is_empty() {
-            self.err("with expression base must be record or stream type");
+            self.Err("with expression base must be record or stream type");
             return;
         }
         let mut seen = HashSet::new();
         for update in updates {
             if !seen.insert(update.Field.clone()) {
-                self.err(&format!(
+                self.Err(&format!(
                     "duplicate with field update '{}' in type '{}'",
                     update.Field, base_name
                 ));
@@ -1087,7 +1087,7 @@ impl<'a> Validator<'a> {
             }
             let expected = field_types.get(&update.Field).cloned();
             let Some(expected_type) = expected else {
-                self.err(&format!(
+                self.Err(&format!(
                     "with field '{}' does not exist on type '{}'",
                     update.Field, base_name
                 ));
@@ -1097,7 +1097,7 @@ impl<'a> Validator<'a> {
             if let Some((_, expected_name, actual_name)) =
                 self.TypeMismatch("", &expected_type, &actual)
             {
-                self.err(&format!(
+                self.Err(&format!(
                     "with field '{}' on type '{}' expects {}, found {}",
                     update.Field, base_name, expected_name, actual_name
                 ));
@@ -1274,7 +1274,7 @@ impl<'a> Validator<'a> {
         let mut generic_names = HashSet::new();
         for generic in &shader.GenericParameters {
             if !generic_names.insert(generic.clone()) {
-                self.err(&format!(
+                self.Err(&format!(
                     "shader '{}' has duplicate generic parameter '{}'",
                     shader.Name, generic
                 ));
@@ -1283,7 +1283,7 @@ impl<'a> Validator<'a> {
         let mut seen_pairs = HashSet::new();
         for constraint in &shader.Constraints {
             if !generic_names.contains(&constraint.ParameterName) {
-                self.err(&format!(
+                self.Err(&format!(
                     "shader '{}' has where constraint on unknown generic parameter '{}'",
                     shader.Name, constraint.ParameterName
                 ));
@@ -1291,11 +1291,11 @@ impl<'a> Validator<'a> {
             for bound in &constraint.Bounds {
                 let name = bound.Segments.join(".");
                 if !self.InterfaceByName.contains_key(&name) {
-                    self.err(&format!("shader '{}' has where constraint '{}' : '{}' but interface '{}' is unknown", shader.Name, constraint.ParameterName, name, name));
+                    self.Err(&format!("shader '{}' has where constraint '{}' : '{}' but interface '{}' is unknown", shader.Name, constraint.ParameterName, name, name));
                 }
                 let pair = format!("{}::{}", constraint.ParameterName, name);
                 if !seen_pairs.insert(pair) {
-                    self.err(&format!(
+                    self.Err(&format!(
                         "shader '{}' repeats where constraint '{}' : '{}'",
                         shader.Name, constraint.ParameterName, name
                     ));
@@ -1307,7 +1307,7 @@ impl<'a> Validator<'a> {
         let mut material = HashSet::new();
         for field in &shader.MaterialFields {
             if !material.insert(field.Name.clone()) {
-                self.err(&format!(
+                self.Err(&format!(
                     "duplicate material field '{}' in shader '{}'",
                     field.Name, shader.Name
                 ));
@@ -1316,7 +1316,7 @@ impl<'a> Validator<'a> {
         let mut methods = HashSet::new();
         for method in &shader.Methods {
             if !methods.insert(method.Name.clone()) {
-                self.err(&format!(
+                self.Err(&format!(
                     "duplicate shader method '{}' in shader '{}'",
                     method.Name, shader.Name
                 ));
@@ -1325,13 +1325,13 @@ impl<'a> Validator<'a> {
         let mut stages = HashSet::new();
         for stage_method in &shader.StageMethods {
             if !stages.insert(stage_method.Name.clone()) {
-                self.err(&format!(
+                self.Err(&format!(
                     "duplicate stage method '{}' in shader '{}'",
                     stage_method.Name, shader.Name
                 ));
             }
             if methods.contains(&stage_method.Name) {
-                self.err(&format!(
+                self.Err(&format!(
                     "shader '{}' has method '{}' that collides with stage method name",
                     shader.Name, stage_method.Name
                 ));
@@ -1343,18 +1343,18 @@ impl<'a> Validator<'a> {
             match method.Stage.as_deref() {
                 Some("vertex") | Some("pixel") | Some("compute") => {}
                 Some(stage_name) => {
-                    self.err(&format!(
+                    self.Err(&format!(
                         "stage '{}' is not supported in SDSL-V v0",
                         stage_name
                     ));
                 }
-                None => self.err(&format!(
+                None => self.Err(&format!(
                     "stage method '{}' in shader '{}' is missing stage name",
                     method.Name, shader.Name
                 )),
             }
             if method.Body.is_none() {
-                self.err(&format!(
+                self.Err(&format!(
                     "stage method '{}' in shader '{}' must have a body",
                     method.Name, shader.Name
                 ));
@@ -1368,7 +1368,7 @@ impl<'a> Validator<'a> {
             let interface = match self.InterfaceByName.get(&iface_name) {
                 Some(x) => *x,
                 None => {
-                    self.err(&format!(
+                    self.Err(&format!(
                         "shader '{}' implements unknown interface '{}'",
                         shader.Name, iface_name
                     ));
@@ -1382,26 +1382,26 @@ impl<'a> Validator<'a> {
         for required in required_methods.values() {
             let shader_method = shader.Methods.iter().find(|m| m.Name == required.Name);
             match shader_method {
-                None => self.err(&format!(
+                None => self.Err(&format!(
                     "shader '{}' implements interface method '{}' but does not override it",
                     shader.Name, required.Name
                 )),
                 Some(method) => {
                     if !method.IsOverride {
-                        self.err(&format!(
+                        self.Err(&format!(
                             "shader '{}' method '{}' must be marked override",
                             shader.Name, method.Name
                         ));
                     }
                     if !Self::SameSignature(method, required) {
-                        self.err(&format!("shader '{}' override '{}' signature does not match interface declaration", shader.Name, method.Name));
+                        self.Err(&format!("shader '{}' override '{}' signature does not match interface declaration", shader.Name, method.Name));
                     }
                 }
             }
         }
         for method in &shader.Methods {
             if method.IsOverride && !required_methods.contains_key(&method.Name) {
-                self.err(&format!(
+                self.Err(&format!(
                     "shader '{}' override method '{}' is not declared by implemented interfaces",
                     shader.Name, method.Name
                 ));
@@ -1422,7 +1422,7 @@ impl<'a> Validator<'a> {
         }
         true
     }
-    fn err(&mut self, message: &str) {
+    fn Err(&mut self, message: &str) {
         self.Diagnostics
             .push(SdslvDiagnostic::New(message, Self::UnknownSpan()));
     }
