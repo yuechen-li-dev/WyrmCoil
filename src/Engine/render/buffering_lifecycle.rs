@@ -41,6 +41,10 @@ const RejectLifecycle: DwActId = DwActId {
     Local: 7,
 };
 
+pub fn LifecycleUploadIntentActId() -> DwActId {
+    BeginStage
+}
+
 mod Keys {
     use super::*;
     pub const ActiveSlotCount: DwKey<i32> = DwKey::New("Lifecycle.ActiveSlotCount", 2402501);

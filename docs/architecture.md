@@ -121,6 +121,23 @@ M27 remains intentionally narrow:
 
 Lifecycle simulation (M25/M26) remains recorded intent and deterministic telemetry/trace behavior; binding those acts to real GPU resource execution is future work.
 
+
+## M28 lifecycle act upload executor / utility policy bridge
+
+M28 connects M25/M26 lifecycle intent to M23/M27 upload execution policy without adding draw submission:
+
+- `PlanUploadExecution(...)` consumes lifecycle acts + `VertexBufferUploadPlan` metadata + device-availability and constraints, then uses Dunewyrm utility selection to choose `GpuBufferCreate`, `CpuRecordOnly`, `NoOpEmptyUpload`, or `Rejected`.
+- Device presence only makes GPU upload eligible; it does not force hidden renderer-owned execution.
+- `ExecuteUploadPlan(...)` keeps normal tests GPU-free by supporting CPU record-only output (`CpuUploadRecord`) and only creating a `wgpu::Buffer` when the caller explicitly supplies a device and the selected mode is GPU.
+- Missing upload-intent lifecycle acts reject execution (`MissingLifecycleUploadAct`) so lifecycle acts remain explicit recorded authorization.
+
+M28 remains intentionally narrow:
+
+- no command encoder / render pass / draw submission
+- no material system or shader reflection
+- no automatic global lifecycle-to-GPU wiring
+
+
 ## M24 render buffering strategy planner (CPU policy only)
 
 M24 adds a deterministic CPU-side buffering strategy planner over `VertexBufferUploadPlan` metadata:
