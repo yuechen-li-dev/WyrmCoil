@@ -132,10 +132,10 @@ pub fn CreateWgpuVertexBuffer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Engine::primitives::{EntityId, RenderItem, RenderSnapshot, Vec2};
     use crate::Engine::render::extract::{
         ExtractSpriteVertices, SpriteVertex, SpriteVertexBufferLayout,
     };
-    use crate::Engine::wyrmcoil::{EntityId, RenderItem, RenderSnapshot, Vec2};
 
     #[test]
     fn BuildVertexBufferUploadPlanAllowsEmptyBatch() {

@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use crate::Demo::{InputEvent, World};
 use crate::Engine::Engine;
 use crate::Engine::backend::{PlatformInput, PlatformKey, QueueTranslatedInput};
 use winit::event::ElementState;
@@ -28,7 +29,11 @@ pub fn TranslateWinitPhysicalKey(key: PhysicalKey, state: ElementState) -> Optio
     }
 }
 
-pub fn QueueWinitPhysicalKey(engine: &mut Engine, key: PhysicalKey, state: ElementState) -> bool {
+pub fn QueueWinitPhysicalKey(
+    engine: &mut Engine<World, InputEvent>,
+    key: PhysicalKey,
+    state: ElementState,
+) -> bool {
     if let Some(platform_input) = TranslateWinitPhysicalKey(key, state) {
         return QueueTranslatedInput(engine, platform_input);
     }

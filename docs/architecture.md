@@ -566,3 +566,15 @@ M37 preserves prior policy and scope boundaries:
 - no render-pipeline expansion, no draw submission expansion, and no DXC invocation are added in M37.
 
 Future work remains explicit: consume WGSL module plans in later pipeline/draw golden-path integration milestones.
+
+
+## M45b engine/demo split completion
+
+M45b finalizes the M45 refactor boundary:
+
+- `src/Engine/wyrmcoil.rs`: generic engine core (`World` trait, generic `Engine<W, I>`, clock, tick orchestration, chunk save/restore surface).
+- `src/Engine/primitives.rs`: engine-level shared records (`Vec2`, `EntityId`, `RenderItem`, `RenderSnapshot`).
+- `src/Engine/store.rs`: reusable dense-lane helpers (`DenseAliveCount`, `DenseAliveIndices`, `DenseLaneSafeLen`).
+- `src/Demo/`: demo-specific stores/world/frame graph/acts/input/message mapping and demo registry.
+
+Prototype-era tests that depended on demo ownership inside `Engine::wyrmcoil` were removed and replaced with architecture-shape tests (`tests/m45b_engine_demo_split.rs`).

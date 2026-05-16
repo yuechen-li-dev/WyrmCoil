@@ -117,6 +117,7 @@ pub fn BuildHeadlessDrawAssemblyPlan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Engine::primitives::{EntityId, RenderItem, RenderSnapshot, Vec2};
     use crate::Engine::render::{
         BuildHeadlessRenderTargetDesc, BuildRenderCommandPlan, BuildRenderPipelineLayoutPlan,
         BuildVertexBufferUploadPlan, ColorTargetDesc, CompiledPipelineDesc,
@@ -124,7 +125,6 @@ mod tests {
         RenderCommandPlanReason, RenderPipelineLayoutOptions, SpriteVertexBufferLayout,
         UploadExecutionMode, UploadExecutionReason, UploadExecutionResult,
     };
-    use crate::Engine::wyrmcoil::{EntityId, RenderItem, RenderSnapshot, Vec2};
 
     fn BuildPipeline(name: &str, format: ColorTargetFormat) -> RenderPipelineLayoutPlan {
         BuildRenderPipelineLayoutPlan(

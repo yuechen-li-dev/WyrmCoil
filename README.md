@@ -124,3 +124,7 @@ Out of scope in M44:
 - No auto-rewrite/fix mode yet.
 - No rustfmt replacement.
 - No SDSL-V/Oct formatter modes yet.
+
+## M45b engine/demo split status
+
+M45b completes the engine/demo split: `Engine::wyrmcoil` now owns generic engine orchestration, `Engine::primitives` owns shared primitives (`Vec2`, `EntityId`, `RenderItem`, `RenderSnapshot`), `Engine::store` owns dense-lane helpers, and `Demo` owns sample world/frames/acts/input/registry code. Obsolete prototype-era split-breaking tests were replaced with architecture-shape tests.
