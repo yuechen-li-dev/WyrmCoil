@@ -118,6 +118,7 @@ pub fn BuildRenderCommandPlan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Engine::primitives::{EntityId, RenderItem, RenderSnapshot, Vec2};
     use crate::Engine::render::{
         BuildRenderPipelineLayoutPlan, BuildVertexBufferUploadPlan, ColorTargetDesc,
         ColorTargetFormat, CompiledPipelineDesc, CompiledShaderModuleDesc, CpuUploadRecord,
@@ -125,7 +126,6 @@ mod tests {
         SpriteVertexBufferLayout, UploadExecutionReason, ValidateVertexBufferUploadPlan,
         VertexBufferUploadPlan,
     };
-    use crate::Engine::wyrmcoil::{EntityId, RenderItem, RenderSnapshot, Vec2};
 
     fn BuildPipeline() -> RenderPipelineLayoutPlan {
         BuildRenderPipelineLayoutPlan(

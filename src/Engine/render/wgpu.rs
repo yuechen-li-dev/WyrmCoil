@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use crate::Engine::wyrmcoil::RenderSnapshot;
+use crate::Engine::primitives::RenderSnapshot;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClearColor {

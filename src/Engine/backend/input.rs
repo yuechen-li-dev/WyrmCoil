@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
-use crate::Engine::{Engine, InputEvent};
+use crate::Demo::{InputEvent, World};
+use crate::Engine::Engine;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlatformKey {
@@ -31,7 +32,10 @@ pub fn TranslatePlatformInput(event: PlatformInput) -> Option<InputEvent> {
     }
 }
 
-pub fn QueueTranslatedInput(engine: &mut Engine, platform_event: PlatformInput) -> bool {
+pub fn QueueTranslatedInput(
+    engine: &mut Engine<World, InputEvent>,
+    platform_event: PlatformInput,
+) -> bool {
     if let Some(input) = TranslatePlatformInput(platform_event) {
         engine.EnqueueInput(input);
         return true;

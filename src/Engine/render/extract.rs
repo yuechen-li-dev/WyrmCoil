@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 
+use crate::Engine::primitives::RenderSnapshot;
 use crate::Engine::render::pipeline::{
     VertexAttributeDesc, VertexBufferLayoutDesc, VertexFormat, VertexStepMode,
 };
-use crate::Engine::wyrmcoil::RenderSnapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpriteVertex {
@@ -127,7 +127,7 @@ pub fn SpriteVertexBufferLayout() -> VertexBufferLayoutDesc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Engine::wyrmcoil::{EntityId, RenderItem, RenderSnapshot, Vec2};
+    use crate::Engine::primitives::{EntityId, RenderItem, RenderSnapshot, Vec2};
 
     #[test]
     fn ExtractSpriteVerticesHandlesEmptySnapshot() {

@@ -5,8 +5,8 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use wyrmcoil::Dunewyrm::DwActRequest;
+use wyrmcoil::Engine::primitives::{EntityId, RenderItem, RenderSnapshot, Vec2};
 use wyrmcoil::Engine::render::*;
-use wyrmcoil::Engine::wyrmcoil::{EntityId, RenderItem, RenderSnapshot, Vec2};
 
 fn BlockOnReady<F: Future>(future: F) -> F::Output {
     struct NoopWake;
