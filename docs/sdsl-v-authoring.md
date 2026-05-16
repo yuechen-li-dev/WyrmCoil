@@ -397,3 +397,37 @@ Behavior notes:
 - flow helper functions emitted in HLSL but not present as artifact entries are rejected
 - compile-alias entries (for example `ForwardFlatMaterial_PS`) are accepted when present
 - no DXC or `wgpu` pipeline creation is required for plan creation
+
+
+## 16) M17 pipeline plan → DXC requests bridge (metadata-only)
+
+M17 adds a deterministic bridge from renderer pipeline plans to DXC compile requests.
+
+Current path:
+
+```text
+SdslvShaderArtifact
+→ BuildRenderPipelinePlan(...)
+→ RenderPipelinePlan
+→ BuildDxcRequestsForPipelinePlan(...)
+→ PipelineDxcRequests { Vertex, Pixel }
+```
+
+APIs in `Engine::render`:
+- `PipelineDxcRequests`
+- `PipelineDxcRequestError`
+- `BuildDxcRequestsForPipelinePlan(plan)`
+
+Behavior notes:
+- the bridge reuses M15 `DxcCompileRequest` directly (no parallel request type)
+- vertex request uses plan `VertexEntry` metadata (`EntryPoint`, `TargetProfile`)
+- pixel request uses plan `PixelEntry` metadata (`EntryPoint`, `TargetProfile`)
+- both requests preserve identical HLSL source text and source name
+- M15 still owns command construction (`BuildDxcCommand`) and optional process invocation
+
+Still out of scope in M17:
+- no DXC invocation required
+- no `wgpu` shader-module creation
+- no `wgpu::RenderPipeline` creation
+- no reflection/resource-layout extraction
+
