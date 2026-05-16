@@ -612,5 +612,31 @@ Current non-goals (unchanged for M9):
 - no `suspend`, `remember`, or `resume`
 - no generic flows
 
-Emitter behavior in M9:
-- HLSL emission returns a diagnostic when a module contains flow declarations: `flow emission is not implemented in SDSL-V M9`.
+## SDSL-V M10 flow board reads (guard/return validation)
+
+M10 keeps flows as authoring-only control structure and adds **board read name-resolution** inside flow state expressions.
+
+Supported board-read syntax in M10:
+- `board.FieldName`
+
+Validated expression sites in M10:
+- `when` case conditions (`case board.Flag -> ...`, `case board.Mode == 2 -> ...`)
+- `when` case return expressions (`case cond -> return board.Mode`)
+- `when` else return expressions (`else -> return board.Mode`)
+- direct state return expressions (`return board.Mode;`)
+
+Validation behavior in M10:
+- `board.<Field>` is resolved against the current flow-local `board { ... }` declaration.
+- unknown board fields are diagnosed (for example: `unknown board field 'SelectedMode' in flow 'ShadowVariant'`).
+- if a flow has no board block, any `board.<Field>` reference is diagnosed.
+- inside flow state expressions, `board` is reserved; flow parameters named `board` are rejected.
+
+Current limits in M10:
+- board writes are still unsupported.
+- flow lowering/emission is still unsupported.
+- flow execution/runtime state-machine behavior is still unsupported.
+- utility `when`, `suspend`, `remember`, and `resume` remain out of scope.
+- full flow expression typechecking remains future work.
+
+Emitter behavior in M10:
+- HLSL emission returns a diagnostic when a module contains flow declarations: `flow emission is not implemented in SDSL-V M10`.

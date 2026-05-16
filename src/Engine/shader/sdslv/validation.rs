@@ -477,6 +477,13 @@ impl<'a> Validator<'a> {
         }
     }
     fn ValidateFlow(&mut self, flow: &SdslvFlowDecl) {
+        if flow.Parameters.iter().any(|x| x.Name == "board") {
+            self.err(&format!(
+                "flow '{}' declares reserved parameter name 'board'",
+                flow.Name
+            ));
+        }
+        let board_fields = self.BuildFlowBoardFieldSet(flow);
         if let Some(board) = &flow.Board {
             self.ValidateFlowBoard(flow, board);
         }
@@ -504,9 +511,19 @@ impl<'a> Validator<'a> {
                 ));
             }
             for statement in &state.Statements {
-                self.ValidateFlowStatement(flow, state, statement, &names);
+                self.ValidateFlowStatement(flow, state, statement, &names, &board_fields);
             }
         }
+    }
+
+    fn BuildFlowBoardFieldSet(&self, flow: &SdslvFlowDecl) -> HashSet<String> {
+        let mut fields = HashSet::new();
+        if let Some(board) = &flow.Board {
+            for field in &board.Fields {
+                fields.insert(field.Name.clone());
+            }
+        }
+        fields
     }
 
     fn ValidateFlowBoard(&mut self, flow: &SdslvFlowDecl, board: &SdslvFlowBoard) {
@@ -539,10 +556,13 @@ impl<'a> Validator<'a> {
         state: &SdslvFlowState,
         statement: &SdslvFlowStatement,
         state_names: &HashSet<String>,
+        board_fields: &HashSet<String>,
     ) {
         match statement {
             SdslvFlowStatement::Goto(path) => self.ValidateFlowGoto(flow, path, state_names),
-            SdslvFlowStatement::Return(_) => {}
+            SdslvFlowStatement::Return(value) => {
+                self.ValidateFlowBoardReads(flow, value, board_fields);
+            }
             SdslvFlowStatement::When(when) => {
                 if when.Cases.is_empty() {
                     self.err(&format!(
@@ -557,8 +577,12 @@ impl<'a> Validator<'a> {
                     ));
                 }
                 for case in &when.Cases {
+                    self.ValidateFlowBoardReads(flow, &case.Condition, board_fields);
                     if let SdslvFlowAction::Goto(path) = &case.Action {
                         self.ValidateFlowGoto(flow, path, state_names);
+                    }
+                    if let SdslvFlowAction::Return(value) = &case.Action {
+                        self.ValidateFlowBoardReads(flow, value, board_fields);
                     }
                 }
                 if let Some(action) = &when.ElseAction
@@ -566,8 +590,66 @@ impl<'a> Validator<'a> {
                 {
                     self.ValidateFlowGoto(flow, path, state_names);
                 }
+                if let Some(action) = &when.ElseAction
+                    && let SdslvFlowAction::Return(value) = action
+                {
+                    self.ValidateFlowBoardReads(flow, value, board_fields);
+                }
             }
         }
+    }
+
+    fn ValidateFlowBoardReads(
+        &mut self,
+        flow: &SdslvFlowDecl,
+        expression: &SdslvExpression,
+        board_fields: &HashSet<String>,
+    ) {
+        if let Some(field_name) = Self::TryGetBoardFieldRead(expression) {
+            if flow.Board.is_none() {
+                self.err(&format!(
+                    "flow '{}' does not declare a board, but expression references board.{}",
+                    flow.Name, field_name
+                ));
+            } else if !board_fields.contains(&field_name) {
+                self.err(&format!(
+                    "unknown board field '{}' in flow '{}'",
+                    field_name, flow.Name
+                ));
+            }
+        }
+        match expression {
+            SdslvExpression::FieldAccess { Base, .. } => {
+                self.ValidateFlowBoardReads(flow, Base, board_fields);
+            }
+            SdslvExpression::Call { Callee, Arguments } => {
+                self.ValidateFlowBoardReads(flow, Callee, board_fields);
+                for argument in Arguments {
+                    self.ValidateFlowBoardReads(flow, argument, board_fields);
+                }
+            }
+            SdslvExpression::Binary { Left, Right, .. } => {
+                self.ValidateFlowBoardReads(flow, Left, board_fields);
+                self.ValidateFlowBoardReads(flow, Right, board_fields);
+            }
+            SdslvExpression::Unary { Operand, .. } => {
+                self.ValidateFlowBoardReads(flow, Operand, board_fields);
+            }
+            _ => {}
+        }
+    }
+
+    fn TryGetBoardFieldRead(expression: &SdslvExpression) -> Option<String> {
+        let SdslvExpression::FieldAccess { Base, Field } = expression else {
+            return None;
+        };
+        let SdslvExpression::Identifier(base_name) = &**Base else {
+            return None;
+        };
+        if base_name == "board" {
+            return Some(Field.clone());
+        }
+        None
     }
     fn ValidateFlowGoto(
         &mut self,

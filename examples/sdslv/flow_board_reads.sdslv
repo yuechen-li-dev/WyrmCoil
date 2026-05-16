@@ -1,0 +1,18 @@
+flow ShadowVariant(useSoft: bool) -> i32 {
+    board {
+        HasSelection: bool;
+        SelectedMode: i32;
+    }
+
+    state Select {
+        when {
+            case board.HasSelection -> goto Selected
+            case board.SelectedMode == 2 -> return board.SelectedMode
+            else -> return Choose(board.SelectedMode)
+        }
+    }
+
+    state Selected {
+        return board.SelectedMode;
+    }
+}
