@@ -446,3 +446,21 @@ M26 remains intentionally narrow:
 - no upload queue writes
 - no command encoder or draw pass integration
 - no adaptive re-planning during restore
+
+
+## M37 WGSL shader-module path (`wgpu` backend)
+
+M37 adds a backend-specific WGSL shader-module seam under `Engine::render::backend::wgpu`:
+
+- `BuildWgslShaderModulePlan(...)` validates label/source-name/source text into plain-data `WgslShaderModulePlan`.
+- `BuildWgslPlanFromStrategyRequest(...)` optionally bridges M35 source-strategy WGSL selection into module planning without coupling shader strategy to `wgpu` runtime handles.
+- `CreateWgpuShaderModuleFromWgsl(...)` optionally creates a real `wgpu::ShaderModule` only when a caller supplies a real `wgpu::Device`.
+
+M37 preserves prior policy and scope boundaries:
+
+- SDSL-V remains the preferred high-level authoring path from M35 policy defaults.
+- WGSL remains a valid native source path for backend module creation.
+- default `cargo test` remains GPU/window/surface/swapchain free.
+- no render-pipeline expansion, no draw submission expansion, and no DXC invocation are added in M37.
+
+Future work remains explicit: consume WGSL module plans in later pipeline/draw golden-path integration milestones.
