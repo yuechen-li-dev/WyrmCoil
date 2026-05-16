@@ -34,6 +34,8 @@ pub enum SdslvTokenKind {
     KeywordLet,
     KeywordReturn,
     KeywordWith,
+    KeywordIf,
+    KeywordSwitch,
     Identifier(String),
     IntegerLiteral(String),
     FloatLiteral(String),
@@ -61,6 +63,7 @@ pub enum SdslvTokenKind {
     Star,
     Slash,
     Arrow,
+    FatArrow,
 }
 
 #[derive(Debug, Clone, PartialEq)]

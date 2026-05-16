@@ -130,6 +130,12 @@ impl<'a> Lexer<'a> {
                 self.Push(SdslvTokenKind::RightAngleEquals, st);
                 continue;
             }
+            if c == '=' && self.Peek(1) == Some('>') {
+                self.Bump('=');
+                self.Bump('>');
+                self.Push(SdslvTokenKind::FatArrow, st);
+                continue;
+            }
             if c == '-' && self.Peek(1) == Some('>') {
                 self.Bump('-');
                 self.Bump('>');
@@ -195,6 +201,8 @@ impl<'a> Lexer<'a> {
             "let" => SdslvTokenKind::KeywordLet,
             "return" => SdslvTokenKind::KeywordReturn,
             "with" => SdslvTokenKind::KeywordWith,
+            "if" => SdslvTokenKind::KeywordIf,
+            "switch" => SdslvTokenKind::KeywordSwitch,
             _ => SdslvTokenKind::Identifier(t.to_string()),
         }
     }

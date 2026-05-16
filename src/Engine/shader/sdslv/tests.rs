@@ -138,6 +138,15 @@ fn ParserGenericWhereConstraints() {
     assert_eq!(compile.Alias, "ForwardFlatMaterial");
 }
 
+
+#[test]
+fn LexerIfSwitchAndFatArrowTokens() {
+    let t = LexSource("if cond { } switch { case true => 1 else => 2 }").unwrap();
+    assert!(t.iter().any(|x| matches!(x.Kind, SdslvTokenKind::KeywordIf)));
+    assert!(t.iter().any(|x| matches!(x.Kind, SdslvTokenKind::KeywordSwitch)));
+    assert!(t.iter().any(|x| matches!(x.Kind, SdslvTokenKind::FatArrow)));
+}
+
 #[test]
 fn ParserInvalidCases() {
     assert!(ParseSource("namespace ;").is_err());
