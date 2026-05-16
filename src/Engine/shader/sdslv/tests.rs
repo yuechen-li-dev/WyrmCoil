@@ -1413,3 +1413,170 @@ flow SelectShadow() -> MissingType { state A { return 1; } }
         "expected unsupported return diagnostic"
     );
 }
+
+#[test]
+fn DxcBuildCommandIncludesEntryProfileSpirvAndExtraArgs() {
+    let request = DxcCompileRequest {
+        SourceName: "flat_color.sdslv".to_string(),
+        Hlsl: "float4 FlatColor_VS() : SV_Position { return 0; }".to_string(),
+        EntryPoint: "FlatColor_VS".to_string(),
+        TargetProfile: "vs_6_0".to_string(),
+    };
+    let options = DxcOptions {
+        DxcPath: "dxc".to_string(),
+        OutputSpirv: true,
+        ExtraArgs: vec!["-O3".to_string(), "-Ges".to_string()],
+    };
+    let args = BuildDxcCommand(&request, &options);
+
+    assert_eq!(
+        args,
+        vec![
+            "-E",
+            "FlatColor_VS",
+            "-T",
+            "vs_6_0",
+            "-spirv",
+            "-O3",
+            "-Ges"
+        ],
+        "DXC command args should remain deterministic with spirv + extra args"
+    );
+}
+
+#[test]
+fn DxcCompileRequestFromArtifactEntryPreservesHlslAndProfiles() {
+    let src = r#"
+        type ClipPosition4 = float4 @space(clip.position);
+        stream VertexOut { Position: ClipPosition4; Color: float4; }
+        shader FlatColor {
+            stage vertex fn VS(pos: float3, color: float4) -> VertexOut {
+                let output: VertexOut;
+                output.Position = float4(pos, 1.0);
+                output.Color = color;
+                return output;
+            }
+            stage pixel fn PS(input: VertexOut) -> float4 {
+                return input.Color;
+            }
+        }
+    "#;
+    let artifact = CompileSourceToShaderArtifact("flat_color.sdslv", src)
+        .expect("flat color artifact should compile for request mapping");
+    let vertex = artifact
+        .EntryPoints
+        .iter()
+        .find(|x| x.TargetProfile == "vs_6_0")
+        .expect("expected vertex entry");
+    let pixel = artifact
+        .EntryPoints
+        .iter()
+        .find(|x| x.TargetProfile == "ps_6_0")
+        .expect("expected pixel entry");
+
+    let vertex_request = DxcCompileRequest::FromArtifactEntry(&artifact, vertex);
+    let pixel_request = DxcCompileRequest::FromArtifactEntry(&artifact, pixel);
+
+    assert_eq!(
+        vertex_request.EntryPoint, "FlatColor_VS",
+        "vertex entry name should map to request"
+    );
+    assert_eq!(
+        vertex_request.TargetProfile, "vs_6_0",
+        "vertex profile should map to request"
+    );
+    assert_eq!(
+        pixel_request.EntryPoint, "FlatColor_PS",
+        "pixel entry name should map to request"
+    );
+    assert_eq!(
+        pixel_request.TargetProfile, "ps_6_0",
+        "pixel profile should map to request"
+    );
+    assert_eq!(
+        vertex_request.Hlsl, artifact.Hlsl,
+        "artifact HLSL should be copied into request"
+    );
+}
+
+#[test]
+fn DxcCompileRequestFromArtifactEntryNameErrorsForUnknownEntry() {
+    let src = include_str!("../../../../examples/sdslv/flat_color.sdslv");
+    let artifact = CompileSourceToShaderArtifact("flat_color.sdslv", src)
+        .expect("flat color artifact should compile for entry lookup");
+    let error = DxcCompileRequest::FromArtifactEntryName(&artifact, "Missing_Entry").unwrap_err();
+
+    match error {
+        DxcError::EntryPointNotFound {
+            EntryPoint,
+            SourceName,
+        } => {
+            assert_eq!(
+                EntryPoint, "Missing_Entry",
+                "missing entry should be preserved in error"
+            );
+            assert_eq!(
+                SourceName, "flat_color.sdslv",
+                "source name should be preserved in lookup error"
+            );
+        }
+        _ => panic!("expected EntryPointNotFound error for unknown entry"),
+    }
+}
+
+#[test]
+fn CompileHlslWithDxcReturnsToolUnavailableForMissingPath() {
+    let request = DxcCompileRequest {
+        SourceName: "flat_color.sdslv".to_string(),
+        Hlsl: "float4 FlatColor_PS() : SV_Target0 { return float4(1,1,1,1); }".to_string(),
+        EntryPoint: "FlatColor_PS".to_string(),
+        TargetProfile: "ps_6_0".to_string(),
+    };
+    let options = DxcOptions {
+        DxcPath: "__definitely_missing_dxc_binary__".to_string(),
+        OutputSpirv: true,
+        ExtraArgs: Vec::new(),
+    };
+
+    let error = CompileHlslWithDxc(&request, &options).unwrap_err();
+    match error {
+        DxcError::ToolUnavailable { Path } => {
+            assert_eq!(
+                Path, "__definitely_missing_dxc_binary__",
+                "unavailable path should be surfaced"
+            );
+        }
+        _ => panic!("expected ToolUnavailable error when DXC path does not exist"),
+    }
+}
+
+#[test]
+#[ignore = "requires local DXC and explicit opt-in"]
+fn CompileHlslWithDxcIntegrationWhenEnabled() {
+    if std::env::var("WYRMCOIL_RUN_DXC_TESTS").ok().as_deref() != Some("1") {
+        return;
+    }
+
+    let options = DxcOptions::default();
+    if !FindDxc(&options) {
+        return;
+    }
+
+    let src = include_str!("../../../../examples/sdslv/flat_color.sdslv");
+    let artifact = CompileSourceToShaderArtifact("flat_color.sdslv", src)
+        .expect("flat color artifact should compile before DXC invocation");
+    let vertex = artifact
+        .EntryPoints
+        .iter()
+        .find(|x| x.TargetProfile == "vs_6_0")
+        .expect("expected vertex entry for DXC integration probe");
+
+    let result = CompileArtifactEntryWithDxc(&artifact, vertex, &options)
+        .expect("DXC invocation should compile when tool is available and opt-in is enabled");
+
+    assert!(result.Success, "DXC result should mark success");
+    assert!(
+        !result.OutputBytes.is_empty(),
+        "DXC should produce output bytes"
+    );
+}
