@@ -85,6 +85,23 @@ This milestone is a resource descriptor scaffold only, preserving GPU-free testa
 
 
 
+
+
+## M34 optional headless draw submission probe
+
+M34 adds the first optional real-device headless/offscreen draw submission seam while preserving GPU-free default tests:
+
+- `SubmitHeadlessDraw(...)` accepts caller-supplied `wgpu::Device`, `wgpu::Queue`, `WgpuRenderPipelineResource`, `WgpuVertexBufferResource`, `WgpuHeadlessRenderTarget`, and `RenderCommandPlan`.
+- The helper creates one command encoder, reuses M31 `RecordWgpuDrawCommand(...)`, finishes one command buffer, and submits exactly one buffer via `queue.submit(...)`.
+- `ValidateHeadlessDrawSubmissionOptions(...)` preserves CPU-only validation for option-label policy (`EmptyLabel`) and keeps normal test coverage GPU-free.
+- The seam remains offscreen-only: no window/surface/swapchain integration, no presentation, no readback, no material/bind-group/reflection/render-graph expansion.
+
+Future work remains explicit:
+
+- optional ignored/env-gated real-device probe wiring when broader repo policy chooses to exercise runtime GPU creation paths
+- optional offscreen readback/verification after submission seam stability
+- eventual window/surface path integration from the same snapshot/upload/command seams
+
 ## M33 headless draw assembly contract
 
 M33 adds a plain-data compatibility assembly seam for future offscreen draw submission without requiring a GPU in default tests:
