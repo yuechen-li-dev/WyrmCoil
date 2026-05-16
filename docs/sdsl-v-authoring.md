@@ -280,7 +280,7 @@ Current non-goals (still true):
 | Flow boards + board reads/writes | Parse/validate only (no lowering/execution) |
 | Flow lowering | Implemented for acyclic value-returning subset (M13) |
 | DXC/SPIR-V boundary | Implemented (optional DXC probe, non-mandatory) |
-| Renderer shader integration | Not implemented |
+| Renderer artifact intake / pipeline plan contract | Implemented (metadata-only) |
 
 ## 12) Non-goals / future work
 
@@ -380,3 +380,20 @@ Still out of scope in M15:
 - renderer / `wgpu` pipeline wiring of shader binaries
 - reflection/resource binding extraction
 - asset pipeline integration
+
+## 15) M16 renderer artifact intake (metadata-only)
+
+M16 adds a renderer-facing artifact intake boundary without GPU pipeline creation.
+
+APIs in `Engine::render`:
+- `BuildRenderPipelinePlan(name, artifact, vertex_entry, pixel_entry)`
+- `RenderPipelinePlan` (Name, SourceName, Hlsl, VertexEntry, PixelEntry)
+- `RenderPipelinePlanError` (`MissingEntryPoint`, `WrongStage`, `EmptyHlsl`, `DuplicateEntryPoint`)
+
+Behavior notes:
+- requested entry names must exist in artifact `EntryPoints` metadata
+- requested vertex/pixel entries must match stage kind
+- helper functions emitted in HLSL but not present as artifact entries are rejected
+- flow helper functions emitted in HLSL but not present as artifact entries are rejected
+- compile-alias entries (for example `ForwardFlatMaterial_PS`) are accepted when present
+- no DXC or `wgpu` pipeline creation is required for plan creation

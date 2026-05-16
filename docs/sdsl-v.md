@@ -721,3 +721,26 @@ Still intentionally out of scope after M15:
 - renderer / `wgpu` pipeline integration
 - shader reflection and bind-layout extraction
 - asset pipeline/caching/discovery
+
+## SDSL-V M16 — Renderer artifact intake / pipeline plan contract (implemented)
+
+M16 adds a metadata-only renderer boundary that consumes `SdslvShaderArtifact` and produces deterministic pipeline-planning data.
+
+Current renderer API surface in `Engine::render`:
+- `RenderPipelinePlan`
+- `ShaderStagePlan`
+- `RenderPipelinePlanError`
+- `BuildRenderPipelinePlan(...)`
+
+M16 boundary behavior:
+- validates requested vertex/pixel entry names against artifact `EntryPoints` metadata
+- enforces stage-kind matching (`Vertex` and `Pixel`)
+- rejects missing entries and duplicate entry metadata names with structured errors
+- rejects empty artifact HLSL text
+- preserves artifact metadata (`SourceName`, `Hlsl`, entry names/profiles) inside the plan
+
+M16 is intentionally planning-only:
+- no `wgpu::RenderPipeline` construction
+- no DXC invocation requirement
+- no shader reflection or bind-layout extraction
+- no material/asset pipeline integration
