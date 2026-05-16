@@ -27,10 +27,11 @@ impl<T: DwBoardValue> DwKey<T> {
     }
 }
 
-pub trait DwBoardValue: Copy {
+pub trait DwBoardValue: Copy + PartialEq {
     fn Kind() -> DwBoardKind;
     fn TryGetFrom(board: &DwBoard, slot: u32) -> Option<Self>;
     fn SetOn(board: &mut DwBoard, slot: u32, value: Self);
+    fn ToSnapshotValue(value: Self) -> DwBoardValueSnapshot;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +49,40 @@ pub struct DwSlotCollision {
     pub IncomingKind: DwBoardKind,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DwBoardValueSnapshot {
+    Bool(bool),
+    I32(i32),
+    F32(f32),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DwBoardSnapshotEntry {
+    pub Slot: u32,
+    pub Name: &'static str,
+    pub Kind: DwBoardKind,
+    pub Value: DwBoardValueSnapshot,
+    pub Dirty: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DwBoardSnapshot {
+    pub Entries: Vec<DwBoardSnapshotEntry>,
+    pub DirtySlots: Vec<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DwBoardTtlEntry {
+    pub Slot: u32,
+    pub RemainingTicks: u32,
+    pub ExpireValue: DwBoardValueSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DwBoardTtlSnapshot {
+    pub Entries: Vec<DwBoardTtlEntry>,
+}
+
 pub struct DwBoard {
     BoolEntries: Vec<(u32, bool)>,
     I32Entries: Vec<(u32, i32)>,
@@ -55,6 +90,7 @@ pub struct DwBoard {
     DirtySlots: BTreeSet<u32>,
     SlotMeta: HashMap<u32, DwSlotMetaChunk>,
     LastSlotCollision: Option<DwSlotCollision>,
+    TtlEntries: Vec<DwBoardTtlEntry>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +101,7 @@ pub struct DwBoardChunk {
     pub DirtySlots: Vec<u32>,
     pub SlotMeta: Vec<(u32, DwSlotMetaChunk)>,
     pub LastSlotCollision: Option<DwSlotCollision>,
+    pub TtlEntries: Vec<DwBoardTtlEntry>,
 }
 
 impl DwBoard {
@@ -76,39 +113,148 @@ impl DwBoard {
             DirtySlots: BTreeSet::new(),
             SlotMeta: HashMap::new(),
             LastSlotCollision: None,
+            TtlEntries: Vec::new(),
         }
     }
 
     pub fn Set<T: DwBoardValue>(&mut self, key: DwKey<T>, value: T) -> Result<(), DwSlotCollision> {
         self.LastSlotCollision = None;
         self.ValidateKeyMeta(key.Name, key.Slot, T::Kind())?;
+        let changed = self.TryGet(key) != Some(value);
         T::SetOn(self, key.Slot, value);
-        self.DirtySlots.insert(key.Slot);
+        if changed {
+            self.DirtySlots.insert(key.Slot);
+        }
         Ok(())
+    }
+
+    pub fn SetBoolWithTtl(
+        &mut self,
+        key: DwKey<bool>,
+        value: bool,
+        ttl_ticks: u32,
+    ) -> Result<(), DwSlotCollision> {
+        self.SetWithTtlInternal(key, value, ttl_ticks, false)
+    }
+    pub fn SetI32WithTtl(
+        &mut self,
+        key: DwKey<i32>,
+        value: i32,
+        ttl_ticks: u32,
+        expire_to: i32,
+    ) -> Result<(), DwSlotCollision> {
+        self.SetWithTtlInternal(key, value, ttl_ticks, expire_to)
+    }
+    pub fn SetF32WithTtl(
+        &mut self,
+        key: DwKey<f32>,
+        value: f32,
+        ttl_ticks: u32,
+        expire_to: f32,
+    ) -> Result<(), DwSlotCollision> {
+        self.SetWithTtlInternal(key, value, ttl_ticks, expire_to)
+    }
+
+    fn SetWithTtlInternal<T: DwBoardValue>(
+        &mut self,
+        key: DwKey<T>,
+        value: T,
+        ttl_ticks: u32,
+        expire_to: T,
+    ) -> Result<(), DwSlotCollision> {
+        self.Set(key, value)?;
+        if ttl_ticks == 0 {
+            self.ClearTtlBySlot(key.Slot);
+            self.Set(key, expire_to)?;
+            return Ok(());
+        }
+        self.SetTtlEntry(key.Slot, ttl_ticks, expire_to);
+        Ok(())
+    }
+
+    pub fn TickTtl(&mut self) {
+        let mut remaining = Vec::new();
+        let ttl_entries = std::mem::take(&mut self.TtlEntries);
+        for mut entry in ttl_entries {
+            if entry.RemainingTicks > 0 {
+                entry.RemainingTicks -= 1;
+            }
+            if entry.RemainingTicks == 0 {
+                let current = self.TryGetBySlot(entry.Slot, entry.ExpireValue);
+                if current != Some(entry.ExpireValue) {
+                    self.SetBySlot(entry.Slot, entry.ExpireValue);
+                    self.DirtySlots.insert(entry.Slot);
+                }
+            } else {
+                remaining.push(entry);
+            }
+        }
+        self.TtlEntries = remaining;
+    }
+
+    pub fn ClearTtl<T: DwBoardValue>(&mut self, key: DwKey<T>) {
+        self.ClearTtlBySlot(key.Slot);
     }
 
     pub fn TryGet<T: DwBoardValue>(&self, key: DwKey<T>) -> Option<T> {
         T::TryGetFrom(self, key.Slot)
     }
-
     pub fn GetOr<T: DwBoardValue>(&self, key: DwKey<T>, fallback: T) -> T {
         self.TryGet(key).unwrap_or(fallback)
     }
-
     pub fn IsDirty<T: DwBoardValue>(&self, key: DwKey<T>) -> bool {
         self.DirtySlots.contains(&key.Slot)
     }
-
     pub fn DirtySlots(&self) -> Vec<u32> {
         self.DirtySlots.iter().copied().collect()
     }
-
     pub fn ClearDirty(&mut self) {
         self.DirtySlots.clear();
     }
-
     pub fn LastSlotCollision(&self) -> Option<DwSlotCollision> {
         self.LastSlotCollision
+    }
+
+    pub fn Snapshot(&self) -> DwBoardSnapshot {
+        let mut entries = Vec::new();
+        let mut slots = self.SlotMeta.keys().copied().collect::<Vec<_>>();
+        slots.sort_unstable();
+        for slot in slots {
+            let meta = self
+                .SlotMeta
+                .get(&slot)
+                .expect("slot metadata should exist");
+            let value = match meta.Kind {
+                DwBoardKind::Bool => DwBoardValueSnapshot::Bool(
+                    self.TryGet(DwKey::<bool>::New(meta.Name, slot))
+                        .unwrap_or(false),
+                ),
+                DwBoardKind::I32 => DwBoardValueSnapshot::I32(
+                    self.TryGet(DwKey::<i32>::New(meta.Name, slot)).unwrap_or(0),
+                ),
+                DwBoardKind::F32 => DwBoardValueSnapshot::F32(
+                    self.TryGet(DwKey::<f32>::New(meta.Name, slot))
+                        .unwrap_or(0.0),
+                ),
+            };
+            entries.push(DwBoardSnapshotEntry {
+                Slot: slot,
+                Name: meta.Name,
+                Kind: meta.Kind,
+                Value: value,
+                Dirty: self.DirtySlots.contains(&slot),
+            });
+        }
+        DwBoardSnapshot {
+            Entries: entries,
+            DirtySlots: self.DirtySlots(),
+        }
+    }
+
+    pub fn TtlSnapshot(&self) -> DwBoardTtlSnapshot {
+        let mut entries = self.TtlEntries.clone();
+        entries.sort_by_key(|entry| entry.Slot);
+        DwBoardTtlSnapshot { Entries: entries }
     }
 
     pub fn ExportChunk(&self) -> DwBoardChunk {
@@ -118,7 +264,6 @@ impl DwBoard {
             .map(|(slot, meta)| (*slot, *meta))
             .collect::<Vec<_>>();
         slot_meta.sort_by_key(|entry| entry.0);
-
         DwBoardChunk {
             BoolEntries: self.BoolEntries.clone(),
             I32Entries: self.I32Entries.clone(),
@@ -126,6 +271,7 @@ impl DwBoard {
             DirtySlots: self.DirtySlots(),
             SlotMeta: slot_meta,
             LastSlotCollision: self.LastSlotCollision,
+            TtlEntries: self.TtlEntries.clone(),
         }
     }
 
@@ -138,7 +284,6 @@ impl DwBoard {
         for (slot, meta) in chunk.SlotMeta {
             slot_meta.insert(slot, meta);
         }
-
         Self {
             BoolEntries: chunk.BoolEntries,
             I32Entries: chunk.I32Entries,
@@ -146,6 +291,56 @@ impl DwBoard {
             DirtySlots: dirty,
             SlotMeta: slot_meta,
             LastSlotCollision: chunk.LastSlotCollision,
+            TtlEntries: chunk.TtlEntries,
+        }
+    }
+
+    fn SetTtlEntry<T: DwBoardValue>(&mut self, slot: u32, ttl_ticks: u32, expire_to: T) {
+        let expire_value = T::ToSnapshotValue(expire_to);
+        if let Some(entry) = self.TtlEntries.iter_mut().find(|entry| entry.Slot == slot) {
+            entry.RemainingTicks = ttl_ticks;
+            entry.ExpireValue = expire_value;
+        } else {
+            self.TtlEntries.push(DwBoardTtlEntry {
+                Slot: slot,
+                RemainingTicks: ttl_ticks,
+                ExpireValue: expire_value,
+            });
+        }
+    }
+    fn ClearTtlBySlot(&mut self, slot: u32) {
+        self.TtlEntries.retain(|entry| entry.Slot != slot);
+    }
+
+    fn TryGetBySlot(
+        &self,
+        slot: u32,
+        value_kind: DwBoardValueSnapshot,
+    ) -> Option<DwBoardValueSnapshot> {
+        match value_kind {
+            DwBoardValueSnapshot::Bool(_) => self
+                .BoolEntries
+                .iter()
+                .find(|entry| entry.0 == slot)
+                .map(|entry| DwBoardValueSnapshot::Bool(entry.1)),
+            DwBoardValueSnapshot::I32(_) => self
+                .I32Entries
+                .iter()
+                .find(|entry| entry.0 == slot)
+                .map(|entry| DwBoardValueSnapshot::I32(entry.1)),
+            DwBoardValueSnapshot::F32(_) => self
+                .F32Entries
+                .iter()
+                .find(|entry| entry.0 == slot)
+                .map(|entry| DwBoardValueSnapshot::F32(entry.1)),
+        }
+    }
+
+    fn SetBySlot(&mut self, slot: u32, value: DwBoardValueSnapshot) {
+        match value {
+            DwBoardValueSnapshot::Bool(v) => bool::SetOn(self, slot, v),
+            DwBoardValueSnapshot::I32(v) => i32::SetOn(self, slot, v),
+            DwBoardValueSnapshot::F32(v) => f32::SetOn(self, slot, v),
         }
     }
 
@@ -169,7 +364,6 @@ impl DwBoard {
             self.LastSlotCollision = Some(collision);
             return Err(collision);
         }
-
         self.SlotMeta.insert(
             incoming_slot,
             DwSlotMetaChunk {
@@ -199,8 +393,10 @@ impl DwBoardValue for bool {
             board.BoolEntries.push((slot, value));
         }
     }
+    fn ToSnapshotValue(value: Self) -> DwBoardValueSnapshot {
+        DwBoardValueSnapshot::Bool(value)
+    }
 }
-
 impl DwBoardValue for i32 {
     fn Kind() -> DwBoardKind {
         DwBoardKind::I32
@@ -219,8 +415,10 @@ impl DwBoardValue for i32 {
             board.I32Entries.push((slot, value));
         }
     }
+    fn ToSnapshotValue(value: Self) -> DwBoardValueSnapshot {
+        DwBoardValueSnapshot::I32(value)
+    }
 }
-
 impl DwBoardValue for f32 {
     fn Kind() -> DwBoardKind {
         DwBoardKind::F32
@@ -238,5 +436,8 @@ impl DwBoardValue for f32 {
         } else {
             board.F32Entries.push((slot, value));
         }
+    }
+    fn ToSnapshotValue(value: Self) -> DwBoardValueSnapshot {
+        DwBoardValueSnapshot::F32(value)
     }
 }
