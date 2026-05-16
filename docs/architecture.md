@@ -89,6 +89,22 @@ This milestone is a resource descriptor scaffold only, preserving GPU-free testa
 
 
 
+
+## M39 optional headless WGSL draw smoke probe
+
+M39 adds an optional real-device headless WGSL smoke probe while preserving GPU-free default tests:
+
+- An ignored integration test (`tests/headless_wgsl_draw_smoke.rs`) assembles the offscreen chain end-to-end when explicitly enabled (`WYRMCOIL_RUN_WGPU_TESTS=1`).
+- The probe requests adapter/device/queue without a surface, builds a headless target descriptor/resource, constructs a WGSL module/pipeline plan from `MINIMAL_SPRITE_WGSL_FIXTURE`, creates a real `wgpu::RenderPipeline`, extracts one sprite snapshot, builds upload/command/assembly plans, and submits one headless draw command buffer.
+- No window/surface/swapchain is created, and no readback is required in M39.
+- WGSL is used here as the native `wgpu` shader validation path for smoke coverage; SDSL-V remains the preferred high-level authoring path.
+
+M39 intentionally remains narrow:
+
+- no render loop ownership changes
+- no material/bind-group/reflection/render-graph rollout
+- no hard GPU requirement in normal `cargo test` runs
+
 ## M36 render backend boundary (`wgpu` adapter clarification)
 
 M36 formalizes the render backend seam without adding new rendering behavior:
