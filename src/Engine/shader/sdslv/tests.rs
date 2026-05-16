@@ -94,3 +94,95 @@ fn ParserInvalidCases() {
     assert!(ParseSource("shader S { fn A() -> X { ").is_err());
     assert!(ParseSource("bogus").is_err());
 }
+
+#[test]
+fn ValidationValidFixture() {
+    let src = include_str!("../../../../examples/sdslv/flat_color.sdslv");
+    assert!(ValidateSource(src).is_ok());
+}
+
+#[test]
+fn ValidationDuplicateTopLevel() {
+    let src = "stream Surface { A: float4; } shader Surface { stage pixel fn PS() -> float4 { return X; } }";
+    let d = ValidateSource(src).unwrap_err();
+    assert!(d.iter().any(|x| {
+        x.Message
+            .contains("duplicate top-level declaration 'Surface'")
+    }));
+}
+
+#[test]
+fn ValidationDuplicateMembersAndStageErrors() {
+    let src = r#"
+interface IBase { fn F(a: float4) -> float4; }
+shader S implements IBase {
+    material { Color: float4; Color: float4; }
+    fn F(a: float4) -> float4 { return a; }
+    fn F(a: float4) -> float4 { return a; }
+    stage geometry fn PS() -> float4;
+}
+"#;
+    let d = ValidateSource(src).unwrap_err();
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("duplicate material field 'Color'"))
+    );
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("duplicate shader method 'F'"))
+    );
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("stage 'geometry' is not supported"))
+    );
+    assert!(d.iter().any(|x| x.Message.contains("must have a body")));
+}
+
+#[test]
+fn ValidationInterfaceImplementationRules() {
+    let src = r#"
+interface IBase { fn BaseColor(s: Surface) -> float4; }
+shader S implements IBase {
+    fn BaseColor(s: Surface) -> float3 { return X; }
+    override fn Extra() -> float4 { return X; }
+}
+"#;
+    let d = ValidateSource(src).unwrap_err();
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("must be marked override"))
+    );
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("signature does not match"))
+    );
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("not declared by implemented interfaces"))
+    );
+}
+
+#[test]
+fn ValidationDuplicateGenericParameter() {
+    let src = "shader Forward<TMat, TMat> { stage pixel fn PS() -> float4 { return X; } }";
+    let d = ValidateSource(src).unwrap_err();
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("duplicate generic parameter 'TMat'"))
+    );
+}
+
+#[test]
+fn ValidationUnknownInterfaceAndWhereRules() {
+    let src = r#"
+interface IBaseColor { fn C() -> float4; }
+shader Forward<TMat> implements IBaseColor where TMat: Missing {
+    override fn C() -> float4 { return X; }
+}
+"#;
+    let d = ValidateSource(src).unwrap_err();
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("interface 'Missing' is unknown"))
+    );
+}

@@ -13,9 +13,8 @@ As of **M1 lexer/parser seed**, repository code now includes:
 - declaration AST
 - diagnostics with source spans
 
-Still intentionally absent in M1:
+Still intentionally absent after M2:
 
-- semantic validation (M2)
 - HLSL emitter
 - DXC invocation
 - SPIR-V integration
@@ -390,16 +389,22 @@ Parse declarations for:
 - function signatures
 - stage signatures
 
-### SDSL-V M2 — AST validation
+### SDSL-V M2 — AST validation (implemented)
 
-Validate:
+Now validates declaration-level structure:
 
-- duplicate symbols
-- stream field names
-- interface method signatures
-- shader implements/override requirements
-- semantic alias conflicts
-- stage signature sanity
+- duplicate top-level declarations and duplicate `use` paths
+- duplicate stream/material/method/stage member names
+- interface method-body prohibition and duplicate interface methods
+- shader implements/override requirements and override signature shape
+- stage-name support (`vertex`, `pixel`, `compute`) and stage-body requirement
+- generic parameter/where-constraint shape and interface existence
+
+Still intentionally out of scope in M2:
+
+- HLSL emission
+- function-body semantic/type analysis
+- expression checking
 
 ### SDSL-V M3 — Minimal HLSL emission
 
