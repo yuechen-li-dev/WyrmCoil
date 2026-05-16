@@ -1,7 +1,29 @@
+namespace WyrmCoil.Examples;
+
+stream Surface {
+    Color: float4;
+}
+
+interface IBaseColor {
+    fn BaseColor(s: Surface) -> float4;
+}
+
+shader FlatMaterial implements IBaseColor {
+    material {
+        Color: float4;
+    }
+
+    override fn BaseColor(s: Surface) -> float4 {
+        return Color;
+    }
+}
+
 shader ForwardPass<TMat>
-    where TMat : IBaseColor, INormalProvider
+    where TMat : IBaseColor
 {
     stage pixel fn PS(s: Surface, mat: TMat) -> float4 {
         return mat.BaseColor(s);
     }
 }
+
+compile ForwardPass<FlatMaterial> as ForwardFlatMaterial;

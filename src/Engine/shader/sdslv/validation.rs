@@ -28,6 +28,8 @@ struct Validator<'a> {
     Diagnostics: Vec<SdslvDiagnostic>,
     TopLevelKinds: HashMap<String, &'static str>,
     InterfaceByName: HashMap<String, &'a SdslvInterfaceDecl>,
+    ShaderByName: HashMap<String, &'a SdslvShaderDecl>,
+    CompileAliases: HashSet<String>,
 }
 
 impl<'a> Validator<'a> {
@@ -37,6 +39,8 @@ impl<'a> Validator<'a> {
             Diagnostics: vec![],
             TopLevelKinds: HashMap::new(),
             InterfaceByName: HashMap::new(),
+            ShaderByName: HashMap::new(),
+            CompileAliases: HashSet::new(),
         }
     }
 
@@ -49,6 +53,7 @@ impl<'a> Validator<'a> {
                 SdslvDecl::Stream(stream) => self.ValidateStream(stream),
                 SdslvDecl::Interface(interface) => self.ValidateInterface(interface),
                 SdslvDecl::Shader(shader) => self.ValidateShader(shader),
+                SdslvDecl::Compile(compile) => self.ValidateCompile(compile),
             }
         }
     }
@@ -60,6 +65,7 @@ impl<'a> Validator<'a> {
                 SdslvDecl::Stream(x) => (&x.Name, "stream"),
                 SdslvDecl::Interface(x) => (&x.Name, "interface"),
                 SdslvDecl::Shader(x) => (&x.Name, "shader"),
+                SdslvDecl::Compile(x) => (&x.Alias, "compile"),
             };
             if let Some(existing_kind) = self.TopLevelKinds.insert(name.clone(), kind) {
                 self.err(&format!(
@@ -70,6 +76,9 @@ impl<'a> Validator<'a> {
             if let SdslvDecl::Interface(interface) = decl {
                 self.InterfaceByName
                     .insert(interface.Name.clone(), interface);
+            }
+            if let SdslvDecl::Shader(shader) = decl {
+                self.ShaderByName.insert(shader.Name.clone(), shader);
             }
         }
     }
@@ -130,6 +139,73 @@ impl<'a> Validator<'a> {
         self.ValidateShaderDuplicates(shader);
         self.ValidateStages(shader);
         self.ValidateImplementsAndOverrides(shader);
+    }
+    fn ValidateCompile(&mut self, compile: &SdslvCompileDecl) {
+        if let Some(kind) = self.TopLevelKinds.get(&compile.Alias)
+            && *kind != "compile"
+        {
+            self.err(&format!(
+                "compile alias '{}' collides with top-level declaration",
+                compile.Alias
+            ));
+        }
+        if !self.CompileAliases.insert(compile.Alias.clone()) {
+            self.err(&format!("duplicate compile alias '{}'", compile.Alias));
+        }
+        let generic_name = compile.GenericShader.Segments.join(".");
+        let Some(shader) = self.ShaderByName.get(&generic_name) else {
+            self.err(&format!(
+                "compile references unknown generic shader '{}'",
+                generic_name
+            ));
+            return;
+        };
+        let shader_name = shader.Name.clone();
+        let shader_generics = shader.GenericParameters.clone();
+        let shader_constraints = shader.Constraints.clone();
+        if shader_generics.is_empty() {
+            self.err(&format!("compile target '{}' is not generic", shader.Name));
+            return;
+        }
+        if shader_generics.len() != compile.TypeArguments.len() {
+            self.err(&format!(
+                "compile '{}' expected {} type arguments but got {}",
+                shader_name,
+                shader_generics.len(),
+                compile.TypeArguments.len()
+            ));
+            return;
+        }
+        for arg in &compile.TypeArguments {
+            let arg_name = arg.Segments.join(".");
+            if !self.ShaderByName.contains_key(&arg_name) {
+                self.err(&format!(
+                    "compile type argument '{}' is not a known shader",
+                    arg_name
+                ));
+            }
+        }
+        for constraint in &shader_constraints {
+            let Some(index) = shader_generics
+                .iter()
+                .position(|x| x == &constraint.ParameterName)
+            else {
+                continue;
+            };
+            if index >= compile.TypeArguments.len() {
+                continue;
+            }
+            let concrete_name = compile.TypeArguments[index].Segments.join(".");
+            let Some(concrete_shader) = self.ShaderByName.get(&concrete_name) else {
+                continue;
+            };
+            let implements = concrete_shader.Implements.clone();
+            for bound in &constraint.Bounds {
+                if !implements.iter().any(|x| x == bound) {
+                    self.err(&format!("compile alias '{}' constraint not satisfied: shader '{}' does not implement '{}'", compile.Alias, concrete_name, bound.Segments.join(".")));
+                }
+            }
+        }
     }
 
     fn ValidateGenericConstraints(&mut self, shader: &SdslvShaderDecl) {

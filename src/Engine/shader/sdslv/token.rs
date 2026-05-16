@@ -22,6 +22,7 @@ pub enum SdslvTokenKind {
     KeywordImplements,
     KeywordWhere,
     KeywordOverride,
+    KeywordCompile,
     KeywordLet,
     KeywordReturn,
     Identifier(String),

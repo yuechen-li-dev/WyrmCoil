@@ -25,6 +25,13 @@ pub enum SdslvDecl {
     Stream(SdslvStreamDecl),
     Interface(SdslvInterfaceDecl),
     Shader(SdslvShaderDecl),
+    Compile(SdslvCompileDecl),
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvCompileDecl {
+    pub GenericShader: SdslvPath,
+    pub TypeArguments: Vec<SdslvPath>,
+    pub Alias: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
