@@ -736,6 +736,10 @@ impl<'a> Parser<'a> {
             self.Expect(SdslvTokenKind::Semicolon, "expected ';' after return");
             return Some(SdslvStatement::Return { Value: value });
         }
+        if self.Check(SdslvTokenKind::KeywordIf) {
+            self.ErrHere("unsupported statement in SDSL-V M55 control-flow pass (if not yet enabled)");
+            return None;
+        }
         if self.Check(SdslvTokenKind::KeywordStage) || self.Check(SdslvTokenKind::KeywordFn) {
             self.ErrHere("statement form not supported in SDSL-V M4 body subset");
             return None;
@@ -744,7 +748,7 @@ impl<'a> Parser<'a> {
             Kind: SdslvTokenKind::Identifier(name),
             ..
         }) = self.Tokens.get(self.I)
-            && (name == "if" || name == "for" || name == "while" || name == "match")
+            && (name == "for" || name == "while" || name == "match")
         {
             self.ErrHere("unsupported statement in SDSL-V M4 body subset");
             return None;
@@ -920,6 +924,10 @@ impl<'a> Parser<'a> {
         Some(expr)
     }
     fn ParsePrimary(&mut self) -> Option<SdslvExpression> {
+        if self.Check(SdslvTokenKind::KeywordSwitch) {
+            self.ErrHere("switch expression is not supported in this expression context in M55");
+            return None;
+        }
         if self.MatchKw(SdslvTokenKind::LeftParen) {
             let expr = self.ParseExpression()?;
             self.Expect(
