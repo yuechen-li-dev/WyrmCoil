@@ -199,6 +199,7 @@ struct Validator<'a> {
     ShaderByName: HashMap<String, &'a SdslvShaderDecl>,
     CompileAliases: HashSet<String>,
     StreamByName: HashMap<String, &'a SdslvStreamDecl>,
+    RecordByName: HashMap<String, &'a SdslvRecordDecl>,
     MaterialFieldsByShader: HashMap<String, HashMap<String, String>>,
     AliasUnderlyingByName: HashMap<String, String>,
     SemanticAliasNames: HashSet<String>,
@@ -215,6 +216,7 @@ impl<'a> Validator<'a> {
             ShaderByName: HashMap::new(),
             CompileAliases: HashSet::new(),
             StreamByName: HashMap::new(),
+            RecordByName: HashMap::new(),
             MaterialFieldsByShader: HashMap::new(),
             AliasUnderlyingByName: HashMap::new(),
             SemanticAliasNames: HashSet::new(),
@@ -253,6 +255,9 @@ impl<'a> Validator<'a> {
             }
             if let SdslvDecl::Stream(stream) = decl {
                 self.StreamByName.insert(stream.Name.clone(), stream);
+            }
+            if let SdslvDecl::Record(record) = decl {
+                self.RecordByName.insert(record.Name.clone(), record);
             }
             if let SdslvDecl::Shader(shader) = decl {
                 let mut fields = HashMap::new();
@@ -810,6 +815,7 @@ impl<'a> Validator<'a> {
                 self.ResolveFlowExpressionType(locals, Operand)
             }
             SdslvExpression::Call { .. } => TypeRef::Unknown,
+            SdslvExpression::With { Base, .. } => self.ResolveFlowExpressionType(locals, Base),
         }
     }
     fn ValidateFlowGoto(
@@ -935,6 +941,13 @@ impl<'a> Validator<'a> {
             SdslvExpression::Unary { Operand, .. } => {
                 self.CheckExpressionCalls(shader, locals, Operand)
             }
+            SdslvExpression::With { Base, Updates } => {
+                self.CheckExpressionCalls(shader, locals, Base);
+                self.ValidateWithExpression(shader, locals, Base, Updates);
+                for update in Updates {
+                    self.CheckExpressionCalls(shader, locals, &update.Value);
+                }
+            }
             _ => {}
         }
     }
@@ -979,6 +992,66 @@ impl<'a> Validator<'a> {
             }
             SdslvExpression::Unary { Operand, .. } => {
                 self.ResolveExpressionType(shader, locals, Operand)
+            }
+            SdslvExpression::With { Base, .. } => self.ResolveExpressionType(shader, locals, Base),
+        }
+    }
+
+    fn ValidateWithExpression(
+        &mut self,
+        shader: &SdslvShaderDecl,
+        locals: &HashMap<String, TypeRef>,
+        base: &SdslvExpression,
+        updates: &[SdslvWithUpdate],
+    ) {
+        let base_type = self.ResolveExpressionType(shader, locals, base);
+        let Some(base_name) = base_type.Name() else {
+            self.err("with expression base must be record or stream type");
+            return;
+        };
+        let field_types: HashMap<String, TypeRef> =
+            if let Some(r) = self.RecordByName.get(base_name) {
+                r.Fields
+                    .iter()
+                    .map(|f| (f.Name.clone(), self.PathToType(&f.TypeName)))
+                    .collect()
+            } else if let Some(s) = self.StreamByName.get(base_name) {
+                s.Fields
+                    .iter()
+                    .map(|f| (f.Name.clone(), self.PathToType(&f.TypeName)))
+                    .collect()
+            } else {
+                HashMap::new()
+            };
+        if field_types.is_empty() {
+            self.err("with expression base must be record or stream type");
+            return;
+        }
+        let mut seen = HashSet::new();
+        for update in updates {
+            if !seen.insert(update.Field.clone()) {
+                self.err(&format!(
+                    "duplicate with field update '{}' in type '{}'",
+                    update.Field, base_name
+                ));
+                continue;
+            }
+            let expected = field_types.get(&update.Field).cloned();
+            let Some(expected_type) = expected else {
+                self.err(&format!(
+                    "with field '{}' does not exist on type '{}'",
+                    update.Field, base_name
+                ));
+                continue;
+            };
+            let actual = self.ResolveExpressionType(shader, locals, &update.Value);
+            if let Some((_, expected_name, actual_name)) =
+                self.TypeMismatch("", &expected_type, &actual)
+            {
+                self.err(&format!(
+                    "with field '{}' on type '{}' expects {}, found {}",
+                    update.Field, base_name, expected_name, actual_name
+                ));
             }
         }
     }

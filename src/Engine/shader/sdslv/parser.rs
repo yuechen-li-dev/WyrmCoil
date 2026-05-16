@@ -882,6 +882,37 @@ impl<'a> Parser<'a> {
                     Callee: Box::new(expr),
                     Arguments: args,
                 };
+            } else if self.match_kw(SdslvTokenKind::KeywordWith) {
+                self.expect(SdslvTokenKind::LeftBrace, "expected '{' after with keyword");
+                let mut updates = Vec::new();
+                loop {
+                    let field = self.ident_req("expected field name in with expression")?;
+                    self.expect(SdslvTokenKind::Colon, "expected ':' after with field name");
+                    let value = self.parse_expression()?;
+                    updates.push(SdslvWithUpdate {
+                        Field: field,
+                        Value: value,
+                    });
+                    if self.match_kw(SdslvTokenKind::Comma) {
+                        if self.check(SdslvTokenKind::RightBrace) {
+                            break;
+                        }
+                        continue;
+                    }
+                    break;
+                }
+                if updates.is_empty() {
+                    self.err_here("with expression requires at least one field update");
+                    return None;
+                }
+                self.expect(
+                    SdslvTokenKind::RightBrace,
+                    "expected '}' after with updates",
+                );
+                expr = SdslvExpression::With {
+                    Base: Box::new(expr),
+                    Updates: updates,
+                };
             } else {
                 break;
             }

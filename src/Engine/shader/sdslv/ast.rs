@@ -225,6 +225,16 @@ pub enum SdslvExpression {
         Operator: SdslvUnaryOperator,
         Operand: Box<SdslvExpression>,
     },
+    With {
+        Base: Box<SdslvExpression>,
+        Updates: Vec<SdslvWithUpdate>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvWithUpdate {
+    pub Field: String,
+    pub Value: SdslvExpression,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -33,6 +33,7 @@ pub enum SdslvTokenKind {
     KeywordGoto,
     KeywordLet,
     KeywordReturn,
+    KeywordWith,
     Identifier(String),
     IntegerLiteral(String),
     FloatLiteral(String),

@@ -117,8 +117,20 @@ Current record lowering behavior:
 - record fields do not receive `SV_Position`/`TEXCOORDn` semantics.
 - record types are valid in function parameter/return/local type positions where current type handling already applies.
 
+`with` copy-update expressions (M53b):
+- syntax: `base with { Field: value, ... }`
+- base type must resolve to a `record` or `stream`.
+- duplicate update fields are rejected.
+- unknown update fields are rejected.
+- field value type compatibility uses existing bounded M6 checks.
+- result type is the same as the base expression type.
+
+Current bounded emission support:
+- local declaration initializers
+- assignment RHS
+- return expressions (lowered through deterministic `__withN` temporaries)
+
 Future work:
-- `with` expressions are not implemented yet.
 - broader stream/record immutability rules are not implemented yet.
 
 ## 5) Coordinate-space aliases
