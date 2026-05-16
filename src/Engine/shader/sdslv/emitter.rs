@@ -101,7 +101,7 @@ impl<'a> HlslEmitter<'a> {
 
             let semantic = if self.IsPositionField(field) {
                 if sv_position_emitted {
-                    self.err(&format!(
+                    self.Err(&format!(
                         "stream '{}' has duplicate field mapping to SV_Position",
                         stream.Name
                     ));
@@ -252,7 +252,7 @@ impl<'a> HlslEmitter<'a> {
     fn EmitStageMethod(&mut self, shader: &SdslvShaderDecl, method: &SdslvFunctionDecl) {
         let stage_name = method.Stage.clone().unwrap_or_default();
         if stage_name == "compute" {
-            self.err(&format!(
+            self.Err(&format!(
                 "unsupported stage 'compute' for HLSL M3 emission in shader '{}'",
                 shader.Name
             ));
@@ -478,7 +478,7 @@ impl<'a> HlslEmitter<'a> {
 
     fn ResolveTypeName(&mut self, type_name: &str, depth: usize) -> Option<String> {
         if depth > 8 {
-            self.err(&format!(
+            self.Err(&format!(
                 "type alias cycle or depth limit on '{}'",
                 type_name
             ));
@@ -497,7 +497,7 @@ impl<'a> HlslEmitter<'a> {
             return Some(type_name.to_string());
         }
 
-        self.err(&format!("unknown type '{}' in HLSL emission", type_name));
+        self.Err(&format!("unknown type '{}' in HLSL emission", type_name));
         None
     }
 
@@ -539,7 +539,7 @@ impl<'a> HlslEmitter<'a> {
             return;
         };
         if !Self::IsLowerableValueType(&return_type) {
-            self.err(&format!("flow '{}' returns '{}', which cannot be lowered to an HLSL value function in SDSL-V M13", flow.Name, flow.ReturnType.Segments.join(".")));
+            self.Err(&format!("flow '{}' returns '{}', which cannot be lowered to an HLSL value function in SDSL-V M13", flow.Name, flow.ReturnType.Segments.join(".")));
             return;
         }
         let mut state_by_name = HashMap::new();
@@ -547,7 +547,7 @@ impl<'a> HlslEmitter<'a> {
             state_by_name.insert(state.Name.clone(), state);
         }
         if let Some(cycle_state) = self.FindFlowCycle(flow, &state_by_name) {
-            self.err(&format!(
+            self.Err(&format!(
                 "flow '{}' contains a state cycle involving '{}'",
                 flow.Name, cycle_state
             ));
@@ -556,7 +556,7 @@ impl<'a> HlslEmitter<'a> {
         let mut memo = HashMap::new();
         for state in &flow.States {
             if !self.StateAlwaysReturns(flow, state, &state_by_name, &mut memo) {
-                self.err(&format!(
+                self.Err(&format!(
                     "flow '{}' has a non-returning path through state '{}'",
                     flow.Name, state.Name
                 ));
@@ -582,7 +582,7 @@ impl<'a> HlslEmitter<'a> {
                     return;
                 };
                 let Some(default) = Self::DefaultValueForType(&mapped) else {
-                    self.err(&format!("flow '{}' board field '{}' of type '{}' cannot be lowered with a default value in SDSL-V M13", flow.Name, field.Name, field.TypeName.Segments.join(".")));
+                    self.Err(&format!("flow '{}' board field '{}' of type '{}' cannot be lowered with a default value in SDSL-V M13", flow.Name, field.Name, field.TypeName.Segments.join(".")));
                     return;
                 };
                 self.Lines
@@ -629,7 +629,7 @@ impl<'a> HlslEmitter<'a> {
                     let name = path.Segments.join(".");
                     if let Some(target) = ctx.StateByName.get(&name).copied() {
                         if !ctx.Visiting.insert(name.clone()) {
-                            self.err(&format!(
+                            self.Err(&format!(
                                 "flow '{}' contains a state cycle involving '{}'",
                                 flow.Name, name
                             ));
@@ -638,7 +638,7 @@ impl<'a> HlslEmitter<'a> {
                         self.EmitFlowStateStatements(flow, &target.Statements, indent, ctx);
                         ctx.Visiting.remove(&name);
                     } else {
-                        self.err(&format!(
+                        self.Err(&format!(
                             "goto targets unknown state '{}' in flow '{}'",
                             name, flow.Name
                         ));
@@ -683,7 +683,7 @@ impl<'a> HlslEmitter<'a> {
                 let name = path.Segments.join(".");
                 if let Some(target) = ctx.StateByName.get(&name).copied() {
                     if !ctx.Visiting.insert(name.clone()) {
-                        self.err(&format!(
+                        self.Err(&format!(
                             "flow '{}' contains a state cycle involving '{}'",
                             flow.Name, name
                         ));
@@ -692,7 +692,7 @@ impl<'a> HlslEmitter<'a> {
                     self.EmitFlowStateStatements(flow, &target.Statements, indent, ctx);
                     ctx.Visiting.remove(&name);
                 } else {
-                    self.err(&format!(
+                    self.Err(&format!(
                         "goto targets unknown state '{}' in flow '{}'",
                         name, flow.Name
                     ));
@@ -886,7 +886,7 @@ impl<'a> HlslEmitter<'a> {
         "    ".repeat(level)
     }
 
-    fn err(&mut self, message: &str) {
+    fn Err(&mut self, message: &str) {
         self.Diagnostics
             .push(SdslvDiagnostic::New(message, Self::UnknownSpan()));
     }

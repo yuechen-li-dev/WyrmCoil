@@ -105,7 +105,7 @@ fn execute_statement(
             let value = if let Some(initializer) = Initializer {
                 eval_expression(initializer, env)?
             } else {
-                default_value_for_type(TypeName).ok_or_else(|| SdslvAssertFailure {
+                DefaultValueForType(TypeName).ok_or_else(|| SdslvAssertFailure {
                     Message: format!("let '{Name}' requires initializer or supported default type"),
                     Span: None,
                 })?
@@ -159,7 +159,7 @@ fn execute_assert_expression(
         "Equals" => {
             let actual = eval_expression(&arguments[0], env)?;
             let expected = eval_expression(&arguments[1], env)?;
-            if !runtime_equals(&actual, &expected) {
+            if !RuntimeEquals(&actual, &expected) {
                 failures.push(SdslvAssertFailure {
                     Message: format!("Assert.Equals failed: {custom_message}"),
                     Span: None,
@@ -171,7 +171,7 @@ fn execute_assert_expression(
             let actual = eval_expression(&arguments[0], env)?;
             let expected = eval_expression(&arguments[1], env)?;
             let tolerance = eval_expression(&arguments[2], env)?;
-            let (a, e, t) = (as_f32(&actual)?, as_f32(&expected)?, as_f32(&tolerance)?);
+            let (a, e, t) = (AsF32(&actual)?, AsF32(&expected)?, AsF32(&tolerance)?);
             if (a - e).abs() > t {
                 failures.push(SdslvAssertFailure {
                     Message: format!("Assert.Near failed: {custom_message}"),
@@ -278,9 +278,9 @@ fn eval_expression(
         } => {
             let left = eval_expression(Left, env)?;
             let right = eval_expression(Right, env)?;
-            eval_binary(&left, *Operator, &right)
+            EvalBinary(&left, *Operator, &right)
         }
-        SdslvExpression::Call { Callee, Arguments } => eval_call(Callee, Arguments, env),
+        SdslvExpression::Call { Callee, Arguments } => EvalCall(Callee, Arguments, env),
         SdslvExpression::FieldAccess { .. } => Err(SdslvAssertFailure {
             Message: "field access is not supported in SDSL-V M7b expression evaluation"
                 .to_string(),
@@ -294,26 +294,26 @@ fn eval_expression(
     }
 }
 
-fn eval_binary(
+fn EvalBinary(
     left: &RuntimeValue,
     operator: SdslvBinaryOperator,
     right: &RuntimeValue,
 ) -> Result<RuntimeValue, SdslvAssertFailure> {
     match operator {
-        SdslvBinaryOperator::Add => numeric_binary(left, right, |a, b| a + b, |a, b| a + b),
-        SdslvBinaryOperator::Subtract => numeric_binary(left, right, |a, b| a - b, |a, b| a - b),
-        SdslvBinaryOperator::Multiply => numeric_binary(left, right, |a, b| a * b, |a, b| a * b),
-        SdslvBinaryOperator::Divide => numeric_binary(left, right, |a, b| a / b, |a, b| a / b),
-        SdslvBinaryOperator::Equal => Ok(RuntimeValue::Bool(runtime_equals(left, right))),
-        SdslvBinaryOperator::NotEqual => Ok(RuntimeValue::Bool(!runtime_equals(left, right))),
-        SdslvBinaryOperator::Less => compare_numeric(left, right, |a, b| a < b),
-        SdslvBinaryOperator::LessEqual => compare_numeric(left, right, |a, b| a <= b),
-        SdslvBinaryOperator::Greater => compare_numeric(left, right, |a, b| a > b),
-        SdslvBinaryOperator::GreaterEqual => compare_numeric(left, right, |a, b| a >= b),
+        SdslvBinaryOperator::Add => NumericBinary(left, right, |a, b| a + b, |a, b| a + b),
+        SdslvBinaryOperator::Subtract => NumericBinary(left, right, |a, b| a - b, |a, b| a - b),
+        SdslvBinaryOperator::Multiply => NumericBinary(left, right, |a, b| a * b, |a, b| a * b),
+        SdslvBinaryOperator::Divide => NumericBinary(left, right, |a, b| a / b, |a, b| a / b),
+        SdslvBinaryOperator::Equal => Ok(RuntimeValue::Bool(RuntimeEquals(left, right))),
+        SdslvBinaryOperator::NotEqual => Ok(RuntimeValue::Bool(!RuntimeEquals(left, right))),
+        SdslvBinaryOperator::Less => CompareNumeric(left, right, |a, b| a < b),
+        SdslvBinaryOperator::LessEqual => CompareNumeric(left, right, |a, b| a <= b),
+        SdslvBinaryOperator::Greater => CompareNumeric(left, right, |a, b| a > b),
+        SdslvBinaryOperator::GreaterEqual => CompareNumeric(left, right, |a, b| a >= b),
     }
 }
 
-fn eval_call(
+fn EvalCall(
     callee: &SdslvExpression,
     arguments: &Vec<SdslvExpression>,
     env: &HashMap<String, RuntimeValue>,
@@ -329,18 +329,18 @@ fn eval_call(
         values.push(eval_expression(argument, env)?);
     }
     match name.as_str() {
-        "abs" if values.len() == 1 => Ok(RuntimeValue::F32(as_f32(&values[0])?.abs())),
+        "abs" if values.len() == 1 => Ok(RuntimeValue::F32(AsF32(&values[0])?.abs())),
         "min" if values.len() == 2 => Ok(RuntimeValue::F32(
-            as_f32(&values[0])?.min(as_f32(&values[1])?),
+            AsF32(&values[0])?.min(AsF32(&values[1])?),
         )),
         "max" if values.len() == 2 => Ok(RuntimeValue::F32(
-            as_f32(&values[0])?.max(as_f32(&values[1])?),
+            AsF32(&values[0])?.max(AsF32(&values[1])?),
         )),
         "clamp" if values.len() == 3 => Ok(RuntimeValue::F32(
-            as_f32(&values[0])?.clamp(as_f32(&values[1])?, as_f32(&values[2])?),
+            AsF32(&values[0])?.clamp(AsF32(&values[1])?, AsF32(&values[2])?),
         )),
         "saturate" if values.len() == 1 => {
-            Ok(RuntimeValue::F32(as_f32(&values[0])?.clamp(0.0, 1.0)))
+            Ok(RuntimeValue::F32(AsF32(&values[0])?.clamp(0.0, 1.0)))
         }
         _ => Err(SdslvAssertFailure {
             Message: format!("unsupported function call '{name}' in SDSL-V M7b evaluator"),
@@ -349,7 +349,7 @@ fn eval_call(
     }
 }
 
-fn numeric_binary(
+fn NumericBinary(
     left: &RuntimeValue,
     right: &RuntimeValue,
     f32_op: fn(f32, f32) -> f32,
@@ -357,17 +357,17 @@ fn numeric_binary(
 ) -> Result<RuntimeValue, SdslvAssertFailure> {
     match (left, right) {
         (RuntimeValue::I32(a), RuntimeValue::I32(b)) => Ok(RuntimeValue::I32(i32_op(*a, *b))),
-        _ => Ok(RuntimeValue::F32(f32_op(as_f32(left)?, as_f32(right)?))),
+        _ => Ok(RuntimeValue::F32(f32_op(AsF32(left)?, AsF32(right)?))),
     }
 }
-fn compare_numeric(
+fn CompareNumeric(
     left: &RuntimeValue,
     right: &RuntimeValue,
     op: fn(f32, f32) -> bool,
 ) -> Result<RuntimeValue, SdslvAssertFailure> {
-    Ok(RuntimeValue::Bool(op(as_f32(left)?, as_f32(right)?)))
+    Ok(RuntimeValue::Bool(op(AsF32(left)?, AsF32(right)?)))
 }
-fn as_f32(value: &RuntimeValue) -> Result<f32, SdslvAssertFailure> {
+fn AsF32(value: &RuntimeValue) -> Result<f32, SdslvAssertFailure> {
     match value {
         RuntimeValue::I32(x) => Ok(*x as f32),
         RuntimeValue::F32(x) => Ok(*x),
@@ -377,7 +377,7 @@ fn as_f32(value: &RuntimeValue) -> Result<f32, SdslvAssertFailure> {
         }),
     }
 }
-fn runtime_equals(left: &RuntimeValue, right: &RuntimeValue) -> bool {
+fn RuntimeEquals(left: &RuntimeValue, right: &RuntimeValue) -> bool {
     match (left, right) {
         (RuntimeValue::Bool(a), RuntimeValue::Bool(b)) => a == b,
         (RuntimeValue::I32(a), RuntimeValue::I32(b)) => a == b,
@@ -387,7 +387,7 @@ fn runtime_equals(left: &RuntimeValue, right: &RuntimeValue) -> bool {
     }
 }
 
-fn default_value_for_type(type_name: &SdslvPath) -> Option<RuntimeValue> {
+fn DefaultValueForType(type_name: &SdslvPath) -> Option<RuntimeValue> {
     let name = type_name.Segments.last()?.as_str();
     match name {
         "bool" => Some(RuntimeValue::Bool(false)),

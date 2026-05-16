@@ -36,104 +36,104 @@ impl<'a> Lexer<'a> {
         while self.I < self.S.len() {
             let c = self.S[self.I] as char;
             if c.is_whitespace() {
-                self.bump(c);
+                self.Bump(c);
                 continue;
             }
-            if c == '/' && self.peek(1) == Some('/') {
+            if c == '/' && self.Peek(1) == Some('/') {
                 while self.I < self.S.len() && self.S[self.I] as char != '\n' {
-                    self.bump(self.S[self.I] as char);
+                    self.Bump(self.S[self.I] as char);
                 }
                 continue;
             }
-            if c == '/' && self.peek(1) == Some('*') {
-                self.bump('/');
-                self.bump('*');
+            if c == '/' && self.Peek(1) == Some('*') {
+                self.Bump('/');
+                self.Bump('*');
                 while self.I + 1 < self.S.len()
                     && !(self.S[self.I] as char == '*' && self.S[self.I + 1] as char == '/')
                 {
-                    self.bump(self.S[self.I] as char);
+                    self.Bump(self.S[self.I] as char);
                 }
                 if self.I + 1 < self.S.len() {
-                    self.bump('*');
-                    self.bump('/');
+                    self.Bump('*');
+                    self.Bump('/');
                 }
                 continue;
             }
-            let st = self.span_start();
+            let st = self.SpanStart();
             if c.is_ascii_alphabetic() || c == '_' {
                 let text = self.take_while(|x| x.is_ascii_alphanumeric() || x == '_');
-                self.push(self.keyword_or_ident(&text), st);
+                self.Push(self.KeywordOrIdent(&text), st);
                 continue;
             }
             if c.is_ascii_digit() {
                 let num = self.take_while(|x| x.is_ascii_digit());
-                if self.peek(0) == Some('.')
-                    && self.peek(1).map(|x| x.is_ascii_digit()).unwrap_or(false)
+                if self.Peek(0) == Some('.')
+                    && self.Peek(1).map(|x| x.is_ascii_digit()).unwrap_or(false)
                 {
-                    self.bump('.');
+                    self.Bump('.');
                     let frac = self.take_while(|x| x.is_ascii_digit());
-                    self.push(SdslvTokenKind::FloatLiteral(format!("{num}.{frac}")), st);
+                    self.Push(SdslvTokenKind::FloatLiteral(format!("{num}.{frac}")), st);
                 } else {
-                    self.push(SdslvTokenKind::IntegerLiteral(num), st);
+                    self.Push(SdslvTokenKind::IntegerLiteral(num), st);
                 }
                 continue;
             }
             if c == '"' {
-                self.bump('"');
+                self.Bump('"');
                 let mut text = String::new();
                 while self.I < self.S.len() {
                     let ch = self.S[self.I] as char;
                     if ch == '"' {
-                        self.bump('"');
+                        self.Bump('"');
                         break;
                     }
                     if ch == '\n' {
                         self.Diagnostics.push(SdslvDiagnostic::New(
                             "unterminated string literal",
-                            self.span(st, self.I),
+                            self.Span(st, self.I),
                         ));
                         break;
                     }
                     text.push(ch);
-                    self.bump(ch);
+                    self.Bump(ch);
                 }
-                if self.I >= self.S.len() && self.peek(0).is_none() {
+                if self.I >= self.S.len() && self.Peek(0).is_none() {
                     self.Diagnostics.push(SdslvDiagnostic::New(
                         "unterminated string literal",
-                        self.span(st, self.I),
+                        self.Span(st, self.I),
                     ));
                 }
-                self.push(SdslvTokenKind::StringLiteral(text), st);
+                self.Push(SdslvTokenKind::StringLiteral(text), st);
                 continue;
             }
-            if c == '=' && self.peek(1) == Some('=') {
-                self.bump('=');
-                self.bump('=');
-                self.push(SdslvTokenKind::DoubleEquals, st);
+            if c == '=' && self.Peek(1) == Some('=') {
+                self.Bump('=');
+                self.Bump('=');
+                self.Push(SdslvTokenKind::DoubleEquals, st);
                 continue;
             }
-            if c == '!' && self.peek(1) == Some('=') {
-                self.bump('!');
-                self.bump('=');
-                self.push(SdslvTokenKind::BangEquals, st);
+            if c == '!' && self.Peek(1) == Some('=') {
+                self.Bump('!');
+                self.Bump('=');
+                self.Push(SdslvTokenKind::BangEquals, st);
                 continue;
             }
-            if c == '<' && self.peek(1) == Some('=') {
-                self.bump('<');
-                self.bump('=');
-                self.push(SdslvTokenKind::LeftAngleEquals, st);
+            if c == '<' && self.Peek(1) == Some('=') {
+                self.Bump('<');
+                self.Bump('=');
+                self.Push(SdslvTokenKind::LeftAngleEquals, st);
                 continue;
             }
-            if c == '>' && self.peek(1) == Some('=') {
-                self.bump('>');
-                self.bump('=');
-                self.push(SdslvTokenKind::RightAngleEquals, st);
+            if c == '>' && self.Peek(1) == Some('=') {
+                self.Bump('>');
+                self.Bump('=');
+                self.Push(SdslvTokenKind::RightAngleEquals, st);
                 continue;
             }
-            if c == '-' && self.peek(1) == Some('>') {
-                self.bump('-');
-                self.bump('>');
-                self.push(SdslvTokenKind::Arrow, st);
+            if c == '-' && self.Peek(1) == Some('>') {
+                self.Bump('-');
+                self.Bump('>');
+                self.Push(SdslvTokenKind::Arrow, st);
                 continue;
             }
             let kind = match c {
@@ -158,18 +158,18 @@ impl<'a> Lexer<'a> {
                 _ => None,
             };
             if let Some(k) = kind {
-                self.bump(c);
-                self.push(k, st);
+                self.Bump(c);
+                self.Push(k, st);
             } else {
                 self.Diagnostics.push(SdslvDiagnostic::New(
                     &format!("invalid character '{c}'"),
-                    self.span(st, self.I + 1),
+                    self.Span(st, self.I + 1),
                 ));
-                self.bump(c);
+                self.Bump(c);
             }
         }
     }
-    fn keyword_or_ident(&self, t: &str) -> SdslvTokenKind {
+    fn KeywordOrIdent(&self, t: &str) -> SdslvTokenKind {
         match t {
             "namespace" => SdslvTokenKind::KeywordNamespace,
             "use" => SdslvTokenKind::KeywordUse,
@@ -198,10 +198,10 @@ impl<'a> Lexer<'a> {
             _ => SdslvTokenKind::Identifier(t.to_string()),
         }
     }
-    fn span_start(&self) -> (usize, usize, usize) {
+    fn SpanStart(&self) -> (usize, usize, usize) {
         (self.I, self.Line, self.Col)
     }
-    fn span(&self, s: (usize, usize, usize), e: usize) -> SdslvSpan {
+    fn Span(&self, s: (usize, usize, usize), e: usize) -> SdslvSpan {
         SdslvSpan {
             Start: s.0,
             End: e,
@@ -209,13 +209,13 @@ impl<'a> Lexer<'a> {
             Column: s.2,
         }
     }
-    fn push(&mut self, kind: SdslvTokenKind, s: (usize, usize, usize)) {
+    fn Push(&mut self, kind: SdslvTokenKind, s: (usize, usize, usize)) {
         self.Tokens.push(SdslvToken {
             Kind: kind,
-            Span: self.span(s, self.I),
+            Span: self.Span(s, self.I),
         });
     }
-    fn peek(&self, o: usize) -> Option<char> {
+    fn Peek(&self, o: usize) -> Option<char> {
         self.S.get(self.I + o).map(|b| *b as char)
     }
     fn take_while<F: Fn(char) -> bool>(&mut self, f: F) -> String {
@@ -223,11 +223,11 @@ impl<'a> Lexer<'a> {
         while self.I < self.S.len() && f(self.S[self.I] as char) {
             let c = self.S[self.I] as char;
             out.push(c);
-            self.bump(c);
+            self.Bump(c);
         }
         out
     }
-    fn bump(&mut self, c: char) {
+    fn Bump(&mut self, c: char) {
         self.I += 1;
         if c == '\n' {
             self.Line += 1;
