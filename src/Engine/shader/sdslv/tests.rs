@@ -1051,7 +1051,10 @@ flow F(board: i32) -> i32 {
     state A { return 1; }
 }
 "#;
-    assert!(ParseSource(src).is_err(), "flow parameter name 'board' should be rejected");
+    assert!(
+        ParseSource(src).is_err(),
+        "flow parameter name 'board' should be rejected"
+    );
 }
 
 #[test]
