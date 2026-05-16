@@ -82,6 +82,24 @@ M21 remains intentionally narrow:
 
 This milestone is a resource descriptor scaffold only, preserving GPU-free testability in normal `cargo test` runs.
 
+
+## M31 optional `wgpu` render pass / draw-command probe
+
+M31 adds a narrow optional draw-command recording seam while preserving GPU-free default tests:
+
+- `ValidateWgpuDrawInputs(...)` validates `RenderCommandPlan` draw intent against plain pipeline/vertex metadata (status, vertex count, stride, pipeline name, and `u32` draw-range fit) with deterministic structured errors.
+- `RecordWgpuDrawCommand(...)` records a minimal color-only render pass and `draw(0..vertex_count, 0..1)` into a caller-supplied `wgpu::CommandEncoder` when the caller also supplies compatible `WgpuRenderPipelineResource`, `WgpuVertexBufferResource`, and `wgpu::TextureView`.
+- The helper does not create devices, windows, surfaces, or swapchains, and does not submit command buffers; queue/submission ownership remains caller-controlled.
+
+M31 intentionally remains narrow:
+
+- no window/surface/swapchain integration
+- no bind-group/material/reflection system
+- no render graph rollout
+- no index-buffer, depth-pass, or multi-pass submission policy
+
+`RenderCommandPlan` remains the draw-intent source from M29, and normal `cargo test` stays GPU-free by testing validation/planning behavior without constructing real `wgpu` runtime objects.
+
 ## M30 optional `wgpu` render-pipeline creation probe
 
 M30 adds a narrow optional seam for real `wgpu::RenderPipeline` creation while keeping normal tests GPU-free:
