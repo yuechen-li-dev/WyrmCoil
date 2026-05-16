@@ -90,6 +90,25 @@ This milestone is a resource descriptor scaffold only, preserving GPU-free testa
 
 
 
+
+## M40 `winit` + `wgpu` surface configuration seam
+
+M40 adds a narrow backend-specific `wgpu` surface configuration seam without introducing a render loop or on-surface drawing:
+
+- `SurfaceSize`, `WgpuSurfaceConfigPreferences`, `WgpuSurfaceCapabilitiesInfo`, and `WgpuSurfaceConfigPlan` provide deterministic CPU-testable planning inputs/outputs.
+- `BuildWgpuSurfaceConfigPlan(...)` validates dimensions/capabilities and selects format/present/alpha modes deterministically (`PreferSrgb`, explicit present-mode support check, `Fifo` default when available, first alpha mode).
+- `BuildWgpuSurfaceConfiguration(...)` converts a validated plan into a concrete `wgpu::SurfaceConfiguration` for backend application.
+- Optional ignored/env-gated integration probe (`tests/winit_wgpu_surface_probe.rs`) creates a `winit` window, `wgpu` instance/surface, adapter/device, computes plan from real capabilities, and calls `surface.configure(...)` with no draw pass and no frame loop.
+
+M40 intentionally remains narrow:
+
+- no draw-to-surface pass
+- no acquire/present loop ownership
+- no resize handling lifecycle
+- no full `winit` event-loop integration
+
+Default `cargo test` remains GPU/window-free; real window/surface probing stays opt-in via `#[ignore]` and `WYRMCOIL_RUN_WGPU_TESTS=1`.
+
 ## M39 optional headless WGSL draw smoke probe
 
 M39 adds an optional real-device headless WGSL smoke probe while preserving GPU-free default tests:
