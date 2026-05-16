@@ -41,6 +41,24 @@ This pass establishes explicit timing domains and counters (`ControlTick`, `Simu
 
 
 
+
+## M7 real `winit` window/input shell
+
+M7 keeps the existing engine-owned timing contract while adding the first real platform event source via `winit`.
+
+- `Engine::backend::winit` maps selected `winit` keyboard keys into `PlatformInput` (`Right/D`, `Left/A`, `Space`, `Q`, `E`).
+- The backend then reuses `TranslatePlatformInput(...)` to produce normalized `InputEvent` values.
+- Platform events are only allowed to enqueue normalized input (`EnqueueInput` path).
+- Queueing from the `winit` boundary does not advance `ControlTick`, `SimulationTick`, or `RenderFrame`.
+- Queueing from the `winit` boundary does not mutate world stores directly.
+- `TickControl()` remains the sole mailbox bridge boundary.
+
+Intentional non-goals remain explicit:
+
+- No renderer backend and no `wgpu` integration.
+- No shader language/compiler pipeline.
+- No physics backend or ECS framework.
+- No render-frame-owned simulation cadence.
 ## M6 window/input backend scaffold
 
 M6 adds the first platform-facing backend boundary without adding a renderer or full app loop.

@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use winit::event::ElementState;
+use winit::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
 use wyrmcoil::Engine as wyrmcoil_engine;
 
 #[test]
@@ -37,6 +39,59 @@ fn PlatformInputTranslationMapsSelectedKeysToNormalizedInputEvents() {
 }
 
 #[test]
+fn WinitKeyTranslationMapsSelectedKeysToPlatformInputs() {
+    assert_eq!(
+        wyrmcoil_engine::TranslateWinitKeyCode(KeyCode::ArrowRight, ElementState::Pressed),
+        Some(wyrmcoil_engine::PlatformInput::KeyPressed(
+            wyrmcoil_engine::PlatformKey::Right
+        ))
+    );
+    assert_eq!(
+        wyrmcoil_engine::TranslateWinitKeyCode(KeyCode::KeyD, ElementState::Pressed),
+        Some(wyrmcoil_engine::PlatformInput::KeyPressed(
+            wyrmcoil_engine::PlatformKey::Right
+        ))
+    );
+    assert_eq!(
+        wyrmcoil_engine::TranslateWinitKeyCode(KeyCode::ArrowLeft, ElementState::Pressed),
+        Some(wyrmcoil_engine::PlatformInput::KeyPressed(
+            wyrmcoil_engine::PlatformKey::Left
+        ))
+    );
+    assert_eq!(
+        wyrmcoil_engine::TranslateWinitKeyCode(KeyCode::Space, ElementState::Pressed),
+        Some(wyrmcoil_engine::PlatformInput::KeyPressed(
+            wyrmcoil_engine::PlatformKey::Stop
+        ))
+    );
+    assert_eq!(
+        wyrmcoil_engine::TranslateWinitKeyCode(KeyCode::KeyQ, ElementState::Pressed),
+        Some(wyrmcoil_engine::PlatformInput::KeyPressed(
+            wyrmcoil_engine::PlatformKey::AlertGuard
+        ))
+    );
+    assert_eq!(
+        wyrmcoil_engine::TranslateWinitKeyCode(KeyCode::KeyE, ElementState::Pressed),
+        Some(wyrmcoil_engine::PlatformInput::KeyPressed(
+            wyrmcoil_engine::PlatformKey::NudgeGuard
+        ))
+    );
+    assert_eq!(
+        wyrmcoil_engine::TranslateWinitKeyCode(KeyCode::F1, ElementState::Pressed),
+        Some(wyrmcoil_engine::PlatformInput::KeyPressed(
+            wyrmcoil_engine::PlatformKey::Unknown
+        ))
+    );
+    assert_eq!(
+        wyrmcoil_engine::TranslateWinitPhysicalKey(
+            PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
+            ElementState::Pressed,
+        ),
+        None
+    );
+}
+
+#[test]
 fn QueueTranslatedInputBridgesToEngineQueueWithoutTickingClocks() {
     let mut engine = wyrmcoil_engine::Engine::New();
     let before = engine.Clock();
@@ -69,6 +124,34 @@ fn QueueTranslatedInputBridgesToEngineQueueWithoutTickingClocks() {
         before,
         "backend enqueue helpers must not advance control, simulation, or render clocks"
     );
+}
+
+#[test]
+fn QueueWinitPhysicalKeyBridgesToEngineWithoutTickingOrWorldMutation() {
+    let mut engine = wyrmcoil_engine::Engine::New();
+    let before_clock = engine.Clock();
+    let before_world = engine.World.clone();
+
+    let queued = wyrmcoil_engine::QueueWinitPhysicalKey(
+        &mut engine,
+        PhysicalKey::Code(KeyCode::ArrowRight),
+        ElementState::Pressed,
+    );
+    let ignored = wyrmcoil_engine::QueueWinitPhysicalKey(
+        &mut engine,
+        PhysicalKey::Code(KeyCode::F1),
+        ElementState::Pressed,
+    );
+
+    assert_eq!(queued, true);
+    assert_eq!(ignored, false);
+    assert_eq!(engine.InputQueueLen(), 1);
+    assert_eq!(
+        engine.InputQueueSnapshot(),
+        vec![wyrmcoil_engine::InputEvent::MoveRightPressed]
+    );
+    assert_eq!(engine.Clock(), before_clock);
+    assert_eq!(engine.World, before_world);
 }
 
 #[test]
