@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use crate::Dunewyrm::SelectHighestUtilityTarget;
+use crate::Dunewyrm::SelectHighestUtilityTargetWithReport;
 use crate::Engine::render::VertexBufferUploadPlan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,7 +180,7 @@ pub fn PlanVertexBuffering(
         scored_modes.push((BufferingMode::SerialJitSurvival, 0.3_f32));
     }
 
-    let selected = SelectHighestUtilityTarget(&scored_modes).map(|entry| entry.0);
+    let selected = SelectHighestUtilityTargetWithReport(&scored_modes).Selected;
 
     match selected {
         Some(BufferingMode::FixedDoubleDefault) => Decision(
@@ -443,14 +443,15 @@ mod tests {
 
     #[test]
     fn UsesDunewyrmUtilitySelectionHelper() {
-        let winner = SelectHighestUtilityTarget(&[
+        let winner = SelectHighestUtilityTargetWithReport(&[
             (BufferingMode::PullLagPressure, 0.7),
             (BufferingMode::FixedDoubleDefault, 1.0),
-        ]);
+        ])
+        .Selected;
         assert_eq!(
             winner,
-            Some((BufferingMode::FixedDoubleDefault, 1.0)),
-            "planner selection should flow through Dunewyrm utility max-score helper"
+            Some(BufferingMode::FixedDoubleDefault),
+            "planner selection should flow through Dunewyrm utility report helper"
         );
     }
 }
