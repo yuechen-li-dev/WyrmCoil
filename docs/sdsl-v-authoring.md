@@ -461,3 +461,31 @@ Still out of scope in M18:
 - no `wgpu::RenderPipeline` creation
 - no shader reflection or bind-layout extraction
 - no material/asset pipeline integration
+
+## 18) M19 renderer resource descriptor scaffold boundary
+
+M19 adds a deterministic renderer-side descriptor conversion from M18 compiled shader outputs:
+
+```text
+RenderPipelinePlan + CompiledPipelineShaders
+→ BuildCompiledPipelineDesc(...)
+→ CompiledPipelineDesc
+```
+
+APIs in `Engine::render`:
+- `CompiledShaderModuleDesc` (`EntryPoint`, `TargetProfile`, `SpirvBytes`)
+- `CompiledPipelineDesc` (`Name`, `SourceName`, `Vertex`, `Pixel`)
+- `CompiledPipelineDescError`
+- `BuildCompiledPipelineDesc(plan, compiled)`
+
+Behavior notes:
+- descriptor creation is plain-data only and does not require `wgpu::Device`, windows, or GPU presence.
+- vertex/pixel compiled byte payloads must be non-empty.
+- entry-point and target-profile metadata must match the originating pipeline plan.
+- normal tests use fake compile results (`DxcCompileResult`) and remain GPU-free.
+
+Still out of scope in M19:
+- no `wgpu::ShaderModule` creation requirement
+- no `wgpu::RenderPipeline` creation
+- no reflection/bind-layout extraction
+- no material pipeline integration

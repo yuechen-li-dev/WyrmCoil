@@ -33,6 +33,21 @@ pub struct CompiledPipelineShaders {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledShaderModuleDesc {
+    pub EntryPoint: String,
+    pub TargetProfile: String,
+    pub SpirvBytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledPipelineDesc {
+    pub Name: String,
+    pub SourceName: String,
+    pub Vertex: CompiledShaderModuleDesc,
+    pub Pixel: CompiledShaderModuleDesc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompilePipelineShadersError {
     Request(PipelineDxcRequestError),
     Vertex(DxcError),
@@ -44,6 +59,67 @@ pub enum PipelineDxcRequestError {
     EmptyHlsl,
     EmptyEntryPoint { Stage: SdslvShaderStage },
     EmptyTargetProfile { Stage: SdslvShaderStage },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompiledPipelineDescError {
+    EmptyVertexBytes,
+    EmptyPixelBytes,
+    VertexEntryPointMismatch { Expected: String, Found: String },
+    PixelEntryPointMismatch { Expected: String, Found: String },
+    VertexTargetProfileMismatch { Expected: String, Found: String },
+    PixelTargetProfileMismatch { Expected: String, Found: String },
+}
+
+pub fn BuildCompiledPipelineDesc(
+    plan: &RenderPipelinePlan,
+    compiled: &CompiledPipelineShaders,
+) -> Result<CompiledPipelineDesc, CompiledPipelineDescError> {
+    if compiled.Vertex.OutputBytes.is_empty() {
+        return Err(CompiledPipelineDescError::EmptyVertexBytes);
+    }
+    if compiled.Pixel.OutputBytes.is_empty() {
+        return Err(CompiledPipelineDescError::EmptyPixelBytes);
+    }
+    if compiled.Vertex.EntryPoint != plan.VertexEntry.EntryPoint {
+        return Err(CompiledPipelineDescError::VertexEntryPointMismatch {
+            Expected: plan.VertexEntry.EntryPoint.clone(),
+            Found: compiled.Vertex.EntryPoint.clone(),
+        });
+    }
+    if compiled.Pixel.EntryPoint != plan.PixelEntry.EntryPoint {
+        return Err(CompiledPipelineDescError::PixelEntryPointMismatch {
+            Expected: plan.PixelEntry.EntryPoint.clone(),
+            Found: compiled.Pixel.EntryPoint.clone(),
+        });
+    }
+    if compiled.Vertex.TargetProfile != plan.VertexEntry.TargetProfile {
+        return Err(CompiledPipelineDescError::VertexTargetProfileMismatch {
+            Expected: plan.VertexEntry.TargetProfile.clone(),
+            Found: compiled.Vertex.TargetProfile.clone(),
+        });
+    }
+    if compiled.Pixel.TargetProfile != plan.PixelEntry.TargetProfile {
+        return Err(CompiledPipelineDescError::PixelTargetProfileMismatch {
+            Expected: plan.PixelEntry.TargetProfile.clone(),
+            Found: compiled.Pixel.TargetProfile.clone(),
+        });
+    }
+
+    Ok(CompiledPipelineDesc {
+        Name: plan.Name.clone(),
+        SourceName: plan.SourceName.clone(),
+        Vertex: CompiledShaderModuleDesc {
+            EntryPoint: compiled.Vertex.EntryPoint.clone(),
+            TargetProfile: compiled.Vertex.TargetProfile.clone(),
+            SpirvBytes: compiled.Vertex.OutputBytes.clone(),
+        },
+        Pixel: CompiledShaderModuleDesc {
+            EntryPoint: compiled.Pixel.EntryPoint.clone(),
+            TargetProfile: compiled.Pixel.TargetProfile.clone(),
+            SpirvBytes: compiled.Pixel.OutputBytes.clone(),
+        },
+    })
 }
 
 pub fn BuildDxcRequestsForPipelinePlan(
@@ -787,6 +863,152 @@ mod tests {
             error,
             CompilePipelineShadersError::Request(PipelineDxcRequestError::EmptyHlsl),
             "request-construction errors should be wrapped without invoking DXC"
+        );
+    }
+
+    fn BuildFakeCompileResult(entry: &str, target: &str, bytes: &[u8]) -> DxcCompileResult {
+        DxcCompileResult {
+            Success: true,
+            EntryPoint: entry.to_string(),
+            TargetProfile: target.to_string(),
+            Stdout: String::new(),
+            Stderr: String::new(),
+            OutputBytes: bytes.to_vec(),
+        }
+    }
+
+    #[test]
+    fn BuildCompiledPipelineDescValidPreservesDeterministicFields() {
+        let plan = RenderPipelinePlan {
+            Name: "FlatColorPlan".to_string(),
+            SourceName: "flat_color.sdslv".to_string(),
+            Hlsl: "float4 main() : SV_Target { return 1.0; }".to_string(),
+            VertexEntry: ShaderStagePlan {
+                EntryPoint: "FlatColor_VS".to_string(),
+                TargetProfile: "vs_6_0".to_string(),
+            },
+            PixelEntry: ShaderStagePlan {
+                EntryPoint: "FlatColor_PS".to_string(),
+                TargetProfile: "ps_6_0".to_string(),
+            },
+        };
+        let compiled = CompiledPipelineShaders {
+            Vertex: BuildFakeCompileResult("FlatColor_VS", "vs_6_0", &[1, 2, 3, 4]),
+            Pixel: BuildFakeCompileResult("FlatColor_PS", "ps_6_0", &[5, 6, 7, 8]),
+        };
+
+        let desc = BuildCompiledPipelineDesc(&plan, &compiled)
+            .expect("valid compiled results should build descriptor data without GPU");
+        assert_eq!(desc.Name, "FlatColorPlan", "plan name should be preserved");
+        assert_eq!(
+            desc.SourceName, "flat_color.sdslv",
+            "plan source name should be preserved"
+        );
+        assert_eq!(
+            desc.Vertex.EntryPoint, "FlatColor_VS",
+            "vertex entry point should be preserved"
+        );
+        assert_eq!(
+            desc.Pixel.EntryPoint, "FlatColor_PS",
+            "pixel entry point should be preserved"
+        );
+        assert_eq!(
+            desc.Vertex.TargetProfile, "vs_6_0",
+            "vertex target profile should be preserved"
+        );
+        assert_eq!(
+            desc.Pixel.TargetProfile, "ps_6_0",
+            "pixel target profile should be preserved"
+        );
+        assert_eq!(
+            desc.Vertex.SpirvBytes,
+            vec![1, 2, 3, 4],
+            "vertex shader bytes should be preserved"
+        );
+        assert_eq!(
+            desc.Pixel.SpirvBytes,
+            vec![5, 6, 7, 8],
+            "pixel shader bytes should be preserved"
+        );
+    }
+
+    #[test]
+    fn BuildCompiledPipelineDescRejectsEmptyBytes() {
+        let plan = RenderPipelinePlan {
+            Name: "Plan".to_string(),
+            SourceName: "source.sdslv".to_string(),
+            Hlsl: "hlsl".to_string(),
+            VertexEntry: ShaderStagePlan {
+                EntryPoint: "V".to_string(),
+                TargetProfile: "vs_6_0".to_string(),
+            },
+            PixelEntry: ShaderStagePlan {
+                EntryPoint: "P".to_string(),
+                TargetProfile: "ps_6_0".to_string(),
+            },
+        };
+
+        let empty_vertex = CompiledPipelineShaders {
+            Vertex: BuildFakeCompileResult("V", "vs_6_0", &[]),
+            Pixel: BuildFakeCompileResult("P", "ps_6_0", &[1]),
+        };
+        assert_eq!(
+            BuildCompiledPipelineDesc(&plan, &empty_vertex).unwrap_err(),
+            CompiledPipelineDescError::EmptyVertexBytes,
+            "empty vertex bytes should be rejected"
+        );
+
+        let empty_pixel = CompiledPipelineShaders {
+            Vertex: BuildFakeCompileResult("V", "vs_6_0", &[1]),
+            Pixel: BuildFakeCompileResult("P", "ps_6_0", &[]),
+        };
+        assert_eq!(
+            BuildCompiledPipelineDesc(&plan, &empty_pixel).unwrap_err(),
+            CompiledPipelineDescError::EmptyPixelBytes,
+            "empty pixel bytes should be rejected"
+        );
+    }
+
+    #[test]
+    fn BuildCompiledPipelineDescRejectsEntryAndTargetMismatches() {
+        let plan = RenderPipelinePlan {
+            Name: "Plan".to_string(),
+            SourceName: "source.sdslv".to_string(),
+            Hlsl: "hlsl".to_string(),
+            VertexEntry: ShaderStagePlan {
+                EntryPoint: "ExpectedVS".to_string(),
+                TargetProfile: "vs_6_0".to_string(),
+            },
+            PixelEntry: ShaderStagePlan {
+                EntryPoint: "ExpectedPS".to_string(),
+                TargetProfile: "ps_6_0".to_string(),
+            },
+        };
+
+        let wrong_vertex_entry = CompiledPipelineShaders {
+            Vertex: BuildFakeCompileResult("WrongVS", "vs_6_0", &[1]),
+            Pixel: BuildFakeCompileResult("ExpectedPS", "ps_6_0", &[1]),
+        };
+        assert_eq!(
+            BuildCompiledPipelineDesc(&plan, &wrong_vertex_entry).unwrap_err(),
+            CompiledPipelineDescError::VertexEntryPointMismatch {
+                Expected: "ExpectedVS".to_string(),
+                Found: "WrongVS".to_string()
+            },
+            "vertex entry mismatch should be rejected"
+        );
+
+        let wrong_pixel_target = CompiledPipelineShaders {
+            Vertex: BuildFakeCompileResult("ExpectedVS", "vs_6_0", &[1]),
+            Pixel: BuildFakeCompileResult("ExpectedPS", "ps_6_7", &[1]),
+        };
+        assert_eq!(
+            BuildCompiledPipelineDesc(&plan, &wrong_pixel_target).unwrap_err(),
+            CompiledPipelineDescError::PixelTargetProfileMismatch {
+                Expected: "ps_6_0".to_string(),
+                Found: "ps_6_7".to_string()
+            },
+            "pixel target mismatch should be rejected"
         );
     }
 }
