@@ -99,3 +99,28 @@ Manual M42 example run:
 ```bash
 cargo run --example window_visible_primitive
 ```
+
+
+## Style tooling (`wyrmfmt`)
+
+M44 adds a project-local style checker scaffold focused on Rust function/method definition casing for owned WyrmCoil code.
+
+Run:
+
+```bash
+cargo run --bin wyrmfmt -- check --lang rust src tests examples
+```
+
+Current scope:
+
+- Checks Rust `fn` definitions for PascalCase names.
+- Skips `#[test]` functions to avoid test-name churn.
+- Skips trait-impl methods (`impl Trait for Type`) where Rust trait contracts require names like `default` / `fmt`.
+- Scans only `.rs` files and skips `target/`, `.git/`, and common third-party/vendor directories.
+- Reports violations and exits nonzero when any are found.
+
+Out of scope in M44:
+
+- No auto-rewrite/fix mode yet.
+- No rustfmt replacement.
+- No SDSL-V/Oct formatter modes yet.
