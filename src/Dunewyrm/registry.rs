@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
+use super::ids::DwFrameId;
+use super::session::DwFrameCtx;
 use crate::DwControl;
-use crate::ids::DwFrameId;
-use crate::session::DwFrameCtx;
 
 pub type DwFrameFn = for<'a> fn(&mut DwFrameCtx<'a>) -> DwControl;
 

@@ -1,13 +1,13 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
-use dunewyrm::{
+use wyrmcoil::{
     Dw, DwControl, DwDecideOptions, DwFrameCtx, DwFrameDef, DwFrameRegistry, DwMessage, DwPhase,
     DwTieBreak,
 };
 
 pub mod GuardFrames {
-    use dunewyrm::DwFrameId;
+    use wyrmcoil::DwFrameId;
 
     pub const Domain: u64 = 100;
     pub const Root: DwFrameId = DwFrameId { Domain, Local: 1 };
@@ -16,7 +16,7 @@ pub mod GuardFrames {
 }
 
 pub mod GuardActs {
-    use dunewyrm::DwActId;
+    use wyrmcoil::DwActId;
 
     pub const Domain: u64 = 200;
     pub const Look: DwActId = DwActId { Domain, Local: 1 };
@@ -26,7 +26,7 @@ pub mod GuardActs {
 }
 
 pub mod Keys {
-    use dunewyrm::DwKey;
+    use wyrmcoil::DwKey;
 
     pub const TargetLost: DwKey<bool> = DwKey::New("TargetLost", 1);
     pub const RecoverAttempts: DwKey<i32> = DwKey::New("RecoverAttempts", 2);

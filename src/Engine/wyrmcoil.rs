@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
-use dunewyrm::{
+use wyrmcoil::{
     Dw, DwActRequest, DwControl, DwFrameCtx, DwFrameDef, DwFrameRegistry, DwKey, DwMessage,
     DwPhase, DwRuntimeChunk, DwSession, DwTickResult,
 };
@@ -159,7 +159,7 @@ impl WcWorld {
         }
         selected
     }
-    pub fn RefreshSelectionBoard(&self, board: &mut dunewyrm::DwBoard) {
+    pub fn RefreshSelectionBoard(&self, board: &mut wyrmcoil::DwBoard) {
         let selected = self.FindLowestHealthAliveEntity();
         if let Some(entity) = selected {
             board
@@ -201,14 +201,14 @@ impl WcWorld {
 }
 
 pub mod WcFrames {
-    use dunewyrm::DwFrameId;
+    use wyrmcoil::DwFrameId;
     pub const Domain: u64 = 310;
     pub const Root: DwFrameId = DwFrameId { Domain, Local: 1 };
     pub const Player: DwFrameId = DwFrameId { Domain, Local: 2 };
     pub const Guard: DwFrameId = DwFrameId { Domain, Local: 3 };
 }
 pub mod WcActs {
-    use dunewyrm::DwActId;
+    use wyrmcoil::DwActId;
     pub const Domain: u64 = 311;
     pub const ApplyVelocityCommand: DwActId = DwActId { Domain, Local: 1 };
     pub const NudgeEntityCommand: DwActId = DwActId { Domain, Local: 2 };
@@ -403,7 +403,7 @@ pub fn BuildRegistry() -> DwFrameRegistry {
     registry
 }
 
-pub fn DispatchActs(world: &mut WcWorld, board: &dunewyrm::DwBoard, acts: &[DwActRequest]) {
+pub fn DispatchActs(world: &mut WcWorld, board: &wyrmcoil::DwBoard, acts: &[DwActRequest]) {
     for act in acts {
         if act.Id == WcActs::ApplyVelocityCommand {
             let entity = board.GetOr(WcKeys::CommandEntity, -1);
