@@ -122,6 +122,24 @@ M27 remains intentionally narrow:
 Lifecycle simulation (M25/M26) remains recorded intent and deterministic telemetry/trace behavior; binding those acts to real GPU resource execution is future work.
 
 
+
+## M29 render command planning / draw intent (plain-data only)
+
+M29 adds an explicit draw-intent planning seam after pipeline layout and upload execution metadata:
+
+- `BuildRenderCommandPlan(...)` combines `RenderPipelineLayoutPlan`, `VertexBufferUploadPlan`, and optional `UploadExecutionResult` into deterministic plain-data `RenderCommandPlan`.
+- Plan status is explicit: `ReadyToDraw`, `NoOpEmptyBatch`, or `Rejected`, with structured reasons (missing execution metadata, stride mismatch, rejected upload, etc.).
+- `UploadExecutionMode::CpuRecordOnly` can still yield `ReadyToDraw` draw intent metadata (planning only) and is intentionally distinct from real GPU draw submission.
+- `UploadExecutionMode::NoOpEmptyUpload` maps to `NoOpEmptyBatch` (valid no-op).
+- This milestone does not create a command encoder, render pass, draw call, or `wgpu::RenderPipeline`.
+
+Future work remains explicit:
+
+- real GPU resource execution/submission wiring
+- command encoder creation
+- render pass construction
+- draw-call submission
+
 ## M28 lifecycle act upload executor / utility policy bridge
 
 M28 connects M25/M26 lifecycle intent to M23/M27 upload execution policy without adding draw submission:
