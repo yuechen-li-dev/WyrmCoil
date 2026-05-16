@@ -489,3 +489,31 @@ Still out of scope in M19:
 - no `wgpu::RenderPipeline` creation
 - no reflection/bind-layout extraction
 - no material pipeline integration
+
+
+## 19) M20 render pipeline layout contract (metadata-only)
+
+M20 defines a renderer-side plain-data pipeline-layout contract over M19 compiled shader descriptors:
+
+```text
+CompiledPipelineDesc
++ vertex layout metadata
++ color/depth target metadata
+→ RenderPipelineLayoutPlan
+```
+
+APIs in `Engine::render`:
+- `RenderPipelineLayoutOptions`
+- `RenderPipelineLayoutPlan`
+- `RenderPipelineLayoutPlanError`
+- `BuildRenderPipelineLayoutPlan(compiled, options)`
+
+Behavior notes:
+- layout validation is deterministic and returns structured errors for common authoring/configuration mistakes
+- tests use fake compiled shader bytes and do not require DXC or GPU availability
+- `RenderSnapshot` remains runtime snapshot data; layout plans are separate future GPU-pipeline metadata
+
+Still out of scope in M20:
+- no `wgpu::ShaderModule` / `wgpu::PipelineLayout` / `wgpu::RenderPipeline` creation
+- no reflection-driven input-layout extraction
+- no bind-group/material/asset system integration

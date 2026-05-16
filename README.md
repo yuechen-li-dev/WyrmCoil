@@ -2,7 +2,7 @@
 
 WyrmCoil is a deterministic Rust engine-core prototype with an embedded Dunewyrm control kernel.
 
-**Current status:** M9 minimal `wgpu` renderer backend scaffold complete (snapshot-consuming render backend boundary), with M7 real `winit` input shell, M6 backend scaffold, M5 render snapshots, M4 mailbox input bridge, and M3 timing boundaries preserved.
+**Current status:** M20 render pipeline layout contract complete (plain-data pipeline-layout metadata boundary), with prior M19 compiled shader descriptor scaffold, M9 minimal `wgpu` renderer backend scaffold, M7 real `winit` input shell, M6 backend scaffold, M5 render snapshots, M4 mailbox input bridge, and M3 timing boundaries preserved.
 
 **Architecture slogan:** Control ticks decide. Simulation ticks update stores. Render frames observe snapshots. Acts connect control to world. Chunks persist both.
 

@@ -47,6 +47,22 @@ This pass establishes explicit timing domains and counters (`ControlTick`, `Simu
 
 
 
+## M20 render pipeline layout contract (metadata-only)
+
+M20 adds a renderer-side, plain-data pipeline-layout planning boundary over compiled shader descriptors.
+
+- `RenderPipelineLayoutPlan` combines `CompiledPipelineDesc` with explicit vertex-buffer layout metadata plus color/depth target metadata.
+- Layout planning validates common mistakes (empty names, missing buffers, duplicate locations/names, out-of-bounds offsets, and missing shader bytes) and returns structured errors.
+- The contract remains deterministic and testable with fake compiled bytes; no DXC tool and no GPU are required for tests.
+- This is metadata only: no `wgpu::ShaderModule`, `wgpu::PipelineLayout`, `wgpu::BindGroupLayout`, or `wgpu::RenderPipeline` creation in M20.
+- `RenderSnapshot` remains runtime world-observation data, while `RenderPipelineLayoutPlan` is future GPU pipeline metadata.
+
+Still out of scope in M20:
+
+- no shader reflection or shader-driven input-layout extraction
+- no material/bind-group system rollout
+- no draw submission path
+
 ## M9 minimal `wgpu` renderer backend scaffold
 
 M9 adds the first renderer-backend boundary while preserving the existing timing contract.
