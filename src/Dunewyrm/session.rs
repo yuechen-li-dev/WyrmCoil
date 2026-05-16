@@ -420,6 +420,7 @@ impl DwSession {
         } else {
             self.Mailbox.BeginTick();
             self.Board.ClearDirty();
+            self.Board.TickTtl();
             if self.WaitRemaining > 0 {
                 self.WaitRemaining -= 1;
                 if self.WaitRemaining == 0 {

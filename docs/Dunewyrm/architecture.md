@@ -117,3 +117,14 @@ Dunewyrm is a Rust-native sibling of DragonGod, not a line-by-line port.
 - Existing act payload-free Dunewyrm actuation remains unchanged; selected entities flow through board-backed command intent.
 - This pass does not add ECS, archetype storage, dynamic component queries, renderer, physics, or UI layers.
 - **Stores query. Frames decide. Acts connect. Mailbox reports back. Chunks persist both.**
+
+
+## M47 board TTL / expiry / snapshot ergonomics
+
+- Board remains lane-based and typed (`bool`, `i32`, `f32`); no dynamic object dictionary was added.
+- TTL can be set per typed key with lane-specific helpers (`SetBoolWithTtl`, `SetI32WithTtl`, `SetF32WithTtl`).
+- TTL is measured in ticks and advances at `DwSession::Tick` boundary immediately after `ClearDirty` and before frame execution.
+- Expiry is deterministic, not lazy on read, and expiry value writes mark dirty only when the value actually changes.
+- `ttl_ticks == 0` performs immediate expiry via the same value write path.
+- TTL metadata persists in board/runtime chunks and resumes deterministically across export/restore boundaries.
+- Diagnostics helpers include `Snapshot()` and `TtlSnapshot()` with deterministic slot ordering.

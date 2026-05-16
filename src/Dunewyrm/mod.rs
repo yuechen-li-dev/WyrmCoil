@@ -8,7 +8,10 @@ mod phase;
 mod registry;
 mod session;
 
-pub use board::{DwBoard, DwBoardChunk, DwBoardKind, DwBoardValue, DwKey, DwSlotCollision};
+pub use board::{
+    DwBoard, DwBoardChunk, DwBoardKind, DwBoardSnapshot, DwBoardSnapshotEntry, DwBoardTtlEntry,
+    DwBoardTtlSnapshot, DwBoardValue, DwBoardValueSnapshot, DwKey, DwSlotCollision,
+};
 pub use control::{
     Dw, DwControl, DwControlSummary, DwDecideOptions, DwScoreFn, DwTieBreak, DwUtilityCandidate,
     SelectHighestUtilityTarget,
@@ -340,6 +343,116 @@ mod tests {
         let bad_type = DwKey::<i32>::New("Alerted", 1);
         assert!(board.Set(bad_type, 1).is_err());
         assert_eq!(board.DirtySlots(), vec![1]);
+    }
+
+    #[test]
+    fn BoardTtlExpiryRefreshSnapshotAndClearBehavior() {
+        let mut board = DwBoard::New();
+        board.SetBoolWithTtl(Keys::Alerted, true, 2).unwrap();
+        assert_eq!(board.TryGet(Keys::Alerted), Some(true));
+        assert_eq!(board.TtlSnapshot().Entries[0].RemainingTicks, 2);
+
+        board.ClearDirty();
+        board.TickTtl();
+        assert_eq!(board.TryGet(Keys::Alerted), Some(true));
+        assert_eq!(board.TtlSnapshot().Entries[0].RemainingTicks, 1);
+        assert_eq!(board.DirtySlots(), Vec::<u32>::new());
+
+        board.SetBoolWithTtl(Keys::Alerted, true, 2).unwrap();
+        assert_eq!(board.TtlSnapshot().Entries[0].RemainingTicks, 2);
+        assert_eq!(board.DirtySlots(), Vec::<u32>::new());
+
+        board.TickTtl();
+        board.TickTtl();
+        assert_eq!(board.TryGet(Keys::Alerted), Some(false));
+        assert_eq!(board.DirtySlots(), vec![1]);
+
+        let snap = board.Snapshot();
+        assert_eq!(snap.Entries.len(), 1);
+        assert_eq!(snap.Entries[0].Slot, 1);
+        assert_eq!(snap.Entries[0].Value, DwBoardValueSnapshot::Bool(false));
+
+        board.SetBoolWithTtl(Keys::Alerted, true, 3).unwrap();
+        board.ClearTtl(Keys::Alerted);
+        board.ClearDirty();
+        board.TickTtl();
+        board.TickTtl();
+        assert_eq!(board.TryGet(Keys::Alerted), Some(true));
+    }
+
+    #[test]
+    fn BoardTtlI32F32ZeroAndChunkResumeBehavior() {
+        let mut board = DwBoard::New();
+        board.SetI32WithTtl(Keys::Count, 9, 2, -1).unwrap();
+        board.SetF32WithTtl(Keys::Pressure, 6.0, 2, 0.5).unwrap();
+        board.TickTtl();
+        let chunk = board.ExportChunk();
+        let mut restored = DwBoard::FromChunk(chunk);
+        restored.ClearDirty();
+        restored.TickTtl();
+        assert_eq!(restored.TryGet(Keys::Count), Some(-1));
+        assert_eq!(restored.TryGet(Keys::Pressure), Some(0.5));
+        assert_eq!(restored.DirtySlots(), vec![2, 3]);
+
+        restored.ClearDirty();
+        restored.SetBoolWithTtl(Keys::Alerted, true, 0).unwrap();
+        assert_eq!(restored.TryGet(Keys::Alerted), Some(false));
+        assert_eq!(restored.DirtySlots(), vec![1]);
+    }
+
+    #[test]
+    fn SessionTickAppliesTtlBeforeFrameExecution() {
+        #[derive(Clone, Copy)]
+        enum R {
+            Check,
+            Done,
+        }
+        impl DwPhase for R {
+            fn ToPc(self) -> u32 {
+                match self {
+                    R::Check => 0,
+                    R::Done => 1,
+                }
+            }
+            fn FromPc(pc: u32) -> Option<Self> {
+                match pc {
+                    0 => Some(R::Check),
+                    1 => Some(R::Done),
+                    _ => None,
+                }
+            }
+        }
+        fn RootF(ctx: &mut DwFrameCtx) -> DwControl {
+            match ctx.Phase::<R>() {
+                Some(R::Check) => {
+                    if ctx.Board().GetOr(Keys::Alerted, true) {
+                        Dw::Fail("ttl should have expired before frame step")
+                    } else {
+                        Dw::Continue(R::Done)
+                    }
+                }
+                Some(R::Done) => Dw::Complete(),
+                None => Dw::Fail("phase"),
+            }
+        }
+
+        let root = DwFrameId {
+            Domain: 55,
+            Local: 1,
+        };
+        let mut reg = DwFrameRegistry::New();
+        reg.Register(DwFrameDef {
+            Id: root,
+            Step: RootF,
+            DebugName: "Root",
+        })
+        .unwrap();
+        let mut s = DwSession::New(reg, root, 0).unwrap();
+        s.BoardMut().SetBoolWithTtl(Keys::Alerted, true, 1).unwrap();
+        s.BoardMut().ClearDirty();
+        let t0 = s.Tick().unwrap();
+        assert_eq!(t0.DirtySlots, vec![1]);
+        assert_eq!(s.Board().TryGet(Keys::Alerted), Some(false));
     }
 
     #[test]
