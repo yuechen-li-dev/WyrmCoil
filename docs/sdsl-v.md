@@ -793,3 +793,24 @@ M18 intentionally still does not do:
 - shader reflection/resource-layout extraction
 - material/asset pipeline expansion
 
+## SDSL-V M19 — Renderer shader/pipeline resource descriptor scaffold (implemented)
+
+M19 adds a renderer-facing plain-data resource boundary after optional M18 DXC compile results.
+
+Current renderer API surface in `Engine::render`:
+- `CompiledShaderModuleDesc` (`EntryPoint`, `TargetProfile`, `SpirvBytes`)
+- `CompiledPipelineDesc` (`Name`, `SourceName`, `Vertex`, `Pixel`)
+- `CompiledPipelineDescError`
+- `BuildCompiledPipelineDesc(plan, compiled)`
+
+M19 boundary behavior:
+- consumes `RenderPipelinePlan` + `CompiledPipelineShaders`
+- validates non-empty compiled bytes for vertex/pixel stages
+- validates entry-point and target-profile metadata alignment with the plan
+- preserves deterministic plan/source metadata and compiled stage bytes in plain descriptors
+
+M19 remains intentionally scaffold-only:
+- no `wgpu::ShaderModule` creation path is required
+- no `wgpu::RenderPipeline` creation
+- no reflection/resource-layout extraction
+- no material or asset-pipeline expansion
