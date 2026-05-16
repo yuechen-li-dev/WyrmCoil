@@ -577,3 +577,128 @@ fn EngineChunkRoundTripPreservesTimingCounters() {
         "engine chunk restore must preserve control, simulation, and render frame counters exactly"
     );
 }
+
+#[test]
+fn RenderSnapshotFiltersByAliveAndVisibilityWithDeterministicOrder() {
+    let mut engine = wyrmcoil_sample_impl::Engine::New();
+    let extra = engine
+        .World
+        .SpawnEntity(wyrmcoil_sample_impl::Vec2 { X: 3.0, Y: 7.0 }, 50.0);
+    engine.World.Renderables.SetSprite(engine.Player, 11);
+    engine.World.Renderables.SetSprite(engine.Guard, 22);
+    engine.World.Renderables.SetSprite(extra, 33);
+    engine.World.Renderables.SetVisible(engine.Guard, false);
+    engine.World.Transforms.SetAlive(extra, false);
+
+    let snapshot = engine.RenderSnapshot();
+    assert_eq!(
+        snapshot.Items,
+        vec![wyrmcoil_sample_impl::RenderItem {
+            Entity: engine.Player,
+            Position: engine
+                .World
+                .Transforms
+                .Position(engine.Player)
+                .expect("player should exist in snapshot filter test"),
+            SpriteId: 11,
+        }],
+        "render snapshot extraction should include only alive and visible renderables in deterministic entity-index order"
+    );
+}
+
+#[test]
+fn RenderSnapshotObservesWithoutMutatingWorldOrControlSimulationTicks() {
+    let mut engine = wyrmcoil_sample_impl::Engine::New();
+    engine.World.Renderables.SetSprite(engine.Player, 42);
+    let before_clock = engine.Clock();
+    let before_world = engine.World.clone();
+
+    let first = engine.RenderSnapshot();
+    let second = engine.RenderSnapshot();
+
+    assert_eq!(
+        engine.Clock().ControlTick,
+        before_clock.ControlTick,
+        "RenderSnapshot must not advance control ticks because render is an observer"
+    );
+    assert_eq!(
+        engine.Clock().SimulationTick,
+        before_clock.SimulationTick,
+        "RenderSnapshot must not advance simulation ticks because render is not world integration"
+    );
+    assert_eq!(
+        engine.World, before_world,
+        "RenderSnapshot extraction must not mutate world state or dense stores"
+    );
+    assert_eq!(
+        first.Frame,
+        before_clock.RenderFrame + 1,
+        "first RenderSnapshot should report next observed render frame index"
+    );
+    assert_eq!(
+        second.Frame,
+        before_clock.RenderFrame + 2,
+        "repeated RenderSnapshot calls should advance only the render frame counter"
+    );
+    assert_eq!(
+        first.Items, second.Items,
+        "repeated snapshots without control/simulation ticks should produce identical render items"
+    );
+}
+
+#[test]
+fn RenderSnapshotReflectsSimulationButNotControlOnlyTicks() {
+    let mut engine = wyrmcoil_sample_impl::Engine::New();
+    engine.World.Renderables.SetSprite(engine.Player, 7);
+    engine
+        .Session
+        .MailboxMut()
+        .Enqueue(wyrmcoil_sample_impl::MoveRightMessage());
+
+    let initial = engine.RenderSnapshot();
+    let _ = engine.TickControl();
+    let _ = engine.TickControl();
+    let after_control_only = engine.RenderSnapshot();
+    assert_eq!(
+        after_control_only.Items[0].Position, initial.Items[0].Position,
+        "control-only ticks should not move positions in render snapshots before simulation integration"
+    );
+
+    engine.TickSimulation();
+    let after_sim = engine.RenderSnapshot();
+    assert!(
+        after_sim.Items[0].Position.X > after_control_only.Items[0].Position.X,
+        "simulation tick should update transform positions that later render snapshots observe"
+    );
+}
+
+#[test]
+fn RenderableLaneRoundTripPreservesRenderSnapshotAcrossEngineChunkRestore() {
+    let mut uninterrupted = wyrmcoil_sample_impl::Engine::New();
+    uninterrupted
+        .World
+        .Renderables
+        .SetSprite(uninterrupted.Player, 5);
+    uninterrupted
+        .World
+        .Renderables
+        .SetSprite(uninterrupted.Guard, 9);
+    uninterrupted
+        .World
+        .Renderables
+        .SetVisible(uninterrupted.Guard, false);
+    let snap_uninterrupted = uninterrupted.RenderSnapshot();
+
+    let mut split = wyrmcoil_sample_impl::Engine::New();
+    split.World.Renderables.SetSprite(split.Player, 5);
+    split.World.Renderables.SetSprite(split.Guard, 9);
+    split.World.Renderables.SetVisible(split.Guard, false);
+    let chunk = split.ExportChunk();
+    let mut restored = wyrmcoil_sample_impl::Engine::FromChunk(chunk);
+    let snap_restored = restored.RenderSnapshot();
+
+    assert_eq!(
+        snap_restored.Items, snap_uninterrupted.Items,
+        "engine chunk restore should preserve renderable lanes so render extraction matches uninterrupted state"
+    );
+}
