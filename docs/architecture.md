@@ -224,3 +224,15 @@ Current intentional scope:
 
 - No platform/window backend integration (`winit`, GameInput, Steam Input, etc. are still out of scope).
 - No async event loop.
+
+
+## M25 Dunewyrm buffer slot lifecycle simulator (CPU-only)
+
+M25 adds a Dunewyrm-backed CPU lifecycle simulation pass on top of M24 buffering mode decisions:
+
+- `SimulateBufferSlotLifecycle(&BufferingPlanDecision)` models slot lifecycle intent and invariants for `FixedDoubleDefault`, `PullLagPressure`, `SerialJitSurvival`, and `NoBufferingModeFeasible`.
+- Lifecycle evidence is emitted as deterministic Dunewyrm-domain acts (`BeginStage`, `MarkReady`, `ConsumeReady`, `RetireSlot`, cleanup, and rejection).
+- Lifecycle telemetry is recorded from Dunewyrm board-backed counters (active slots, WIP depth, committed memory, pressure counters, and cleanup counters).
+- The pass is intentionally CPU-only: no `wgpu::Buffer`, no queue uploads, and no draw submission.
+
+This continues the Prometheus strategy chain: fixed-double default, guarded pull-lag under pressure, and serial JIT survival fallback.
