@@ -185,6 +185,7 @@ impl<'a> Lexer<'a> {
             "override" => SdslvTokenKind::KeywordOverride,
             "compile" => SdslvTokenKind::KeywordCompile,
             "flow" => SdslvTokenKind::KeywordFlow,
+            "board" => SdslvTokenKind::KeywordBoard,
             "state" => SdslvTokenKind::KeywordState,
             "when" => SdslvTokenKind::KeywordWhen,
             "case" => SdslvTokenKind::KeywordCase,

@@ -458,13 +458,30 @@ impl<'a> Parser<'a> {
             SdslvTokenKind::LeftBrace,
             "expected '{' after flow signature",
         );
+        let mut board = None;
         let mut states = vec![];
+        let mut saw_state = false;
         while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            if self.match_kw(SdslvTokenKind::KeywordBoard) {
+                if saw_state {
+                    self.err_here("flow board must be declared before states");
+                }
+                if board.is_some() {
+                    self.err_here("flow can declare at most one board block");
+                }
+                if let Some(parsed) = self.parse_flow_board() {
+                    if board.is_none() {
+                        board = Some(parsed);
+                    }
+                }
+                continue;
+            }
             if !self.match_kw(SdslvTokenKind::KeywordState) {
                 self.err_here("expected state declaration in flow body");
                 self.I += 1;
                 continue;
             }
+            saw_state = true;
             if let Some(state) = self.parse_flow_state() {
                 states.push(state);
             }
@@ -475,7 +492,41 @@ impl<'a> Parser<'a> {
             Name: name,
             Parameters: parameters,
             ReturnType: return_type,
+            Board: board,
             States: states,
+            Span: SdslvSpan {
+                Start: start.Start,
+                End: end.End,
+                Line: start.Line,
+                Column: start.Column,
+            },
+        })
+    }
+
+    fn parse_flow_board(&mut self) -> Option<SdslvFlowBoard> {
+        let start = self.prev_span();
+        self.expect(SdslvTokenKind::LeftBrace, "expected '{' after board");
+        let mut fields = vec![];
+        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            let field_start = self.current_span();
+            let name = self.ident_req("expected board field name")?;
+            self.expect(SdslvTokenKind::Colon, "expected ':' after board field name");
+            let type_name = self.parse_path_req("expected board field type")?;
+            if self.match_kw(SdslvTokenKind::Equals) {
+                self.err_here("unsupported board initializer in SDSL-V M9");
+                let _ = self.parse_expression();
+            }
+            self.expect(SdslvTokenKind::Semicolon, "expected ';' after board field");
+            fields.push(SdslvFlowBoardField {
+                Name: name,
+                TypeName: type_name,
+                Span: field_start,
+            });
+        }
+        self.expect(SdslvTokenKind::RightBrace, "expected '}' after board");
+        let end = self.prev_span();
+        Some(SdslvFlowBoard {
+            Fields: fields,
             Span: SdslvSpan {
                 Start: start.Start,
                 End: end.End,
