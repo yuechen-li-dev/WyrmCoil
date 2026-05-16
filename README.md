@@ -36,6 +36,64 @@ cargo test
 - No native Vulkan backend implementation yet: M36 formalizes only the backend seam and keeps `wgpu` as the bootstrap backend path.
 
 
+## M43 golden path checkpoint (architecture/status pass)
+
+M43 is a documentation checkpoint that records what M42 proved and what it did **not** prove.
+
+**Golden path status:** complete for the current bootstrap slice.
+
+The current optional/manual golden path is:
+
+1. Open a real `winit` window.
+2. Run explicit engine phases (`TickControl()`, `TickSimulation()`, `RenderSnapshot()`).
+3. Extract render data from the immutable snapshot.
+4. Plan and perform GPU vertex upload.
+5. Record a `wgpu` render pass and draw command.
+6. Present a visible primitive to the window surface.
+
+Run command:
+
+```bash
+cargo run --example window_visible_primitive
+```
+
+Environment caveats (manual run):
+
+- Requires a working windowing environment (not headless CI by default).
+- Requires a GPU/driver stack that supports the selected `wgpu` backend.
+- Uses the current WGSL bootstrap shader path (no DXC required for this example path).
+
+What this example exercises end-to-end:
+
+- `winit` event loop + window lifecycle.
+- M40 surface capability/config planning seams (`BuildWgpuSurfaceCapabilitiesInfo`, `BuildWgpuSurfaceConfigPlan`, `BuildWgpuSurfaceConfiguration`).
+- Normalized keyboard input routing (`QueueWinitPhysicalKey(...)` -> `Engine.EnqueueInput(...)`).
+- Explicit timing boundaries in redraw flow (`TickControl()`, `TickSimulation()`, `RenderSnapshot()`).
+- Snapshot extraction bridge (`BuildVisiblePrimitiveDemoBatch(...)`).
+- Upload planning + execution (`BuildVertexBufferUploadPlan`, `ExecuteVertexBufferUploadPlan`).
+- GPU vertex buffer creation (`CreateWgpuVertexBuffer`).
+- WGSL shader-module/pipeline path (`BuildWgslShaderModulePlan`, `CreateWgpuShaderModuleFromWgslPlan`, `BuildWgpuRenderPipelinePlan`, `CreateWgpuRenderPipeline`).
+- Draw command planning + recording (`BuildRenderCommandPlan`, `RecordWgpuDrawCommand`).
+- Surface acquire/present.
+
+Timing model reminder (unchanged):
+
+- Control ticks decide behavior.
+- Simulation ticks update dense stores.
+- Render frames observe snapshots.
+
+The window loop is a prototype integration shell; it does **not** redefine WyrmCoil into a render-frame-driven simulation model.
+
+Explicitly temporary / narrow in this checkpoint:
+
+- WGSL is the bootstrap visible-pixel path for M42/M43.
+- SDSL-V remains the preferred high-level shader authoring language.
+- `BuildVisiblePrimitiveDemoBatch(...)` is a demo bridge, not a full sprite/material renderer.
+- No material system, texture system, camera/projection system, asset pipeline, or render graph.
+- Not a full application framework or production renderer lifecycle.
+
+Default `cargo test` remains GPU/window-free; this golden-path run is opt-in/manual.
+
 Manual M42 example run:
 
 ```bash

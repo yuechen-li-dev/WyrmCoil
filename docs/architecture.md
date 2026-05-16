@@ -12,6 +12,8 @@ See `docs/sdsl-v.md` for the SDSL-V language/design contract and milestone histo
 
 See `docs/sdsl-v-authoring.md` for the current implemented authoring/status guide (what works today vs parse/validate-only surfaces).
 
+See `docs/golden-path.md` for the M42/M43 visible-window golden-path checkpoint (run command, exercised seams, and explicit scope limits).
+
 
 ## Milestone status
 
@@ -92,6 +94,17 @@ This milestone is a resource descriptor scaffold only, preserving GPU-free testa
 
 
 
+
+## M43 golden path checkpoint (architecture/status pass)
+
+M43 is a documentation/status pass confirming that M42 completed the current bootstrap visible-window golden path.
+
+- Run path: `cargo run --example window_visible_primitive` (manual/optional; not part of default GPU/window-free test runs).
+- Achieved scope: a visible primitive is presented through a real `winit` + `wgpu` window path while preserving explicit timing boundaries (`TickControl()`, `TickSimulation()`, `RenderSnapshot()`).
+- Integration seam coverage includes M40 surface planning/configuration, normalized input routing, snapshot extraction, upload planning/execution, WGSL module/pipeline bootstrap, draw planning/recording, and present.
+- M43 does **not** expand renderer/shader/runtime behavior; it records status, limitations, and next-phase options to prevent overclaim.
+
+For the complete checkpoint details, see `docs/golden-path.md`.
 
 ## M42 first visible primitive in window
 
