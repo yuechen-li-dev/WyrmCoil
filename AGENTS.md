@@ -49,3 +49,14 @@ Do not confuse activity with progress.
 A failed attempt is only acceptable if it leaves behind a narrower problem, stronger evidence, or a justified stop.
 
 Any partial work must leave the codebase in a cleaner, more legible, and more diagnosable state than before.
+
+
+## Style tool policy
+
+`wyrmfmt` is the repository style-check scaffold for Rust naming policy enforcement.
+
+- Public/project-facing function and method definitions are PascalCase.
+- Locals, parameters, and internal temporary variables are snake_case.
+- External library APIs keep upstream spelling/casing.
+- Trait-required method names keep Rust trait-contract spellings.
+- `#[test]` function names are currently excluded from strict PascalCase checks in M44.
