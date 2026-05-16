@@ -736,9 +736,8 @@ impl<'a> Parser<'a> {
             self.Expect(SdslvTokenKind::Semicolon, "expected ';' after return");
             return Some(SdslvStatement::Return { Value: value });
         }
-        if self.Check(SdslvTokenKind::KeywordIf) {
-            self.ErrHere("unsupported statement in SDSL-V M55 control-flow pass (if not yet enabled)");
-            return None;
+        if self.MatchKw(SdslvTokenKind::KeywordIf) {
+            return self.ParseIfStatement();
         }
         if self.Check(SdslvTokenKind::KeywordStage) || self.Check(SdslvTokenKind::KeywordFn) {
             self.ErrHere("statement form not supported in SDSL-V M4 body subset");
@@ -780,6 +779,112 @@ impl<'a> Parser<'a> {
     }
     fn ParseExpression(&mut self) -> Option<SdslvExpression> {
         self.ParseComparison()
+    }
+    fn ParseIfStatement(&mut self) -> Option<SdslvStatement> {
+        let start = self.PrevSpan();
+        let condition = if self.Check(SdslvTokenKind::LeftBrace) {
+            self.ErrHere("if statement missing condition expression");
+            return None;
+        } else {
+            self.ParseExpression()?
+        };
+        if !self.MatchKw(SdslvTokenKind::LeftBrace) {
+            self.ErrHere("if statement missing '{' after condition");
+            return None;
+        }
+        let then_body = self.ParseBody()?.Statements;
+        let else_body = if self.MatchKw(SdslvTokenKind::KeywordElse) {
+            if !self.MatchKw(SdslvTokenKind::LeftBrace) {
+                self.ErrHere("else clause missing '{'");
+                return None;
+            }
+            Some(self.ParseBody()?.Statements)
+        } else {
+            None
+        };
+        let end = self.PrevSpan();
+        Some(SdslvStatement::If {
+            Condition: condition,
+            ThenBody: then_body,
+            ElseBody: else_body,
+            Span: SdslvSpan {
+                Start: start.Start,
+                End: end.End,
+                Line: start.Line,
+                Column: start.Column,
+            },
+        })
+    }
+    fn MatchSwitchArmArrow(&mut self, missing_message: &str) -> bool {
+        if self.MatchKw(SdslvTokenKind::Arrow) || self.MatchKw(SdslvTokenKind::FatArrow) {
+            return true;
+        }
+        self.ErrHere(missing_message);
+        false
+    }
+    fn ParseSwitchExpression(&mut self) -> Option<SdslvExpression> {
+        let start = self.PrevSpan();
+        if !self.MatchKw(SdslvTokenKind::LeftBrace) {
+            self.ErrHere("switch expression missing '{'");
+            return None;
+        }
+        let mut cases = vec![];
+        let mut else_value = None;
+        while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            if self.MatchKw(SdslvTokenKind::KeywordCase) {
+                let case_start = self.PrevSpan();
+                let condition = self.ParseExpression()?;
+                if !self.MatchSwitchArmArrow("switch case missing '->' or '=>' arrow") {
+                    return None;
+                }
+                let value = self.ParseExpression().or_else(|| {
+                    self.ErrHere("switch case missing value expression");
+                    None
+                })?;
+                cases.push(SdslvSwitchCase {
+                    Condition: condition,
+                    Value: value,
+                    Span: case_start,
+                });
+                continue;
+            }
+            if self.MatchKw(SdslvTokenKind::KeywordElse) {
+                if !self.MatchSwitchArmArrow("switch else arm missing '->' or '=>' arrow") {
+                    return None;
+                }
+                else_value = self.ParseExpression().or_else(|| {
+                    self.ErrHere("switch else arm missing value expression");
+                    None
+                });
+                continue;
+            }
+            self.ErrHere("expected case or else in switch expression");
+            return None;
+        }
+        if !self.MatchKw(SdslvTokenKind::RightBrace) {
+            self.ErrHere("expected '}' after switch expression");
+            return None;
+        }
+        if cases.is_empty() {
+            self.ErrHere("switch expression requires at least one case");
+            return None;
+        }
+        let Some(else_expr) = else_value else {
+            self.ErrHere("switch expression requires else arm");
+            return None;
+        };
+        let end = self.PrevSpan();
+        Some(SdslvExpression::Switch {
+            Subject: None,
+            Cases: cases,
+            ElseValue: Box::new(else_expr),
+            Span: SdslvSpan {
+                Start: start.Start,
+                End: end.End,
+                Line: start.Line,
+                Column: start.Column,
+            },
+        })
     }
     fn ParseComparison(&mut self) -> Option<SdslvExpression> {
         let mut left = self.ParseAdditive()?;
@@ -924,9 +1029,8 @@ impl<'a> Parser<'a> {
         Some(expr)
     }
     fn ParsePrimary(&mut self) -> Option<SdslvExpression> {
-        if self.Check(SdslvTokenKind::KeywordSwitch) {
-            self.ErrHere("switch expression is not supported in this expression context in M55");
-            return None;
+        if self.MatchKw(SdslvTokenKind::KeywordSwitch) {
+            return self.ParseSwitchExpression();
         }
         if self.MatchKw(SdslvTokenKind::LeftParen) {
             let expr = self.ParseExpression()?;

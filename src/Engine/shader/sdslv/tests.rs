@@ -138,13 +138,95 @@ fn ParserGenericWhereConstraints() {
     assert_eq!(compile.Alias, "ForwardFlatMaterial");
 }
 
-
 #[test]
 fn LexerIfSwitchAndFatArrowTokens() {
     let t = LexSource("if cond { } switch { case true => 1 else => 2 }").unwrap();
-    assert!(t.iter().any(|x| matches!(x.Kind, SdslvTokenKind::KeywordIf)));
-    assert!(t.iter().any(|x| matches!(x.Kind, SdslvTokenKind::KeywordSwitch)));
+    assert!(
+        t.iter()
+            .any(|x| matches!(x.Kind, SdslvTokenKind::KeywordIf))
+    );
+    assert!(
+        t.iter()
+            .any(|x| matches!(x.Kind, SdslvTokenKind::KeywordSwitch))
+    );
     assert!(t.iter().any(|x| matches!(x.Kind, SdslvTokenKind::FatArrow)));
+}
+
+#[test]
+fn ParserIfStatementParsesWithAndWithoutElse() {
+    let src = r#"
+shader S {
+    fn A(v: i32) -> i32 {
+        if v < 10 { return 1; }
+        if v < 20 { return 2; } else { return 3; }
+        return 0;
+    }
+}
+"#;
+    let module = ParseSource(src).expect("if statements should parse");
+    let shader = module
+        .Declarations
+        .iter()
+        .find_map(|d| match d {
+            SdslvDecl::Shader(s) => Some(s),
+            _ => None,
+        })
+        .expect("shader expected");
+    let body = shader.Methods[0].Body.as_ref().expect("body expected");
+    assert!(
+        matches!(
+            &body.Statements[0],
+            SdslvStatement::If { ElseBody: None, .. }
+        ),
+        "first if should have no else"
+    );
+    assert!(
+        matches!(
+            &body.Statements[1],
+            SdslvStatement::If {
+                ElseBody: Some(_),
+                ..
+            }
+        ),
+        "second if should have else body"
+    );
+}
+
+#[test]
+fn ParserSwitchExpressionParsesBothArrows() {
+    let src = r#"
+shader S {
+    fn A(age: i32, weight: i32) -> i32 {
+        let a: i32 = switch { case age < 13 => 0 case age < 18 => 1 else => 2 };
+        let b: i32 = switch { case weight < 1 -> 1 else -> 3 };
+        return a + b;
+    }
+}
+"#;
+    let module = ParseSource(src).expect("switch expressions should parse");
+    let shader = module
+        .Declarations
+        .iter()
+        .find_map(|d| match d {
+            SdslvDecl::Shader(s) => Some(s),
+            _ => None,
+        })
+        .expect("shader expected");
+    let body = shader.Methods[0].Body.as_ref().expect("body expected");
+    let SdslvStatement::Let {
+        Initializer: Some(SdslvExpression::Switch {
+            Cases, ElseValue, ..
+        }),
+        ..
+    } = &body.Statements[0]
+    else {
+        panic!("first let should be switch expression");
+    };
+    assert_eq!(Cases.len(), 2, "switch case count should match source");
+    assert!(
+        matches!(**ElseValue, SdslvExpression::IntegerLiteral(_)),
+        "switch else value should be present"
+    );
 }
 
 #[test]
@@ -154,6 +236,13 @@ fn ParserInvalidCases() {
     assert!(ParseSource("interface I { fn A(x: T) float4; }").is_err());
     assert!(ParseSource("shader S { fn A() -> X { ").is_err());
     assert!(ParseSource("bogus").is_err());
+    assert!(ParseSource("shader S { fn A() -> i32 { if { return 1; } } }").is_err());
+    assert!(
+        ParseSource(
+            "shader S { fn A(x: i32) -> i32 { let y: i32 = switch { else => 1 }; return y; } }"
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -878,13 +967,14 @@ fn ParserBodySubsetFailuresProduceDiagnostics() {
             .any(|d| d.Message.contains("expected expression after return"))
     );
 
-    let unsupported_if =
-        ParseSource("shader S { stage pixel fn PS() -> float4 { if (a) { return a; } } }")
-            .unwrap_err();
+    let unsupported_if = ParseSource(
+        "shader S { stage pixel fn PS() -> float4 { if (a) { return a; } else return a; } }",
+    )
+    .unwrap_err();
     assert!(
         unsupported_if
             .iter()
-            .any(|d| d.Message.contains("unsupported statement"))
+            .any(|d| d.Message.contains("else clause missing '{'"))
     );
 
     let bad_call =

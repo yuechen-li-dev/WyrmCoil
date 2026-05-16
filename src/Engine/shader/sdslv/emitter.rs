@@ -395,6 +395,10 @@ impl<'a> HlslEmitter<'a> {
                 vec![format!("{};", self.EmitExpression(Value, 0))]
             }
             SdslvStatement::Empty => vec![";".to_string()],
+            SdslvStatement::If { .. } => {
+                self.Err("if statement emission not implemented");
+                vec!["/* if statement emission not implemented */".to_string()]
+            }
         }
     }
 
@@ -458,6 +462,9 @@ impl<'a> HlslEmitter<'a> {
                 }
             }
             SdslvExpression::With { .. } => "/*with-unsupported*/".to_string(),
+            SdslvExpression::Switch { .. } => {
+                "/* switch expression emission not implemented */".to_string()
+            }
         }
     }
     fn IsPositionField(&self, field: &SdslvFieldDecl) -> bool {
