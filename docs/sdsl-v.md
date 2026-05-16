@@ -199,6 +199,13 @@ fn InvalidMix(a: WorldPosition3, b: ClipPosition4) -> WorldPosition3 {
 
 ## 6) Streams
 
+SDSL-V now has sibling aggregate declarations with distinct roles:
+
+- `record` = ordinary value aggregate.
+- `stream` = stage-boundary value aggregate.
+
+Records and streams are intentionally not interchangeable.
+
 Stream declaration:
 
 ```sdslv
@@ -222,6 +229,34 @@ Deterministic semantic assignment (initial rule set):
 - `ClipPosition4`/`Position` maps to `SV_Position`.
 - Other fields map to `TEXCOORDn` in declaration order.
 - Rule refinement for normals/tangents/custom semantics is future work.
+
+Record declaration:
+
+```sdslv
+record SurfaceData {
+    WorldPos: WorldPosition3;
+    Normal: WorldNormal3;
+    BaseColor: float4;
+    Roughness: f32;
+}
+```
+
+Initial record lowering direction:
+
+```hlsl
+struct SurfaceData {
+    float3 WorldPos;
+    float3 Normal;
+    float4 BaseColor;
+    float Roughness;
+};
+```
+
+Record-lowering notes:
+
+- records do not emit stage semantics (`SV_Position`, `TEXCOORDn`, etc.).
+- records are plain value structs usable in function signatures and local declarations.
+- stream/record immutable update features (for example `with`) remain future work.
 
 ## 7) Shader classes and stages
 

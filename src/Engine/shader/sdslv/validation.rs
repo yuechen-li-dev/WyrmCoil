@@ -231,6 +231,7 @@ impl<'a> Validator<'a> {
             match decl {
                 SdslvDecl::TypeAlias(alias) => self.ValidateTypeAlias(alias),
                 SdslvDecl::Stream(stream) => self.ValidateStream(stream),
+                SdslvDecl::Record(record) => self.ValidateRecord(record),
                 SdslvDecl::Interface(interface) => self.ValidateInterface(interface),
                 SdslvDecl::Shader(shader) => self.ValidateShader(shader),
                 SdslvDecl::Flow(flow) => self.ValidateFlow(flow),
@@ -319,6 +320,7 @@ impl<'a> Validator<'a> {
             let (name, kind) = match decl {
                 SdslvDecl::TypeAlias(x) => (&x.Name, "type"),
                 SdslvDecl::Stream(x) => (&x.Name, "stream"),
+                SdslvDecl::Record(x) => (&x.Name, "record"),
                 SdslvDecl::Interface(x) => (&x.Name, "interface"),
                 SdslvDecl::Shader(x) => (&x.Name, "shader"),
                 SdslvDecl::Flow(x) => (&x.Name, "flow"),
@@ -366,6 +368,17 @@ impl<'a> Validator<'a> {
                 self.err(&format!(
                     "duplicate stream field '{}' in stream '{}'",
                     field.Name, stream.Name
+                ));
+            }
+        }
+    }
+    fn ValidateRecord(&mut self, record: &SdslvRecordDecl) {
+        let mut names = HashSet::new();
+        for field in &record.Fields {
+            if !names.insert(field.Name.clone()) {
+                self.err(&format!(
+                    "duplicate record field '{}' in record '{}'",
+                    field.Name, record.Name
                 ));
             }
         }
