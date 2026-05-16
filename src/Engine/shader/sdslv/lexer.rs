@@ -99,6 +99,10 @@ impl<'a> Lexer<'a> {
                 '.' => Some(SdslvTokenKind::Dot),
                 '@' => Some(SdslvTokenKind::At),
                 '=' => Some(SdslvTokenKind::Equals),
+                '+' => Some(SdslvTokenKind::Plus),
+                '-' => Some(SdslvTokenKind::Minus),
+                '*' => Some(SdslvTokenKind::Star),
+                '/' => Some(SdslvTokenKind::Slash),
                 _ => None,
             };
             if let Some(k) = kind {
@@ -127,6 +131,8 @@ impl<'a> Lexer<'a> {
             "implements" => SdslvTokenKind::KeywordImplements,
             "where" => SdslvTokenKind::KeywordWhere,
             "override" => SdslvTokenKind::KeywordOverride,
+            "let" => SdslvTokenKind::KeywordLet,
+            "return" => SdslvTokenKind::KeywordReturn,
             _ => SdslvTokenKind::Identifier(t.to_string()),
         }
     }

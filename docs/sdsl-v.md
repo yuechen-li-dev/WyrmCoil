@@ -430,17 +430,16 @@ Intentional M3 limits:
 - no function-body parsing/transformation
 - no generic monomorphization; generic shader emission returns diagnostics
 
-### SDSL-V M4 — Function body subset
+### SDSL-V M4 — Function body subset (implemented)
 
-Parse/lower:
+Implemented parse/lower subset:
 
-- `let`
-- assignment
-- `return`
-- basic expressions
-- field access
-- swizzle
-- function calls
+- statements: `let` (typed, optional initializer), assignment, `return`, empty `;`
+- expressions: identifiers, integer/float literals, `true`/`false`, field access/swizzles, function/constructor calls
+- arithmetic: `+`, `-`, `*`, `/` with precedence and parenthesized grouping
+- optional unary minus
+
+M4 intentionally rejects unsupported body statements (such as `if`, loops, and `match`) with diagnostics and does not type-check expressions yet.
 
 ### SDSL-V M5 — Interfaces and generics
 
