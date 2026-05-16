@@ -193,7 +193,11 @@ pub fn PlanVertexBuffering(
             None,
             if upload_bytes == 0 { 0 } else { 2 },
             if upload_bytes == 0 { 0 } else { 2 },
-            if upload_bytes == 0 { 0 } else { fixed_double_bytes },
+            if upload_bytes == 0 {
+                0
+            } else {
+                fixed_double_bytes
+            },
             constraints.PullLagTelemetry,
         ),
         Some(BufferingMode::PullLagPressure) => Decision(
