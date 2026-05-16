@@ -561,6 +561,23 @@ impl<'a> Parser<'a> {
         })
     }
     fn parse_flow_statement(&mut self) -> Option<SdslvFlowStatement> {
+        if self.check_board_assignment_shape() {
+            let span = self.current_span();
+            self.expect(SdslvTokenKind::KeywordBoard, "expected board");
+            self.expect(SdslvTokenKind::Dot, "expected '.' after board");
+            let field = self.ident_req("expected board field name after board.")?;
+            self.expect(SdslvTokenKind::Equals, "expected '=' in board assignment");
+            let value = self.parse_expression()?;
+            self.expect(
+                SdslvTokenKind::Semicolon,
+                "expected ';' after board assignment",
+            );
+            return Some(SdslvFlowStatement::BoardAssign {
+                Field: field,
+                Value: value,
+                Span: span,
+            });
+        }
         if self.match_kw(SdslvTokenKind::KeywordWhen) {
             return Some(SdslvFlowStatement::When(self.parse_flow_when()?));
         }
@@ -576,6 +593,24 @@ impl<'a> Parser<'a> {
         }
         self.err_here("unsupported statement in flow state body");
         None
+    }
+    fn check_board_assignment_shape(&self) -> bool {
+        let Some(token) = self.Tokens.get(self.I) else {
+            return false;
+        };
+        if !matches!(token.Kind, SdslvTokenKind::KeywordBoard) {
+            return false;
+        }
+        matches!(
+            (
+                self.Tokens.get(self.I + 1).map(|x| &x.Kind),
+                self.Tokens.get(self.I + 2).map(|x| &x.Kind)
+            ),
+            (
+                Some(SdslvTokenKind::Dot),
+                Some(SdslvTokenKind::Identifier(_))
+            )
+        )
     }
     fn parse_flow_when(&mut self) -> Option<SdslvFlowWhen> {
         let start = self.prev_span();

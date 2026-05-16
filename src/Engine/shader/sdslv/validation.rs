@@ -483,7 +483,7 @@ impl<'a> Validator<'a> {
                 flow.Name
             ));
         }
-        let board_fields = self.BuildFlowBoardFieldSet(flow);
+        let board_fields = self.BuildFlowBoardFieldMap(flow);
         if let Some(board) = &flow.Board {
             self.ValidateFlowBoard(flow, board);
         }
@@ -516,11 +516,11 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn BuildFlowBoardFieldSet(&self, flow: &SdslvFlowDecl) -> HashSet<String> {
-        let mut fields = HashSet::new();
+    fn BuildFlowBoardFieldMap(&self, flow: &SdslvFlowDecl) -> HashMap<String, TypeRef> {
+        let mut fields = HashMap::new();
         if let Some(board) = &flow.Board {
             for field in &board.Fields {
-                fields.insert(field.Name.clone());
+                fields.insert(field.Name.clone(), self.PathToType(&field.TypeName));
             }
         }
         fields
@@ -556,12 +556,51 @@ impl<'a> Validator<'a> {
         state: &SdslvFlowState,
         statement: &SdslvFlowStatement,
         state_names: &HashSet<String>,
-        board_fields: &HashSet<String>,
+        board_fields: &HashMap<String, TypeRef>,
     ) {
+        let locals = self.BuildFlowLocals(flow, board_fields);
+        let return_type = self.PathToType(&flow.ReturnType);
         match statement {
             SdslvFlowStatement::Goto(path) => self.ValidateFlowGoto(flow, path, state_names),
             SdslvFlowStatement::Return(value) => {
                 self.ValidateFlowBoardReads(flow, value, board_fields);
+                let actual = self.ResolveFlowExpressionType(&locals, value);
+                if let Some((prefix, expected, found)) = self.TypeMismatch(
+                    &format!("return type mismatch in flow '{}'", flow.Name),
+                    &return_type,
+                    &actual,
+                ) {
+                    self.err(&format!(
+                        "{}: expected {}, found {}",
+                        prefix, expected, found
+                    ));
+                }
+            }
+            SdslvFlowStatement::BoardAssign { Field, Value, .. } => {
+                if flow.Board.is_none() {
+                    self.err(&format!(
+                        "flow '{}' does not declare a board, but statement writes board.{}",
+                        flow.Name, Field
+                    ));
+                    return;
+                }
+                let Some(expected) = board_fields.get(Field) else {
+                    self.err(&format!(
+                        "unknown board field '{}' in flow '{}'",
+                        Field, flow.Name
+                    ));
+                    return;
+                };
+                self.ValidateFlowBoardReads(flow, Value, board_fields);
+                let actual = self.ResolveFlowExpressionType(&locals, Value);
+                if let Some((prefix, expected_name, found_name)) =
+                    self.TypeMismatch("board assignment type mismatch", expected, &actual)
+                {
+                    self.err(&format!(
+                        "{}: expected {}, found {}",
+                        prefix, expected_name, found_name
+                    ));
+                }
             }
             SdslvFlowStatement::When(when) => {
                 if when.Cases.is_empty() {
@@ -578,11 +617,32 @@ impl<'a> Validator<'a> {
                 }
                 for case in &when.Cases {
                     self.ValidateFlowBoardReads(flow, &case.Condition, board_fields);
+                    let cond_type = self.ResolveFlowExpressionType(&locals, &case.Condition);
+                    if cond_type.Name().is_some()
+                        && !self.AreCompatible(&TypeRef::Named("bool".to_string()), &cond_type)
+                    {
+                        self.err(&format!(
+                            "guard condition type mismatch in flow '{}': expected bool, found {}",
+                            flow.Name,
+                            self.TypeName(&cond_type)
+                        ));
+                    }
                     if let SdslvFlowAction::Goto(path) = &case.Action {
                         self.ValidateFlowGoto(flow, path, state_names);
                     }
                     if let SdslvFlowAction::Return(value) = &case.Action {
                         self.ValidateFlowBoardReads(flow, value, board_fields);
+                        let actual = self.ResolveFlowExpressionType(&locals, value);
+                        if let Some((prefix, expected, found)) = self.TypeMismatch(
+                            &format!("return type mismatch in flow '{}'", flow.Name),
+                            &return_type,
+                            &actual,
+                        ) {
+                            self.err(&format!(
+                                "{}: expected {}, found {}",
+                                prefix, expected, found
+                            ));
+                        }
                     }
                 }
                 if let Some(action) = &when.ElseAction
@@ -594,16 +654,45 @@ impl<'a> Validator<'a> {
                     && let SdslvFlowAction::Return(value) = action
                 {
                     self.ValidateFlowBoardReads(flow, value, board_fields);
+                    let actual = self.ResolveFlowExpressionType(&locals, value);
+                    if let Some((prefix, expected, found)) = self.TypeMismatch(
+                        &format!("return type mismatch in flow '{}'", flow.Name),
+                        &return_type,
+                        &actual,
+                    ) {
+                        self.err(&format!(
+                            "{}: expected {}, found {}",
+                            prefix, expected, found
+                        ));
+                    }
                 }
             }
         }
+    }
+    fn BuildFlowLocals(
+        &self,
+        flow: &SdslvFlowDecl,
+        board_fields: &HashMap<String, TypeRef>,
+    ) -> HashMap<String, TypeRef> {
+        let mut locals = HashMap::new();
+        for parameter in &flow.Parameters {
+            locals.insert(parameter.Name.clone(), self.PathToType(&parameter.TypeName));
+        }
+        locals.insert(
+            "board".to_string(),
+            TypeRef::Named("__flow_board".to_string()),
+        );
+        for (name, ty) in board_fields {
+            locals.insert(format!("board.{}", name), ty.clone());
+        }
+        locals
     }
 
     fn ValidateFlowBoardReads(
         &mut self,
         flow: &SdslvFlowDecl,
         expression: &SdslvExpression,
-        board_fields: &HashSet<String>,
+        board_fields: &HashMap<String, TypeRef>,
     ) {
         if let Some(field_name) = Self::TryGetBoardFieldRead(expression) {
             if flow.Board.is_none() {
@@ -611,7 +700,7 @@ impl<'a> Validator<'a> {
                     "flow '{}' does not declare a board, but expression references board.{}",
                     flow.Name, field_name
                 ));
-            } else if !board_fields.contains(&field_name) {
+            } else if !board_fields.contains_key(&field_name) {
                 self.err(&format!(
                     "unknown board field '{}' in flow '{}'",
                     field_name, flow.Name
@@ -650,6 +739,65 @@ impl<'a> Validator<'a> {
             return Some(Field.clone());
         }
         None
+    }
+    fn ResolveFlowExpressionType(
+        &self,
+        locals: &HashMap<String, TypeRef>,
+        expression: &SdslvExpression,
+    ) -> TypeRef {
+        match expression {
+            SdslvExpression::Identifier(name) => {
+                locals.get(name).cloned().unwrap_or(TypeRef::Unknown)
+            }
+            SdslvExpression::IntegerLiteral(_) => TypeRef::Named("i32".to_string()),
+            SdslvExpression::FloatLiteral(_) => TypeRef::Named("float".to_string()),
+            SdslvExpression::StringLiteral(_) => TypeRef::Named("string".to_string()),
+            SdslvExpression::BoolLiteral(_) => TypeRef::Named("bool".to_string()),
+            SdslvExpression::FieldAccess { Base, Field } => {
+                if let SdslvExpression::Identifier(base_name) = &**Base
+                    && base_name == "board"
+                {
+                    return locals
+                        .get(&format!("board.{}", Field))
+                        .cloned()
+                        .unwrap_or(TypeRef::Unknown);
+                }
+                TypeRef::Unknown
+            }
+            SdslvExpression::Binary {
+                Left,
+                Operator,
+                Right,
+            } => {
+                let left = self.ResolveFlowExpressionType(locals, Left);
+                let right = self.ResolveFlowExpressionType(locals, Right);
+                match Operator {
+                    SdslvBinaryOperator::Equal
+                    | SdslvBinaryOperator::NotEqual
+                    | SdslvBinaryOperator::Less
+                    | SdslvBinaryOperator::LessEqual
+                    | SdslvBinaryOperator::Greater
+                    | SdslvBinaryOperator::GreaterEqual => {
+                        if self.AreCompatible(&left, &right) {
+                            TypeRef::Named("bool".to_string())
+                        } else {
+                            TypeRef::Unknown
+                        }
+                    }
+                    _ => {
+                        if self.AreCompatible(&left, &right) {
+                            left
+                        } else {
+                            TypeRef::Unknown
+                        }
+                    }
+                }
+            }
+            SdslvExpression::Unary { Operand, .. } => {
+                self.ResolveFlowExpressionType(locals, Operand)
+            }
+            SdslvExpression::Call { .. } => TypeRef::Unknown,
+        }
     }
     fn ValidateFlowGoto(
         &mut self,
@@ -949,16 +1097,24 @@ impl<'a> Validator<'a> {
     }
 
     fn ResolveUnderlyingName(&self, name: &str) -> String {
-        let mut current = name.to_string();
+        let mut current = Self::NormalizeBuiltinTypeName(name);
         let mut guard = 0;
         while let Some(next) = self.AliasUnderlyingByName.get(&current) {
-            current = next.clone();
+            current = Self::NormalizeBuiltinTypeName(next);
             guard += 1;
             if guard > 64 {
                 break;
             }
         }
         current
+    }
+    fn NormalizeBuiltinTypeName(name: &str) -> String {
+        match name {
+            "f32" => "float".to_string(),
+            "i32" => "i32".to_string(),
+            "u32" => "u32".to_string(),
+            _ => name.to_string(),
+        }
     }
 
     fn IsValidFlowBoardTypeName(&self, name: &str) -> bool {

@@ -465,7 +465,7 @@ fn EmitHlslFlowDeclarationReturnsDiagnostic() {
     assert!(
         diagnostics.iter().any(|d| d
             .Message
-            .contains("flow emission is not implemented in SDSL-V M10")),
+            .contains("flow emission is not implemented in SDSL-V M12")),
         "flow modules should fail emission clearly in M10"
     );
 }
@@ -1065,7 +1065,98 @@ fn EmitHlslFlowBoardStillNotImplemented() {
     assert!(
         diagnostics.iter().any(|d| d
             .Message
-            .contains("flow emission is not implemented in SDSL-V M10")),
+            .contains("flow emission is not implemented in SDSL-V M12")),
         "flow+board emission should remain unsupported"
     );
+}
+
+#[test]
+fn ParserFlowBoardAssignmentParses() {
+    let src = r#"
+flow SelectShadow(useSoft: bool) -> i32 {
+    board { HasSelection: bool; SelectedMode: i32; BlendWeight: f32; }
+    state Select {
+        board.HasSelection = true;
+        board.SelectedMode = 2;
+        board.BlendWeight = 0.75 + 0.0;
+        when { case board.HasSelection -> goto Done else -> goto Done }
+    }
+    state Done { return board.SelectedMode; }
+}
+"#;
+    assert!(
+        ParseSource(src).is_ok(),
+        "flow board assignments should parse"
+    );
+}
+
+#[test]
+fn ParserFlowBoardAssignmentRejectsBadTargets() {
+    assert!(
+        ParseSource("flow F() -> i32 { state A { board.A.B = 1; return 1; } }").is_err(),
+        "nested board assignment target should fail"
+    );
+    assert!(
+        ParseSource("flow F() -> i32 { state A { foo.A = 1; return 1; } }")
+            .unwrap_err()
+            .iter()
+            .any(|d| d
+                .Message
+                .contains("unsupported statement in flow state body")),
+        "non-board assignment should be unsupported"
+    );
+}
+
+#[test]
+fn ValidationFlowBoardAssignmentsAndTypes() {
+    let ok = r#"
+flow F(mode: i32, enabled: bool) -> i32 {
+    board { HasSelection: bool; SelectedMode: i32; BlendWeight: f32; }
+    state A {
+        board.HasSelection = enabled;
+        board.SelectedMode = mode;
+        board.BlendWeight = 0.25 + 0.25;
+        when { case board.HasSelection -> return board.SelectedMode else -> return 0 }
+    }
+}
+"#;
+    assert!(ValidateSource(ok).is_ok(), "valid board writes should pass");
+
+    let bad = r#"
+flow F(mode: i32) -> i32 {
+    board { HasSelection: bool; SelectedMode: i32; BlendWeight: f32; }
+    state A {
+        board.Unknown = 1;
+        board.HasSelection = 1;
+        board.SelectedMode = 0.5;
+        board.BlendWeight = true;
+        when { case board.SelectedMode -> return board.HasSelection else -> return 0 }
+    }
+}
+"#;
+    let d = ValidateSource(bad).unwrap_err();
+    assert!(
+        d.iter()
+            .any(|x| x.Message.contains("unknown board field 'Unknown'"))
+    );
+    assert!(d.iter().any(|x| {
+        x.Message
+            .contains("board assignment type mismatch: expected bool, found i32")
+    }));
+    assert!(d.iter().any(|x| {
+        x.Message
+            .contains("board assignment type mismatch: expected i32, found float")
+    }));
+    assert!(d.iter().any(|x| {
+        x.Message
+            .contains("board assignment type mismatch: expected f32, found bool")
+    }));
+    assert!(d.iter().any(|x| {
+        x.Message
+            .contains("guard condition type mismatch in flow 'F': expected bool, found i32")
+    }));
+    assert!(d.iter().any(|x| {
+        x.Message
+            .contains("return type mismatch in flow 'F': expected i32, found bool")
+    }));
 }
