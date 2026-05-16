@@ -130,14 +130,8 @@ fn ActBridgeReadsBoardBackedCommandIntentAndTargetsOnlyRequestedEntity() {
 #[test]
 fn EngineTickMailboxCommandWritesBoardAndDispatchesCommandActs() {
     let mut engine = wyrmcoil_sample_impl::Engine::New();
-    engine
-        .Session
-        .MailboxMut()
-        .Enqueue(wyrmcoil_sample_impl::MoveRightMessage());
-    engine
-        .Session
-        .MailboxMut()
-        .Enqueue(wyrmcoil_sample_impl::NudgeGuardMessage());
+    engine.EnqueueInput(wyrmcoil_sample_impl::InputEvent::MoveRightPressed);
+    engine.EnqueueInput(wyrmcoil_sample_impl::InputEvent::NudgeGuardPressed);
 
     let _t0 = engine.Tick();
     let t1 = engine.Tick();
@@ -195,6 +189,143 @@ fn EngineTickMailboxCommandWritesBoardAndDispatchesCommandActs() {
     assert!(
         after_guard.Y > before_guard.Y,
         "guard position should advance after guard command acts and world integration execute"
+    );
+}
+
+#[test]
+fn InputQueuePreservesOrderAndDrainsAtControlBoundary() {
+    let mut engine = wyrmcoil_sample_impl::Engine::New();
+    engine.EnqueueInput(wyrmcoil_sample_impl::InputEvent::MoveLeftPressed);
+    engine.EnqueueInput(wyrmcoil_sample_impl::InputEvent::StopPressed);
+    engine.EnqueueInput(wyrmcoil_sample_impl::InputEvent::MoveRightPressed);
+
+    assert_eq!(
+        engine.InputQueueSnapshot(),
+        vec![
+            wyrmcoil_sample_impl::InputEvent::MoveLeftPressed,
+            wyrmcoil_sample_impl::InputEvent::StopPressed,
+            wyrmcoil_sample_impl::InputEvent::MoveRightPressed,
+        ],
+        "input queue snapshot should preserve enqueue order for deterministic adapter-to-runtime bridging"
+    );
+
+    let _first_control = engine.TickControl();
+    let control_result = engine.TickControl();
+    assert_eq!(
+        engine.InputQueueLen(),
+        0,
+        "TickControl should drain every queued normalized input event into the Dunewyrm mailbox before control logic executes"
+    );
+    assert!(
+        control_result.ImmediateActs.contains(&DwActRequest {
+            Id: wyrmcoil_sample_impl::Acts::ApplyVelocityCommand,
+        }),
+        "drained input should become mailbox messages that produce command acts in the same control tick"
+    );
+}
+
+#[test]
+fn InputTimingBoundariesStayIndependentAcrossEnginePhases() {
+    let mut engine = wyrmcoil_sample_impl::Engine::New();
+    engine.EnqueueInput(wyrmcoil_sample_impl::InputEvent::MoveRightPressed);
+
+    assert_eq!(
+        engine.Clock().ControlTick,
+        0,
+        "enqueueing input must not advance the control clock before TickControl"
+    );
+    assert_eq!(
+        engine.Clock().SimulationTick,
+        0,
+        "enqueueing input must not advance the simulation clock before TickSimulation"
+    );
+
+    engine.TickSimulation();
+    assert_eq!(
+        engine.InputQueueLen(),
+        1,
+        "TickSimulation must not process queued input because input enters the control lane only"
+    );
+
+    let _snapshot = engine.RenderSnapshot();
+    assert_eq!(
+        engine.InputQueueLen(),
+        1,
+        "RenderSnapshot must not process queued input because render frames only observe world snapshots"
+    );
+
+    let _first_control = engine.TickControl();
+    let control_result = engine.TickControl();
+    assert_eq!(
+        engine.InputQueueLen(),
+        0,
+        "TickControl must bridge queued input into the mailbox and consume the queue deterministically"
+    );
+    assert!(
+        control_result.ImmediateActs.contains(&DwActRequest {
+            Id: wyrmcoil_sample_impl::Acts::ApplyVelocityCommand,
+        }),
+        "TickControl must convert normalized input to mailbox traffic that frame logic consumes as control acts"
+    );
+}
+
+#[test]
+fn TickConvenienceProcessesQueuedInputThroughControlPhase() {
+    let mut engine = wyrmcoil_sample_impl::Engine::New();
+    let baseline = engine
+        .World
+        .Transforms
+        .Position(engine.Player)
+        .expect("player entity should exist before convenience tick input test");
+    engine.EnqueueInput(wyrmcoil_sample_impl::InputEvent::MoveRightPressed);
+
+    let _first = engine.Tick();
+    let tick_result = engine.Tick();
+    assert_eq!(
+        engine.InputQueueLen(),
+        0,
+        "Tick convenience wrapper should process queued input during its control phase before simulation"
+    );
+    assert!(
+        tick_result.Runtime.ImmediateActs.contains(&DwActRequest {
+            Id: wyrmcoil_sample_impl::Acts::ApplyVelocityCommand,
+        }),
+        "Tick convenience wrapper should expose control acts produced by bridged input"
+    );
+
+    let after = engine
+        .World
+        .Transforms
+        .Position(engine.Player)
+        .expect("player entity should exist after convenience tick input test");
+    assert!(
+        after.X > baseline.X,
+        "world movement should appear only after Tick simulation phase executes after control consumed input"
+    );
+}
+
+#[test]
+fn EngineChunkPersistsQueuedInputUntilBridgeConsumesIt() {
+    let mut engine = wyrmcoil_sample_impl::Engine::New();
+    engine.EnqueueInput(wyrmcoil_sample_impl::InputEvent::MoveLeftPressed);
+    engine.EnqueueInput(wyrmcoil_sample_impl::InputEvent::StopPressed);
+
+    let chunk = engine.ExportChunk();
+    let mut restored = wyrmcoil_sample_impl::Engine::FromChunk(chunk);
+    assert_eq!(
+        restored.InputQueueSnapshot(),
+        vec![
+            wyrmcoil_sample_impl::InputEvent::MoveLeftPressed,
+            wyrmcoil_sample_impl::InputEvent::StopPressed,
+        ],
+        "EngineChunk should persist queued unbridged input because it is deterministic engine-owned state"
+    );
+
+    let _ = restored.TickControl();
+    assert_eq!(
+        restored.InputQueueLen(),
+        0,
+        "restored queued input should bridge into mailbox and drain on the next control tick"
     );
 }
 
