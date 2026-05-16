@@ -13,11 +13,15 @@ As of **M1 lexer/parser seed**, repository code now includes:
 - declaration AST
 - diagnostics with source spans
 
-Still intentionally absent after M2:
+After M3:
 
-- HLSL emitter
+- Minimal deterministic HLSL emitter is implemented for declaration-level modules (type aliases, streams, vertex/pixel stage signatures, raw preserved bodies).
+
+Still intentionally absent after M3:
+
 - DXC invocation
 - SPIR-V integration
+- Generic monomorphization
 
 SDSL-V is inspired by Stride SDSL, but it is not required to be source-compatible with SDSL.
 
@@ -406,14 +410,25 @@ Still intentionally out of scope in M2:
 - function-body semantic/type analysis
 - expression checking
 
-### SDSL-V M3 — Minimal HLSL emission
+### SDSL-V M3 — Minimal HLSL emission (implemented)
 
-Lower:
+Lowering currently emits deterministic HLSL text for:
 
-- stream structs
-- type aliases
-- simple stage signatures
-- deterministic HLSL skeleton
+- header comment + optional namespace comment
+- type aliases (`typedef`) including `@space(...)` comment retention
+- stream declarations as HLSL structs
+- deterministic stream semantics: `ClipPosition4`/`@space(clip.position)` maps to `SV_Position`, all other fields map to `TEXCOORDn` in declaration order
+- vertex/pixel stage signatures with shader-name mangling (`Shader_StageMethod`)
+- pixel return semantic `: SV_Target`
+- stage body raw-text preservation from M1 body storage
+
+Intentional M3 limits:
+
+- no DXC invocation
+- no SPIR-V generation
+- no renderer integration
+- no function-body parsing/transformation
+- no generic monomorphization; generic shader emission returns diagnostics
 
 ### SDSL-V M4 — Function body subset
 
