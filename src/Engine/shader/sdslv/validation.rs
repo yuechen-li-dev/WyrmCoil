@@ -816,6 +816,7 @@ impl<'a> Validator<'a> {
             }
             SdslvExpression::Call { .. } => TypeRef::Unknown,
             SdslvExpression::With { Base, .. } => self.ResolveFlowExpressionType(locals, Base),
+            SdslvExpression::Switch { .. } => TypeRef::Unknown,
         }
     }
     fn ValidateFlowGoto(
@@ -889,6 +890,9 @@ impl<'a> Validator<'a> {
                     self.CheckExpressionCalls(shader, &locals, Value);
                 }
                 SdslvStatement::Empty => {}
+                SdslvStatement::If { .. } => {
+                    self.Err("if statement validation not implemented");
+                }
             }
         }
     }
@@ -1043,6 +1047,7 @@ impl<'a> Validator<'a> {
                 self.ResolveExpressionType(shader, locals, Operand)
             }
             SdslvExpression::With { Base, .. } => self.ResolveExpressionType(shader, locals, Base),
+            SdslvExpression::Switch { .. } => TypeRef::Unknown,
         }
     }
 

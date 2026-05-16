@@ -195,6 +195,12 @@ pub enum SdslvStatement {
     Return {
         Value: SdslvExpression,
     },
+    If {
+        Condition: SdslvExpression,
+        ThenBody: Vec<SdslvStatement>,
+        ElseBody: Option<Vec<SdslvStatement>>,
+        Span: SdslvSpan,
+    },
     Expression {
         Value: SdslvExpression,
     },
@@ -229,6 +235,19 @@ pub enum SdslvExpression {
         Base: Box<SdslvExpression>,
         Updates: Vec<SdslvWithUpdate>,
     },
+    Switch {
+        Subject: Option<Box<SdslvExpression>>,
+        Cases: Vec<SdslvSwitchCase>,
+        ElseValue: Box<SdslvExpression>,
+        Span: SdslvSpan,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvSwitchCase {
+    pub Condition: SdslvExpression,
+    pub Value: SdslvExpression,
+    pub Span: SdslvSpan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -103,7 +103,7 @@ fn execute_statement(
             Initializer,
         } => {
             let value = if let Some(initializer) = Initializer {
-                eval_expression(initializer, env)?
+                EvalExpression(initializer, env)?
             } else {
                 DefaultValueForType(TypeName).ok_or_else(|| SdslvAssertFailure {
                     Message: format!("let '{Name}' requires initializer or supported default type"),
@@ -126,28 +126,32 @@ fn execute_statement(
                     Span: None,
                 });
             }
-            let value = eval_expression(Value, env)?;
+            let value = EvalExpression(Value, env)?;
             env.insert(name.clone(), value);
             Ok(())
         }
-        SdslvStatement::Expression { Value } => execute_assert_expression(Value, env, failures),
+        SdslvStatement::Expression { Value } => ExecuteAssertExpression(Value, env, failures),
         SdslvStatement::Return { .. } => Err(SdslvAssertFailure {
             Message: "return statement is not supported in SDSL-V M7b test execution".to_string(),
+            Span: None,
+        }),
+        SdslvStatement::If { .. } => Err(SdslvAssertFailure {
+            Message: "if statement is not supported in SDSL-V M55b test execution".to_string(),
             Span: None,
         }),
     }
 }
 
-fn execute_assert_expression(
+fn ExecuteAssertExpression(
     expr: &SdslvExpression,
     env: &mut HashMap<String, RuntimeValue>,
     failures: &mut Vec<SdslvAssertFailure>,
 ) -> Result<(), SdslvAssertFailure> {
-    let (method, arguments) = assert_call_parts(expr)?;
-    let custom_message = get_message_argument(arguments.last())?;
+    let (method, arguments) = AssertCallParts(expr)?;
+    let custom_message = GetMessageArgument(arguments.last())?;
     match method {
         "True" => {
-            let condition = eval_expression(&arguments[0], env)?;
+            let condition = EvalExpression(&arguments[0], env)?;
             if !matches!(condition, RuntimeValue::Bool(true)) {
                 failures.push(SdslvAssertFailure {
                     Message: format!("Assert.True failed: {custom_message}"),
@@ -157,8 +161,8 @@ fn execute_assert_expression(
             Ok(())
         }
         "Equals" => {
-            let actual = eval_expression(&arguments[0], env)?;
-            let expected = eval_expression(&arguments[1], env)?;
+            let actual = EvalExpression(&arguments[0], env)?;
+            let expected = EvalExpression(&arguments[1], env)?;
             if !RuntimeEquals(&actual, &expected) {
                 failures.push(SdslvAssertFailure {
                     Message: format!("Assert.Equals failed: {custom_message}"),
@@ -168,9 +172,9 @@ fn execute_assert_expression(
             Ok(())
         }
         "Near" => {
-            let actual = eval_expression(&arguments[0], env)?;
-            let expected = eval_expression(&arguments[1], env)?;
-            let tolerance = eval_expression(&arguments[2], env)?;
+            let actual = EvalExpression(&arguments[0], env)?;
+            let expected = EvalExpression(&arguments[1], env)?;
+            let tolerance = EvalExpression(&arguments[2], env)?;
             let (a, e, t) = (AsF32(&actual)?, AsF32(&expected)?, AsF32(&tolerance)?);
             if (a - e).abs() > t {
                 failures.push(SdslvAssertFailure {
@@ -187,7 +191,7 @@ fn execute_assert_expression(
     }
 }
 
-fn assert_call_parts(
+fn AssertCallParts(
     expr: &SdslvExpression,
 ) -> Result<(&str, &Vec<SdslvExpression>), SdslvAssertFailure> {
     let SdslvExpression::Call { Callee, Arguments } = expr else {
@@ -217,7 +221,7 @@ fn assert_call_parts(
     Ok((Field.as_str(), Arguments))
 }
 
-fn get_message_argument(argument: Option<&SdslvExpression>) -> Result<String, SdslvAssertFailure> {
+fn GetMessageArgument(argument: Option<&SdslvExpression>) -> Result<String, SdslvAssertFailure> {
     if let Some(SdslvExpression::StringLiteral(message)) = argument {
         Ok(message.clone())
     } else {
@@ -228,7 +232,7 @@ fn get_message_argument(argument: Option<&SdslvExpression>) -> Result<String, Sd
     }
 }
 
-fn eval_expression(
+fn EvalExpression(
     expression: &SdslvExpression,
     env: &HashMap<String, RuntimeValue>,
 ) -> Result<RuntimeValue, SdslvAssertFailure> {
@@ -261,7 +265,7 @@ fn eval_expression(
             Operator: SdslvUnaryOperator::Negate,
             Operand,
         } => {
-            let value = eval_expression(Operand, env)?;
+            let value = EvalExpression(Operand, env)?;
             match value {
                 RuntimeValue::I32(x) => Ok(RuntimeValue::I32(-x)),
                 RuntimeValue::F32(x) => Ok(RuntimeValue::F32(-x)),
@@ -276,8 +280,8 @@ fn eval_expression(
             Operator,
             Right,
         } => {
-            let left = eval_expression(Left, env)?;
-            let right = eval_expression(Right, env)?;
+            let left = EvalExpression(Left, env)?;
+            let right = EvalExpression(Right, env)?;
             EvalBinary(&left, *Operator, &right)
         }
         SdslvExpression::Call { Callee, Arguments } => EvalCall(Callee, Arguments, env),
@@ -289,6 +293,10 @@ fn eval_expression(
         SdslvExpression::With { .. } => Err(SdslvAssertFailure {
             Message: "with expression is not supported in SDSL-V M7b expression evaluation"
                 .to_string(),
+            Span: None,
+        }),
+        SdslvExpression::Switch { .. } => Err(SdslvAssertFailure {
+            Message: "switch expression is not supported in SDSL-V M55b test execution".to_string(),
             Span: None,
         }),
     }
@@ -326,7 +334,7 @@ fn EvalCall(
     };
     let mut values = vec![];
     for argument in arguments {
-        values.push(eval_expression(argument, env)?);
+        values.push(EvalExpression(argument, env)?);
     }
     match name.as_str() {
         "abs" if values.len() == 1 => Ok(RuntimeValue::F32(AsF32(&values[0])?.abs())),

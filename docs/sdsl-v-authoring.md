@@ -186,6 +186,7 @@ Current supported statements:
 - `let` declarations (typed, initializer optional)
 - assignment to assignable expressions
 - `return <expr>;`
+- `if <expr> { ... }` and `if <expr> { ... } else { ... }` parse into AST (M55b parser/AST)
 - empty statement `;`
 - expression statements are accepted in test-function contexts (assert calls), not as general shader-body statements
 
@@ -197,9 +198,13 @@ Current supported expressions:
 - arithmetic (`+`, `-`, `*`, `/`) with precedence and parentheses
 - unary minus
 - comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`) in supported validation/execution contexts
+- condition-switch expressions parse into AST (M55b):
+  - `switch { case cond => expr ... else => expr }`
+  - `switch { case cond -> expr ... else -> expr }`
 
-Not currently supported in shader function bodies:
-- `if`
+Not currently fully supported in shader function bodies:
+- `if` validation/emission (parsed in M55b; later phases still report explicit unsupported diagnostics)
+- `switch` validation/emission (parsed in M55b; later phases still report explicit unsupported diagnostics)
 - loops (`for`, `while`)
 - `match`
 - nested block-control syntax beyond the bounded parser subset
