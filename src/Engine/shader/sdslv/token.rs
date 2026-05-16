@@ -28,6 +28,7 @@ pub enum SdslvTokenKind {
     Identifier(String),
     IntegerLiteral(String),
     FloatLiteral(String),
+    StringLiteral(String),
     LeftBrace,
     RightBrace,
     LeftParen,

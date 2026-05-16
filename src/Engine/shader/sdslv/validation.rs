@@ -4,13 +4,159 @@ use std::collections::{HashMap, HashSet};
 
 use super::ast::*;
 use super::diagnostic::SdslvDiagnostic;
-use super::parser::ParseSource;
+use super::parser::{ParseSource, ParseTestSource};
 use super::token::SdslvSpan;
 
 pub fn ValidateSource(source: &str) -> Result<SdslvModule, Vec<SdslvDiagnostic>> {
     let module = ParseSource(source)?;
     ValidateModule(&module)?;
     Ok(module)
+}
+
+pub fn ValidateTestSource(source: &str) -> Result<SdslvTestModule, Vec<SdslvDiagnostic>> {
+    let module = ParseTestSource(source)?;
+    ValidateTestModule(&module)?;
+    Ok(module)
+}
+
+pub fn ValidateTestModule(module: &SdslvTestModule) -> Result<(), Vec<SdslvDiagnostic>> {
+    let mut diagnostics = vec![];
+    let mut names = HashSet::new();
+    for test in &module.Tests {
+        if !names.insert(test.Name.clone()) {
+            diagnostics.push(SdslvDiagnostic::New(
+                &format!("duplicate test function '{}'", test.Name),
+                test.Span,
+            ));
+        }
+        let mut has_fact = false;
+        for attribute in &test.Attributes {
+            if attribute.Name == "Fact" {
+                has_fact = true;
+                if !attribute.Arguments.is_empty() {
+                    diagnostics.push(SdslvDiagnostic::New(
+                        "[Fact] does not accept arguments",
+                        attribute.Span,
+                    ));
+                }
+            } else {
+                diagnostics.push(SdslvDiagnostic::New(
+                    &format!(
+                        "unsupported test attribute '{}' in SDSL-V M7a",
+                        attribute.Name
+                    ),
+                    attribute.Span,
+                ));
+            }
+        }
+        if has_fact && !test.Parameters.is_empty() {
+            diagnostics.push(SdslvDiagnostic::New(
+                &format!("[Fact] test '{}' must not declare parameters", test.Name),
+                test.Span,
+            ));
+        }
+        for statement in &test.Body.Statements {
+            if let SdslvStatement::Expression { Value } = statement {
+                ValidateTestExpression(Value, &mut diagnostics);
+            }
+        }
+    }
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(diagnostics)
+    }
+}
+
+fn ValidateTestExpression(expression: &SdslvExpression, diagnostics: &mut Vec<SdslvDiagnostic>) {
+    let SdslvExpression::Call { Callee, Arguments } = expression else {
+        diagnostics.push(SdslvDiagnostic::New(
+            "non-assert expression statement is not supported in SDSL-V M7a",
+            SdslvSpan {
+                Start: 0,
+                End: 0,
+                Line: 1,
+                Column: 1,
+            },
+        ));
+        return;
+    };
+    let SdslvExpression::FieldAccess { Base, Field } = &**Callee else {
+        diagnostics.push(SdslvDiagnostic::New(
+            "non-assert expression statement is not supported in SDSL-V M7a",
+            SdslvSpan {
+                Start: 0,
+                End: 0,
+                Line: 1,
+                Column: 1,
+            },
+        ));
+        return;
+    };
+    let SdslvExpression::Identifier(base_name) = &**Base else {
+        diagnostics.push(SdslvDiagnostic::New(
+            "non-assert expression statement is not supported in SDSL-V M7a",
+            SdslvSpan {
+                Start: 0,
+                End: 0,
+                Line: 1,
+                Column: 1,
+            },
+        ));
+        return;
+    };
+    if base_name != "Assert" {
+        diagnostics.push(SdslvDiagnostic::New(
+            "non-assert expression statement is not supported in SDSL-V M7a",
+            SdslvSpan {
+                Start: 0,
+                End: 0,
+                Line: 1,
+                Column: 1,
+            },
+        ));
+        return;
+    }
+    let expected = match Field.as_str() {
+        "True" => 2,
+        "Equals" => 3,
+        "Near" => 4,
+        _ => {
+            diagnostics.push(SdslvDiagnostic::New(
+                &format!("unsupported Assert method 'Assert.{}' in SDSL-V M7a", Field),
+                SdslvSpan {
+                    Start: 0,
+                    End: 0,
+                    Line: 1,
+                    Column: 1,
+                },
+            ));
+            return;
+        }
+    };
+    if Arguments.len() != expected {
+        diagnostics.push(SdslvDiagnostic::New(
+            &format!("Assert.{} requires {} arguments", Field, expected),
+            SdslvSpan {
+                Start: 0,
+                End: 0,
+                Line: 1,
+                Column: 1,
+            },
+        ));
+        return;
+    }
+    if !matches!(Arguments.last(), Some(SdslvExpression::StringLiteral(_))) {
+        diagnostics.push(SdslvDiagnostic::New(
+            &format!("Assert.{} requires a custom message string argument", Field),
+            SdslvSpan {
+                Start: 0,
+                End: 0,
+                Line: 1,
+                Column: 1,
+            },
+        ));
+    }
 }
 
 pub fn ValidateModule(module: &SdslvModule) -> Result<(), Vec<SdslvDiagnostic>> {
@@ -377,6 +523,9 @@ impl<'a> Validator<'a> {
                         self.err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                     }
                 }
+                SdslvStatement::Expression { Value } => {
+                    self.CheckExpressionCalls(shader, &locals, Value);
+                }
                 SdslvStatement::Empty => {}
             }
         }
@@ -458,6 +607,7 @@ impl<'a> Validator<'a> {
             }
             SdslvExpression::IntegerLiteral(_) => TypeRef::Named("i32".to_string()),
             SdslvExpression::FloatLiteral(_) => TypeRef::Named("float".to_string()),
+            SdslvExpression::StringLiteral(_) => TypeRef::Named("string".to_string()),
             SdslvExpression::BoolLiteral(_) => TypeRef::Named("bool".to_string()),
             SdslvExpression::FieldAccess { Base, Field } => {
                 let base_type = self.ResolveExpressionType(shader, locals, Base);

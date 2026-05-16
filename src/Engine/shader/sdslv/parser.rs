@@ -10,6 +10,11 @@ pub fn ParseSource(source: &str) -> Result<SdslvModule, Vec<SdslvDiagnostic>> {
     Parser::New(source, tokens).ParseModule()
 }
 
+pub fn ParseTestSource(source: &str) -> Result<SdslvTestModule, Vec<SdslvDiagnostic>> {
+    let tokens = LexSource(source)?;
+    Parser::New(source, tokens).ParseTestModule()
+}
+
 struct Parser<'a> {
     Source: &'a str,
     Tokens: Vec<SdslvToken>,
@@ -71,6 +76,118 @@ impl<'a> Parser<'a> {
         } else {
             Err(self.Diagnostics)
         }
+    }
+    fn ParseTestModule(mut self) -> Result<SdslvTestModule, Vec<SdslvDiagnostic>> {
+        let mut m = SdslvTestModule {
+            Namespace: None,
+            Uses: vec![],
+            Tests: vec![],
+        };
+        while self.I < self.Tokens.len() {
+            if self.match_kw(SdslvTokenKind::KeywordNamespace) {
+                m.Namespace = self.parse_path_req("expected identifier after namespace");
+                self.expect(SdslvTokenKind::Semicolon, "expected ';' after namespace");
+            } else if self.match_kw(SdslvTokenKind::KeywordUse) {
+                if let Some(p) = self.parse_path_req("expected path after use") {
+                    m.Uses.push(SdslvUseDecl { Path: p });
+                }
+                self.expect(SdslvTokenKind::Semicolon, "expected ';' after use");
+            } else if self.check(SdslvTokenKind::LeftBracket) {
+                let attributes = self.parse_attributes();
+                let start = self.current_span();
+                if let Some(function) = self.parse_test_fn()
+                    && let Some(body) = function.Body
+                {
+                    m.Tests.push(SdslvTestFunction {
+                        Attributes: attributes,
+                        Name: function.Name,
+                        Parameters: function.Parameters,
+                        Body: body,
+                        Span: start,
+                    });
+                }
+            } else {
+                self.err_here("unexpected token at top level in test source");
+                self.I += 1;
+            }
+        }
+        if self.Diagnostics.is_empty() {
+            Ok(m)
+        } else {
+            Err(self.Diagnostics)
+        }
+    }
+    fn parse_attributes(&mut self) -> Vec<SdslvAttribute> {
+        let mut out = vec![];
+        while self.match_kw(SdslvTokenKind::LeftBracket) {
+            let start = self.prev_span();
+            let Some(name) = self.ident_req("expected attribute name") else {
+                break;
+            };
+            let mut arguments = vec![];
+            if self.match_kw(SdslvTokenKind::LeftParen) {
+                if !self.check(SdslvTokenKind::RightParen) {
+                    loop {
+                        let Some(arg) = self.parse_expression() else {
+                            break;
+                        };
+                        arguments.push(arg);
+                        if !self.match_kw(SdslvTokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                self.expect(
+                    SdslvTokenKind::RightParen,
+                    "expected ')' after attribute arguments",
+                );
+            }
+            self.expect(SdslvTokenKind::RightBracket, "expected ']' after attribute");
+            out.push(SdslvAttribute {
+                Name: name,
+                Arguments: arguments,
+                Span: start,
+            });
+        }
+        out
+    }
+    fn parse_test_fn(&mut self) -> Option<SdslvFunctionDecl> {
+        self.expect(SdslvTokenKind::KeywordFn, "expected fn");
+        let name = self.ident()?;
+        self.expect(
+            SdslvTokenKind::LeftParen,
+            "expected '(' in function signature",
+        );
+        let mut ps = vec![];
+        while !self.check(SdslvTokenKind::RightParen) && self.I < self.Tokens.len() {
+            let n = self.ident()?;
+            self.expect(SdslvTokenKind::Colon, "expected ':' in parameter");
+            let t = self.parse_path_req("expected parameter type")?;
+            ps.push(SdslvFunctionParameter {
+                Name: n,
+                TypeName: t,
+            });
+            if !self.match_kw(SdslvTokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(SdslvTokenKind::RightParen, "expected ')' after parameters");
+        let body = if self.match_kw(SdslvTokenKind::LeftBrace) {
+            self.parse_body()
+        } else {
+            self.err_here("expected function body");
+            None
+        };
+        Some(SdslvFunctionDecl {
+            IsOverride: false,
+            Stage: None,
+            Name: name,
+            Parameters: ps,
+            ReturnType: SdslvPath {
+                Segments: vec!["void".to_string()],
+            },
+            Body: body,
+        })
     }
     fn parse_compile(&mut self) -> Option<SdslvCompileDecl> {
         let generic_shader = self.parse_path_req("expected shader path after compile")?;
@@ -374,10 +491,22 @@ impl<'a> Parser<'a> {
             self.err_here("statement form not supported in SDSL-V M4 body subset");
             return None;
         }
-        let target = self.parse_expression()?;
-        if !self.match_kw(SdslvTokenKind::Equals) {
+        if let Some(SdslvToken {
+            Kind: SdslvTokenKind::Identifier(name),
+            ..
+        }) = self.Tokens.get(self.I)
+            && (name == "if" || name == "for" || name == "while" || name == "match")
+        {
             self.err_here("unsupported statement in SDSL-V M4 body subset");
             return None;
+        }
+        let target = self.parse_expression()?;
+        if !self.match_kw(SdslvTokenKind::Equals) {
+            self.expect(
+                SdslvTokenKind::Semicolon,
+                "expected ';' after expression statement",
+            );
+            return Some(SdslvStatement::Expression { Value: target });
         }
         if !self.is_assignment_target(&target) {
             self.err_here("invalid assignment target in SDSL-V M4 body subset");
@@ -517,6 +646,11 @@ impl<'a> Parser<'a> {
                 self.I += 1;
                 Some(SdslvExpression::FloatLiteral(out))
             }
+            SdslvTokenKind::StringLiteral(value) => {
+                let out = value.clone();
+                self.I += 1;
+                Some(SdslvExpression::StringLiteral(out))
+            }
             _ => {
                 self.err_here("unexpected token in expression");
                 None
@@ -600,5 +734,16 @@ impl<'a> Parser<'a> {
     }
     fn prev_span(&self) -> SdslvSpan {
         self.Tokens[self.I - 1].Span
+    }
+    fn current_span(&self) -> SdslvSpan {
+        self.Tokens
+            .get(self.I)
+            .map(|x| x.Span)
+            .unwrap_or(SdslvSpan {
+                Start: self.Source.len(),
+                End: self.Source.len(),
+                Line: 1,
+                Column: 1,
+            })
     }
 }

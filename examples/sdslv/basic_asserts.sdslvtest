@@ -1,0 +1,9 @@
+namespace WyrmCoil.Tests;
+
+use WyrmCoil.Examples;
+
+[Fact]
+fn Fresnel_NormalIncidence_ReturnsZero() {
+    let value: f32 = Fresnel(0.0);
+    Assert.Near(value, 0.0, 0.001, "normal incidence Fresnel should be near zero");
+}
