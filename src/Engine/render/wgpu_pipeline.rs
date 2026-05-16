@@ -31,6 +31,22 @@ pub struct WgpuRenderPipelineDescriptorPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WgpuPipelineResourceError {
     MissingShaderBytes { Stage: String },
+    EmptyShaderBytes { Stage: String },
+}
+
+pub struct WgpuRenderPipelineResource {
+    pub Name: String,
+    pub Pipeline: wgpu::RenderPipeline,
+}
+
+pub struct WgpuShaderModules<'a> {
+    pub Vertex: &'a wgpu::ShaderModule,
+    pub Pixel: &'a wgpu::ShaderModule,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WgpuRenderPipelineCreateError {
+    EmptyShaderBytes { Stage: String },
 }
 
 pub fn MapVertexFormatToWgpu(format: VertexFormat) -> wgpu::VertexFormat {
@@ -105,6 +121,118 @@ pub fn BuildWgpuRenderPipelineDescriptorPlan(
             .Depth
             .as_ref()
             .map(|depth| MapDepthFormatToWgpu(depth.Format)),
+    })
+}
+
+pub fn ValidateWgpuShaderBytesForPipeline(
+    plan: &WgpuRenderPipelineDescriptorPlan,
+    layout: &RenderPipelineLayoutPlan,
+) -> Result<(), WgpuRenderPipelineCreateError> {
+    if layout.Shaders.Vertex.SpirvBytes.is_empty() {
+        return Err(WgpuRenderPipelineCreateError::EmptyShaderBytes {
+            Stage: "vertex".to_string(),
+        });
+    }
+    if layout.Shaders.Pixel.SpirvBytes.is_empty() {
+        return Err(WgpuRenderPipelineCreateError::EmptyShaderBytes {
+            Stage: "pixel".to_string(),
+        });
+    }
+    if plan.VertexEntry.trim().is_empty() {
+        return Err(WgpuRenderPipelineCreateError::EmptyShaderBytes {
+            Stage: "vertex".to_string(),
+        });
+    }
+    if plan.PixelEntry.trim().is_empty() {
+        return Err(WgpuRenderPipelineCreateError::EmptyShaderBytes {
+            Stage: "pixel".to_string(),
+        });
+    }
+    Ok(())
+}
+
+pub fn CreateWgpuRenderPipelineFromModules(
+    device: &wgpu::Device,
+    descriptor_plan: &WgpuRenderPipelineDescriptorPlan,
+    layout_plan: &RenderPipelineLayoutPlan,
+    modules: WgpuShaderModules<'_>,
+) -> Result<WgpuRenderPipelineResource, WgpuRenderPipelineCreateError> {
+    ValidateWgpuShaderBytesForPipeline(descriptor_plan, layout_plan)?;
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(&descriptor_plan.Name),
+        bind_group_layouts: &[],
+        push_constant_ranges: &[],
+    });
+
+    let mut owned_attributes: Vec<Vec<wgpu::VertexAttribute>> =
+        Vec::with_capacity(descriptor_plan.VertexBuffers.len());
+    for buffer in &descriptor_plan.VertexBuffers {
+        let mut attrs = Vec::with_capacity(buffer.Attributes.len());
+        for attribute in &buffer.Attributes {
+            attrs.push(wgpu::VertexAttribute {
+                format: attribute.Format,
+                offset: attribute.OffsetBytes,
+                shader_location: attribute.ShaderLocation,
+            });
+        }
+        owned_attributes.push(attrs);
+    }
+
+    let mut vertex_buffers = Vec::with_capacity(descriptor_plan.VertexBuffers.len());
+    for (index, buffer) in descriptor_plan.VertexBuffers.iter().enumerate() {
+        vertex_buffers.push(wgpu::VertexBufferLayout {
+            array_stride: buffer.StrideBytes,
+            step_mode: buffer.StepMode,
+            attributes: &owned_attributes[index],
+        });
+    }
+
+    let color_target = wgpu::ColorTargetState {
+        format: descriptor_plan.ColorFormat,
+        blend: Some(wgpu::BlendState::REPLACE),
+        write_mask: wgpu::ColorWrites::ALL,
+    };
+
+    let depth_stencil = descriptor_plan
+        .DepthFormat
+        .map(|format| wgpu::DepthStencilState {
+            format,
+            depth_write_enabled: layout_plan
+                .Depth
+                .as_ref()
+                .map(|x| x.DepthWriteEnabled)
+                .unwrap_or(false),
+            depth_compare: wgpu::CompareFunction::LessEqual,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        });
+
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(&descriptor_plan.Name),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: modules.Vertex,
+            entry_point: Some(&descriptor_plan.VertexEntry),
+            buffers: &vertex_buffers,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: modules.Pixel,
+            entry_point: Some(&descriptor_plan.PixelEntry),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(color_target)],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    });
+
+    Ok(WgpuRenderPipelineResource {
+        Name: descriptor_plan.Name.clone(),
+        Pipeline: pipeline,
     })
 }
 
@@ -303,6 +431,38 @@ mod tests {
         assert_eq!(
             converted.VertexBuffers[0].Attributes[0].ShaderLocation, 0,
             "converted metadata should remain accessible after source plan drops"
+        );
+    }
+
+    #[test]
+    fn ValidateWgpuShaderBytesForPipelineRejectsEmptyVertexBytes() {
+        let mut plan = BuildValidLayoutPlan();
+        plan.Shaders.Vertex.SpirvBytes.clear();
+        let descriptor = BuildWgpuRenderPipelineDescriptorPlan(&BuildValidLayoutPlan())
+            .expect("control descriptor should be valid");
+
+        assert_eq!(
+            ValidateWgpuShaderBytesForPipeline(&descriptor, &plan).unwrap_err(),
+            WgpuRenderPipelineCreateError::EmptyShaderBytes {
+                Stage: "vertex".to_string()
+            },
+            "empty vertex bytes should return a structured error"
+        );
+    }
+
+    #[test]
+    fn ValidateWgpuShaderBytesForPipelineRejectsEmptyPixelBytes() {
+        let mut plan = BuildValidLayoutPlan();
+        plan.Shaders.Pixel.SpirvBytes.clear();
+        let descriptor = BuildWgpuRenderPipelineDescriptorPlan(&BuildValidLayoutPlan())
+            .expect("control descriptor should be valid");
+
+        assert_eq!(
+            ValidateWgpuShaderBytesForPipeline(&descriptor, &plan).unwrap_err(),
+            WgpuRenderPipelineCreateError::EmptyShaderBytes {
+                Stage: "pixel".to_string()
+            },
+            "empty pixel bytes should return a structured error"
         );
     }
 }
