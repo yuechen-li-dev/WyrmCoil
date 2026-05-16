@@ -23,6 +23,21 @@ pub struct DwUtilityCandidate {
     pub Score: DwScoreFn,
 }
 
+pub fn SelectHighestUtilityTarget<T: Copy>(scored: &[(T, f32)]) -> Option<(T, f32)> {
+    if scored.is_empty() {
+        return None;
+    }
+
+    let mut best = scored[0];
+    for candidate in scored.iter().skip(1) {
+        if candidate.1 > best.1 {
+            best = *candidate;
+        }
+    }
+
+    Some(best)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DwControl {
     Continue { Pc: u32 },
@@ -50,7 +65,7 @@ pub enum DwControlSummary {
 pub mod Dw {
     use super::{
         DwControl, DwDecideOptions, DwDecisionCommitState, DwDecisionTraceEntry, DwFrameCtx,
-        DwFrameId, DwPhase, DwScoreFn, DwTieBreak, DwUtilityCandidate,
+        DwFrameId, DwPhase, DwScoreFn, DwTieBreak, DwUtilityCandidate, SelectHighestUtilityTarget,
     };
 
     pub fn When(target: DwFrameId, scorer: DwScoreFn) -> DwUtilityCandidate {
@@ -80,14 +95,8 @@ pub mod Dw {
         let current_index = ctx.FindDecisionMemoryIndex(key);
         let current_state = current_index.map(|index| ctx.DecisionMemoryAt(index));
 
-        let mut raw_best = scored[0].0;
-        let mut raw_best_score = scored[0].1;
-        for (target, score) in scored.iter().skip(1) {
-            if *score > raw_best_score {
-                raw_best = *target;
-                raw_best_score = *score;
-            }
-        }
+        let (raw_best, raw_best_score) =
+            SelectHighestUtilityTarget(&scored).expect("scored candidates should not be empty");
 
         let mut selected = raw_best;
         let mut tie_break_applied = false;

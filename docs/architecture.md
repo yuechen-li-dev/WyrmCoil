@@ -103,6 +103,23 @@ M23 remains intentionally narrow:
 
 Future milestones can consume the upload plan boundary for real buffer creation/submission without changing extraction semantics.
 
+## M24 render buffering strategy planner (CPU policy only)
+
+M24 adds a deterministic CPU-side buffering strategy planner over `VertexBufferUploadPlan` metadata:
+
+- `PlanVertexBuffering(&VertexBufferUploadPlan, BufferingConstraints)` selects a mode using Dunewyrm utility-style score selection after hard feasibility/safety gates.
+- Supported modes are `FixedDoubleDefault`, `PullLagPressure`, `SerialJitSurvival`, and `NoBufferingModeFeasible`.
+- WyrmCoil follows the Prometheus three-mode policy: fixed-double by default, pull-lag only under guarded pressure constraints, and serial JIT as a strict one-slot survival fallback.
+- Planner output is plain data: selected mode, transition/fallback/hard-failure reason enums, rejected modes, feasibility flags, memory requirements, and deterministic telemetry counters.
+- Empty uploads are treated as a no-op success (default mode, zero committed memory, zero active slots).
+
+M24 remains intentionally narrow:
+
+- no real `wgpu::Buffer` creation
+- no upload queue submission path
+- no command encoder or draw pass integration
+- no runtime slot lifecycle manager yet
+
 ## M22 CPU render extraction boundary
 
 M22 adds the next renderer-side CPU boundary after M5 snapshots and M20/M21 layout planning:
