@@ -136,3 +136,14 @@ Dunewyrm is a Rust-native sibling of DragonGod, not a line-by-line port.
 - `Steady` is not a timer wait and does not set wait counters.
 - `RunUntilBlocked`-style loops should stop on `Steady` as a blocked/quiescent boundary.
 - This milestone does not add root keep-alive policy overlays; it only adds runtime control semantics.
+
+## M51 keep-root-frame persistent overlay policy
+
+- `DwRootPolicy` adds root-stack policy selection with default `Normal`.
+- `DwSession::New(...)` remains unchanged and uses `DwRootPolicy::Normal`.
+- `DwSession::NewWithRootPolicy(...)` enables explicit `DwRootPolicy::KeepRootFrame` sessions for persistent root/controller overlays.
+- Under `KeepRootFrame`, root `Steady` remains normal and non-terminal.
+- Under `KeepRootFrame`, root `Complete` is transformed into session `Steady` so the root frame persists.
+- Under `KeepRootFrame`, root `Pop` and root `Replace` are rejected with deterministic failure reasons.
+- Child-frame `Complete`/`Pop`/`Replace` semantics remain unchanged.
+- Runtime chunk export/import persists `RootPolicy` so restore preserves keep-root behavior.
