@@ -437,11 +437,19 @@ pub fn DispatchActs(world: &mut World, board: &crate::DwBoard, acts: &[DwActRequ
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct EngineClock {
+    pub ControlTick: u64,
+    pub SimulationTick: u64,
+    pub RenderFrame: u64,
+}
+
 pub struct Engine {
     pub Session: DwSession,
     pub World: World,
     pub Player: EntityId,
     pub Guard: EntityId,
+    pub Clock: EngineClock,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct EngineChunk {
@@ -449,11 +457,13 @@ pub struct EngineChunk {
     pub World: WorldChunk,
     pub Player: EntityId,
     pub Guard: EntityId,
+    pub Clock: EngineClock,
 }
 #[allow(dead_code)]
 pub struct TickResult {
     pub Runtime: DwTickResult,
     pub World: World,
+    pub Clock: EngineClock,
 }
 
 impl Engine {
@@ -468,14 +478,20 @@ impl Engine {
             World: world,
             Player: player,
             Guard: guard,
+            Clock: EngineClock::default(),
         }
     }
-    pub fn Tick(&mut self) -> TickResult {
+
+    pub fn Clock(&self) -> EngineClock {
+        self.Clock
+    }
+
+    pub fn TickControl(&mut self) -> DwTickResult {
         self.World.RefreshSelectionBoard(self.Session.BoardMut());
         let runtime = self
             .Session
             .Tick()
-            .expect("WyrmCoil engine tick should succeed");
+            .expect("WyrmCoil control tick should succeed");
         DispatchActs(
             &mut self.World,
             self.Session.Board(),
@@ -486,10 +502,27 @@ impl Engine {
             self.Session.Board(),
             &runtime.MaturedDeferredActs,
         );
+        self.Clock.ControlTick += 1;
+        runtime
+    }
+
+    pub fn TickSimulation(&mut self) {
         self.World.Tick();
+        self.Clock.SimulationTick += 1;
+    }
+
+    pub fn RenderSnapshot(&mut self) -> World {
+        self.Clock.RenderFrame += 1;
+        self.World.clone()
+    }
+
+    pub fn Tick(&mut self) -> TickResult {
+        let runtime = self.TickControl();
+        self.TickSimulation();
         TickResult {
             Runtime: runtime,
             World: self.World.clone(),
+            Clock: self.Clock,
         }
     }
     pub fn ExportChunk(&self) -> EngineChunk {
@@ -498,6 +531,7 @@ impl Engine {
             World: self.World.ExportChunk(),
             Player: self.Player,
             Guard: self.Guard,
+            Clock: self.Clock,
         }
     }
     pub fn FromChunk(chunk: EngineChunk) -> Self {
@@ -508,6 +542,7 @@ impl Engine {
             World: World::FromChunk(chunk.World),
             Player: chunk.Player,
             Guard: chunk.Guard,
+            Clock: chunk.Clock,
         }
     }
 }
