@@ -1,34 +1,31 @@
 #![allow(non_snake_case)]
 
-use wyrmcoil::{CompareTrace, DwActRequest, DwBoard};
-
-#[path = "../src/Engine/wyrmcoil.rs"]
-mod wyrmcoil_sample_impl;
+use wyrmcoil::{CompareTrace, DwActRequest, DwBoard, Engine as wyrmcoil_sample_impl};
 
 #[test]
 fn DenseStoreMultiEntityVelocityAliveFilteringAndChunkRoundTrip() {
-    let mut store = wyrmcoil_sample_impl::WcTransformStore::New();
-    let player = store.Spawn(wyrmcoil_sample_impl::WcVec2 { X: 2.0, Y: 3.0 });
-    let guard = store.Spawn(wyrmcoil_sample_impl::WcVec2 { X: 9.0, Y: 9.0 });
+    let mut store = wyrmcoil_sample_impl::TransformStore::New();
+    let player = store.Spawn(wyrmcoil_sample_impl::Vec2 { X: 2.0, Y: 3.0 });
+    let guard = store.Spawn(wyrmcoil_sample_impl::Vec2 { X: 9.0, Y: 9.0 });
 
-    store.SetVelocity(player, wyrmcoil_sample_impl::WcVec2 { X: 1.5, Y: -1.0 });
-    store.SetVelocity(guard, wyrmcoil_sample_impl::WcVec2 { X: -2.0, Y: 0.5 });
+    store.SetVelocity(player, wyrmcoil_sample_impl::Vec2 { X: 1.5, Y: -1.0 });
+    store.SetVelocity(guard, wyrmcoil_sample_impl::Vec2 { X: -2.0, Y: 0.5 });
     store.SetAlive(guard, false);
     store.Tick();
 
     assert_eq!(
         store.Position(player),
-        Some(wyrmcoil_sample_impl::WcVec2 { X: 3.5, Y: 2.0 }),
+        Some(wyrmcoil_sample_impl::Vec2 { X: 3.5, Y: 2.0 }),
         "alive player entity should integrate velocity into deterministic dense position lanes"
     );
     assert_eq!(
         store.Position(guard),
-        Some(wyrmcoil_sample_impl::WcVec2 { X: 9.0, Y: 9.0 }),
+        Some(wyrmcoil_sample_impl::Vec2 { X: 9.0, Y: 9.0 }),
         "non-alive guard entity should be filtered out of world integration loop"
     );
 
     let chunk = store.ExportChunk();
-    let restored = wyrmcoil_sample_impl::WcTransformStore::FromChunk(chunk);
+    let restored = wyrmcoil_sample_impl::TransformStore::FromChunk(chunk);
     assert_eq!(
         restored, store,
         "transform store chunk restore should preserve positions, velocities, and alive lanes exactly"
@@ -37,10 +34,10 @@ fn DenseStoreMultiEntityVelocityAliveFilteringAndChunkRoundTrip() {
 
 #[test]
 fn DenseHealthQuerySelectsLowestAliveWithDeterministicTieAndChunkRoundTrip() {
-    let mut world = wyrmcoil_sample_impl::WcWorld::New();
-    let a = world.SpawnEntity(wyrmcoil_sample_impl::WcVec2::Zero(), 20.0);
-    let b = world.SpawnEntity(wyrmcoil_sample_impl::WcVec2::Zero(), 10.0);
-    let c = world.SpawnEntity(wyrmcoil_sample_impl::WcVec2::Zero(), 10.0);
+    let mut world = wyrmcoil_sample_impl::World::New();
+    let a = world.SpawnEntity(wyrmcoil_sample_impl::Vec2::Zero(), 20.0);
+    let b = world.SpawnEntity(wyrmcoil_sample_impl::Vec2::Zero(), 10.0);
+    let c = world.SpawnEntity(wyrmcoil_sample_impl::Vec2::Zero(), 10.0);
     world.Transforms.SetAlive(b, false);
 
     let selected = world.FindLowestHealthAliveEntity();
@@ -58,11 +55,11 @@ fn DenseHealthQuerySelectsLowestAliveWithDeterministicTieAndChunkRoundTrip() {
         "lowest-health query should return no selection when all entities are non-alive"
     );
 
-    let mut world2 = wyrmcoil_sample_impl::WcWorld::New();
-    let x = world2.SpawnEntity(wyrmcoil_sample_impl::WcVec2::Zero(), 3.0);
+    let mut world2 = wyrmcoil_sample_impl::World::New();
+    let x = world2.SpawnEntity(wyrmcoil_sample_impl::Vec2::Zero(), 3.0);
     world2.Health.SetHealth(x, 2.5);
     let chunk = world2.ExportChunk();
-    let restored = wyrmcoil_sample_impl::WcWorld::FromChunk(chunk);
+    let restored = wyrmcoil_sample_impl::World::FromChunk(chunk);
     assert_eq!(
         restored, world2,
         "world chunk restore should preserve health and transform lanes used by deterministic selection query"
@@ -71,68 +68,68 @@ fn DenseHealthQuerySelectsLowestAliveWithDeterministicTieAndChunkRoundTrip() {
 
 #[test]
 fn ActBridgeReadsBoardBackedCommandIntentAndTargetsOnlyRequestedEntity() {
-    let mut world = wyrmcoil_sample_impl::WcWorld::New();
-    let player = world.SpawnEntity(wyrmcoil_sample_impl::WcVec2::Zero(), 100.0);
-    let guard = world.SpawnEntity(wyrmcoil_sample_impl::WcVec2::Zero(), 100.0);
+    let mut world = wyrmcoil_sample_impl::World::New();
+    let player = world.SpawnEntity(wyrmcoil_sample_impl::Vec2::Zero(), 100.0);
+    let guard = world.SpawnEntity(wyrmcoil_sample_impl::Vec2::Zero(), 100.0);
 
     let mut board = DwBoard::New();
     board
-        .Set(wyrmcoil_sample_impl::WcKeys::CommandEntity, player.0 as i32)
+        .Set(wyrmcoil_sample_impl::Keys::CommandEntity, player.0 as i32)
         .expect("command entity write should succeed for player targeting");
     board
-        .Set(wyrmcoil_sample_impl::WcKeys::CommandVelocityX, 1.0)
+        .Set(wyrmcoil_sample_impl::Keys::CommandVelocityX, 1.0)
         .expect("command velocity x write should succeed for player targeting");
     board
-        .Set(wyrmcoil_sample_impl::WcKeys::CommandVelocityY, 0.0)
+        .Set(wyrmcoil_sample_impl::Keys::CommandVelocityY, 0.0)
         .expect("command velocity y write should succeed for player targeting");
 
     wyrmcoil_sample_impl::DispatchActs(
         &mut world,
         &board,
         &[DwActRequest {
-            Id: wyrmcoil_sample_impl::WcActs::ApplyVelocityCommand,
+            Id: wyrmcoil_sample_impl::Acts::ApplyVelocityCommand,
         }],
     );
 
     assert_eq!(
         world.Transforms.Velocity(player),
-        Some(wyrmcoil_sample_impl::WcVec2 { X: 1.0, Y: 0.0 }),
+        Some(wyrmcoil_sample_impl::Vec2 { X: 1.0, Y: 0.0 }),
         "board-backed command intent should set velocity only for the addressed player entity"
     );
     assert_eq!(
         world.Transforms.Velocity(guard),
-        Some(wyrmcoil_sample_impl::WcVec2::Zero()),
+        Some(wyrmcoil_sample_impl::Vec2::Zero()),
         "player-targeted command intent should not mutate guard velocity lanes"
     );
 
     board
-        .Set(wyrmcoil_sample_impl::WcKeys::CommandEntity, 99)
+        .Set(wyrmcoil_sample_impl::Keys::CommandEntity, 99)
         .expect("invalid command entity index write should still be representable on board");
     board
-        .Set(wyrmcoil_sample_impl::WcKeys::CommandVelocityX, 5.0)
+        .Set(wyrmcoil_sample_impl::Keys::CommandVelocityX, 5.0)
         .expect("invalid command velocity x write should succeed on board");
     board
-        .Set(wyrmcoil_sample_impl::WcKeys::CommandVelocityY, 5.0)
+        .Set(wyrmcoil_sample_impl::Keys::CommandVelocityY, 5.0)
         .expect("invalid command velocity y write should succeed on board");
 
     wyrmcoil_sample_impl::DispatchActs(
         &mut world,
         &board,
         &[DwActRequest {
-            Id: wyrmcoil_sample_impl::WcActs::ApplyVelocityCommand,
+            Id: wyrmcoil_sample_impl::Acts::ApplyVelocityCommand,
         }],
     );
 
     assert_eq!(
         world.Transforms.Velocity(player),
-        Some(wyrmcoil_sample_impl::WcVec2 { X: 1.0, Y: 0.0 }),
+        Some(wyrmcoil_sample_impl::Vec2 { X: 1.0, Y: 0.0 }),
         "invalid target index should be ignored by the act bridge instead of mutating arbitrary entity lanes"
     );
 }
 
 #[test]
 fn EngineTickMailboxCommandWritesBoardAndDispatchesCommandActs() {
-    let mut engine = wyrmcoil_sample_impl::WcEngine::New();
+    let mut engine = wyrmcoil_sample_impl::Engine::New();
     engine
         .Session
         .MailboxMut()
@@ -147,13 +144,13 @@ fn EngineTickMailboxCommandWritesBoardAndDispatchesCommandActs() {
 
     assert!(
         t1.Runtime.ImmediateActs.contains(&DwActRequest {
-            Id: wyrmcoil_sample_impl::WcActs::ApplyVelocityCommand,
+            Id: wyrmcoil_sample_impl::Acts::ApplyVelocityCommand,
         }),
         "player frame should emit ApplyVelocityCommand immediate act after consuming MoveRight mailbox message"
     );
     assert!(
         t1.Runtime.ImmediateActs.contains(&DwActRequest {
-            Id: wyrmcoil_sample_impl::WcActs::NudgeEntityCommand,
+            Id: wyrmcoil_sample_impl::Acts::NudgeEntityCommand,
         }),
         "player frame should emit NudgeEntityCommand immediate act after consuming nudge mailbox message"
     );
@@ -167,7 +164,7 @@ fn EngineTickMailboxCommandWritesBoardAndDispatchesCommandActs() {
         engine
             .Session
             .Board()
-            .GetOr(wyrmcoil_sample_impl::WcKeys::HasSelection, false),
+            .GetOr(wyrmcoil_sample_impl::Keys::HasSelection, false),
         true,
         "engine tick should leave board-backed selection summary available for frame consumption after deterministic dense query step"
     );
@@ -175,7 +172,7 @@ fn EngineTickMailboxCommandWritesBoardAndDispatchesCommandActs() {
         engine
             .Session
             .Board()
-            .GetOr(wyrmcoil_sample_impl::WcKeys::SelectedEntity, -1)
+            .GetOr(wyrmcoil_sample_impl::Keys::SelectedEntity, -1)
             >= 0,
         "engine tick should leave selected entity index on board after deterministic dense query step"
     );
@@ -203,7 +200,7 @@ fn EngineTickMailboxCommandWritesBoardAndDispatchesCommandActs() {
 
 #[test]
 fn QuerySelectionFeedsControlAndMutatesSelectedEntityOnly() {
-    let mut engine = wyrmcoil_sample_impl::WcEngine::New();
+    let mut engine = wyrmcoil_sample_impl::Engine::New();
     let selected = engine.Guard;
     let non_selected = engine.Player;
     engine.World.Health.SetHealth(engine.Player, 90.0);
@@ -215,7 +212,7 @@ fn QuerySelectionFeedsControlAndMutatesSelectedEntityOnly() {
         engine
             .Session
             .Board()
-            .GetOr(wyrmcoil_sample_impl::WcKeys::HasSelection, false),
+            .GetOr(wyrmcoil_sample_impl::Keys::HasSelection, false),
         true,
         "selection summary should report true when at least one alive entity exists"
     );
@@ -223,7 +220,7 @@ fn QuerySelectionFeedsControlAndMutatesSelectedEntityOnly() {
         engine
             .Session
             .Board()
-            .GetOr(wyrmcoil_sample_impl::WcKeys::SelectedEntity, -1),
+            .GetOr(wyrmcoil_sample_impl::Keys::SelectedEntity, -1),
         selected.0 as i32,
         "selection summary should report the deterministic lowest-health alive entity index on the board"
     );
@@ -265,7 +262,7 @@ fn QuerySelectionFeedsControlAndMutatesSelectedEntityOnly() {
 
 #[test]
 fn EngineChunkRestoreMatchesUninterruptedMultiEntityCommandExecution() {
-    let mut uninterrupted = wyrmcoil_sample_impl::WcEngine::New();
+    let mut uninterrupted = wyrmcoil_sample_impl::Engine::New();
     uninterrupted
         .Session
         .MailboxMut()
@@ -282,7 +279,7 @@ fn EngineChunkRestoreMatchesUninterruptedMultiEntityCommandExecution() {
         uninterrupted.Tick();
     }
 
-    let mut split = wyrmcoil_sample_impl::WcEngine::New();
+    let mut split = wyrmcoil_sample_impl::Engine::New();
     split
         .Session
         .MailboxMut()
@@ -299,7 +296,7 @@ fn EngineChunkRestoreMatchesUninterruptedMultiEntityCommandExecution() {
         split.Tick();
     }
     let chunk = split.ExportChunk();
-    let mut restored = wyrmcoil_sample_impl::WcEngine::FromChunk(chunk);
+    let mut restored = wyrmcoil_sample_impl::Engine::FromChunk(chunk);
     for _ in 0..5 {
         restored.Tick();
     }
