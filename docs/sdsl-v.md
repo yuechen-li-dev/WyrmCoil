@@ -572,3 +572,33 @@ Intentional non-goals in M7a:
 - no renderer integration
 
 Compiler development and validation continue to use Rust `cargo test`.
+
+
+## SDSL-V M8 shader flows (parser/validation seed)
+
+M8 adds an Octomata-inspired shader-flow declaration shape for explicit shader/material composition decisions at compile-time, not GPU runtime scheduling.
+
+Supported syntax in M8:
+- top-level `flow Name(params) -> ReturnType { ... }`
+- `state Name { ... }`
+- `when { case <expr> -> goto <State> | return <expr>; ... else -> goto <State> | return <expr> }`
+- direct `goto State;` and `return Expr;` state statements
+
+M8 flow validation rules:
+- flow names participate in top-level uniqueness checks
+- flow must contain at least one state
+- state names must be unique per flow
+- each state must contain at least one statement
+- each `when` must contain at least one `case` and must include `else`
+- every `goto` target must resolve to a state in the same flow
+
+Current non-goals (unchanged):
+- no flow lowering to HLSL yet
+- no flow execution/runtime-state-machine behavior
+- no flow board memory
+- no utility `when`
+- no `suspend`, `remember`, or `resume`
+- no generic flows
+
+Emitter behavior in M8:
+- HLSL emission returns a diagnostic when a module contains flow declarations: `flow emission is not implemented in SDSL-V M8`.

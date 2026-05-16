@@ -62,6 +62,10 @@ impl<'a> Parser<'a> {
                 if let Some(d) = self.parse_shader() {
                     m.Declarations.push(SdslvDecl::Shader(d));
                 }
+            } else if self.match_kw(SdslvTokenKind::KeywordFlow) {
+                if let Some(d) = self.parse_flow() {
+                    m.Declarations.push(SdslvDecl::Flow(d));
+                }
             } else if self.match_kw(SdslvTokenKind::KeywordCompile) {
                 if let Some(d) = self.parse_compile() {
                     m.Declarations.push(SdslvDecl::Compile(d));
@@ -429,6 +433,147 @@ impl<'a> Parser<'a> {
             ReturnType: rt,
             Body: body,
         })
+    }
+    fn parse_flow(&mut self) -> Option<SdslvFlowDecl> {
+        let start = self.prev_span();
+        let name = self.ident()?;
+        self.expect(SdslvTokenKind::LeftParen, "expected '(' in flow signature");
+        let mut parameters = vec![];
+        while !self.check(SdslvTokenKind::RightParen) && self.I < self.Tokens.len() {
+            let n = self.ident()?;
+            self.expect(SdslvTokenKind::Colon, "expected ':' in parameter");
+            let t = self.parse_path_req("expected parameter type")?;
+            parameters.push(SdslvFunctionParameter {
+                Name: n,
+                TypeName: t,
+            });
+            if !self.match_kw(SdslvTokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(SdslvTokenKind::RightParen, "expected ')' after parameters");
+        self.expect(SdslvTokenKind::Arrow, "expected '->' in flow signature");
+        let return_type = self.parse_path_req("expected return type in flow declaration")?;
+        self.expect(
+            SdslvTokenKind::LeftBrace,
+            "expected '{' after flow signature",
+        );
+        let mut states = vec![];
+        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            if !self.match_kw(SdslvTokenKind::KeywordState) {
+                self.err_here("expected state declaration in flow body");
+                self.I += 1;
+                continue;
+            }
+            if let Some(state) = self.parse_flow_state() {
+                states.push(state);
+            }
+        }
+        self.expect(SdslvTokenKind::RightBrace, "expected '}' after flow body");
+        let end = self.prev_span();
+        Some(SdslvFlowDecl {
+            Name: name,
+            Parameters: parameters,
+            ReturnType: return_type,
+            States: states,
+            Span: SdslvSpan {
+                Start: start.Start,
+                End: end.End,
+                Line: start.Line,
+                Column: start.Column,
+            },
+        })
+    }
+    fn parse_flow_state(&mut self) -> Option<SdslvFlowState> {
+        let start = self.prev_span();
+        let name = self.ident()?;
+        self.expect(SdslvTokenKind::LeftBrace, "expected '{' after state name");
+        let mut statements = vec![];
+        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            if let Some(statement) = self.parse_flow_statement() {
+                statements.push(statement);
+            } else {
+                self.recover_statement();
+            }
+        }
+        self.expect(SdslvTokenKind::RightBrace, "expected '}' after state body");
+        let end = self.prev_span();
+        Some(SdslvFlowState {
+            Name: name,
+            Statements: statements,
+            Span: SdslvSpan {
+                Start: start.Start,
+                End: end.End,
+                Line: start.Line,
+                Column: start.Column,
+            },
+        })
+    }
+    fn parse_flow_statement(&mut self) -> Option<SdslvFlowStatement> {
+        if self.match_kw(SdslvTokenKind::KeywordWhen) {
+            return Some(SdslvFlowStatement::When(self.parse_flow_when()?));
+        }
+        if self.match_kw(SdslvTokenKind::KeywordGoto) {
+            let target = self.parse_path_req("expected state path after goto")?;
+            self.expect(SdslvTokenKind::Semicolon, "expected ';' after goto");
+            return Some(SdslvFlowStatement::Goto(target));
+        }
+        if self.match_kw(SdslvTokenKind::KeywordReturn) {
+            let value = self.parse_expression()?;
+            self.expect(SdslvTokenKind::Semicolon, "expected ';' after return");
+            return Some(SdslvFlowStatement::Return(value));
+        }
+        self.err_here("unsupported statement in flow state body");
+        None
+    }
+    fn parse_flow_when(&mut self) -> Option<SdslvFlowWhen> {
+        let start = self.prev_span();
+        self.expect(SdslvTokenKind::LeftBrace, "expected '{' after when");
+        let mut cases = vec![];
+        let mut else_action = None;
+        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            if self.match_kw(SdslvTokenKind::KeywordCase) {
+                let condition = self.parse_expression()?;
+                self.expect(SdslvTokenKind::Arrow, "expected '->' in when case");
+                let action = self.parse_flow_action()?;
+                cases.push(SdslvFlowCase {
+                    Condition: condition,
+                    Action: action,
+                });
+                continue;
+            }
+            if self.match_kw(SdslvTokenKind::KeywordElse) {
+                self.expect(SdslvTokenKind::Arrow, "expected '->' after else");
+                else_action = self.parse_flow_action();
+                continue;
+            }
+            self.err_here("expected case or else in when");
+            self.I += 1;
+        }
+        self.expect(SdslvTokenKind::RightBrace, "expected '}' after when");
+        let end = self.prev_span();
+        Some(SdslvFlowWhen {
+            Cases: cases,
+            ElseAction: else_action,
+            Span: SdslvSpan {
+                Start: start.Start,
+                End: end.End,
+                Line: start.Line,
+                Column: start.Column,
+            },
+        })
+    }
+    fn parse_flow_action(&mut self) -> Option<SdslvFlowAction> {
+        if self.match_kw(SdslvTokenKind::KeywordGoto) {
+            let target = self.parse_path_req("expected goto target")?;
+            return Some(SdslvFlowAction::Goto(target));
+        }
+        if self.match_kw(SdslvTokenKind::KeywordReturn) {
+            let value = self.parse_expression()?;
+            return Some(SdslvFlowAction::Return(value));
+        }
+        self.err_here("expected goto or return flow action");
+        None
     }
     fn parse_body(&mut self) -> Option<SdslvBody> {
         let start = self.prev_span();
