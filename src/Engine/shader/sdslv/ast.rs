@@ -165,6 +165,12 @@ pub enum SdslvBinaryOperator {
     Subtract,
     Multiply,
     Divide,
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

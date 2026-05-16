@@ -5,6 +5,7 @@ pub mod diagnostic;
 pub mod emitter;
 pub mod lexer;
 pub mod parser;
+pub mod runner;
 pub mod token;
 pub mod validation;
 
@@ -13,6 +14,7 @@ pub use diagnostic::*;
 pub use emitter::*;
 pub use lexer::*;
 pub use parser::*;
+pub use runner::*;
 pub use token::*;
 pub use validation::*;
 

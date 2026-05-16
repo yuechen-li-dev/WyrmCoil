@@ -625,3 +625,104 @@ fn A() { Assert.True(true, "ok"); }
             .any(|x| x.Message.contains("non-assert expression statement"))
     );
 }
+
+#[test]
+fn RunTestSourcePassesBasicFixture() {
+    let src = include_str!("../../../../examples/sdslv/basic_asserts.sdslvtest");
+    let result = RunTestSource(src);
+    assert!(result.Diagnostics.is_empty(), "expected no diagnostics");
+    assert!(result.Passed, "expected basic asserts fixture to pass");
+}
+
+#[test]
+fn RunTestSourceReportsParseAndValidationDiagnostics() {
+    let parse_result = RunTestSource("[Fact]");
+    assert!(!parse_result.Passed, "parse failures should not pass");
+    assert!(
+        !parse_result.Diagnostics.is_empty(),
+        "expected parse diagnostics"
+    );
+
+    let validation_source = r#"
+[Fact]
+fn A() {
+    Assert.True(1.0, "not bool");
+    Assert.True(true);
+}
+"#;
+    let validation_result = RunTestSource(validation_source);
+    assert!(
+        !validation_result.Passed,
+        "validation failures should not pass"
+    );
+    assert!(
+        !validation_result.Diagnostics.is_empty(),
+        "expected validation diagnostics"
+    );
+}
+
+#[test]
+fn RunTestSourceEvaluatesLocalsArithmeticComparisonsAndAsserts() {
+    let src = r#"
+[Fact]
+fn Evaluates() {
+    let x: f32 = 1.0 + 2.0 * 3.0;
+    let y: f32 = (1.0 + 2.0) * 3.0;
+    let z: i32 = -2;
+    let b: bool;
+    Assert.Equals(x, 7.0, "precedence should work");
+    Assert.Equals(y, 9.0, "parentheses should work");
+    Assert.True(x < y, "comparison should work");
+    Assert.True(z == -2, "unary minus should work");
+    Assert.Equals(b, false, "bool default should be false");
+}
+"#;
+    let result = RunTestSource(src);
+    assert!(result.Passed, "expected evaluator scenario to pass");
+}
+
+#[test]
+fn RunTestSourceCollectsFailuresAndContinuesAcrossTests() {
+    let src = r#"
+[Fact]
+fn FailsTwice() {
+    let value: f32 = 1.0;
+    Assert.True(false, "first failure");
+    Assert.Equals(value, 2.0, "second failure");
+}
+
+[Fact]
+fn StillRuns() {
+    let actual: f32;
+    actual = 2.0;
+    Assert.Near(actual, 2.001, 0.01, "near should pass");
+}
+"#;
+    let result = RunTestSource(src);
+    assert!(!result.Passed, "expected run to fail");
+    assert_eq!(result.Tests.len(), 2, "expected both tests to execute");
+    assert_eq!(
+        result.Tests[0].Failures.len(),
+        2,
+        "expected both assertion failures"
+    );
+    assert!(result.Tests[1].Passed, "second test should still pass");
+}
+
+#[test]
+fn RunTestSourceReportsUnsupportedExecutionCleanly() {
+    let src = r#"
+[Fact]
+fn UnsupportedCall() {
+    let value: f32 = Custom(1.0);
+    Assert.True(true, "unreachable");
+}
+"#;
+    let result = RunTestSource(src);
+    assert!(!result.Passed, "unsupported calls should fail");
+    assert!(
+        result.Tests[0].Failures[0]
+            .Message
+            .contains("unsupported function call")
+    );
+}
