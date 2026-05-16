@@ -236,3 +236,20 @@ M25 adds a Dunewyrm-backed CPU lifecycle simulation pass on top of M24 buffering
 - The pass is intentionally CPU-only: no `wgpu::Buffer`, no queue uploads, and no draw submission.
 
 This continues the Prometheus strategy chain: fixed-double default, guarded pull-lag under pressure, and serial JIT survival fallback.
+
+
+## M26 buffer lifecycle save/restore replay proof (CPU-only)
+
+M26 adds deterministic save/restore for the M25 lifecycle simulator:
+
+- `BufferSlotLifecycleSession` now supports lifecycle ticks, `ExportChunk`, and `FromChunk` restore.
+- Lifecycle chunks include the persisted `BufferingPlanDecision`, Dunewyrm `DwRuntimeChunk`, lifecycle telemetry, lifecycle acts, status, and pull-lag signal metadata.
+- Replay-equivalence tests prove uninterrupted lifecycle execution matches split-run export/restore execution for `FixedDoubleDefault`, `PullLagPressure`, and `SerialJitSurvival`, with hard-failure restore behavior also covered.
+- The restore path continues the persisted decision; no planner re-run is performed on restore.
+
+M26 remains intentionally narrow:
+
+- no GPU buffer allocation or persistence
+- no upload queue writes
+- no command encoder or draw pass integration
+- no adaptive re-planning during restore
