@@ -23,6 +23,94 @@ pub struct DwUtilityCandidate {
     pub Score: DwScoreFn,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DwUtilitySelectionReason {
+    HighestScore,
+    TieBreakFirst,
+    NoCandidates,
+    NoPositiveScore,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DwUtilityCandidateReport<T: Copy> {
+    pub Target: T,
+    pub RawScore: f32,
+    pub ClampedScore: f32,
+    pub Rank: usize,
+    pub IsSelected: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DwUtilityDecisionReport<T: Copy> {
+    pub Selected: Option<T>,
+    pub Candidates: Vec<DwUtilityCandidateReport<T>>,
+    pub TieCount: usize,
+    pub TieBreakApplied: bool,
+    pub SelectionReason: DwUtilitySelectionReason,
+}
+
+pub fn SelectHighestUtilityTargetWithReport<T: Copy>(
+    scored: &[(T, f32)],
+) -> DwUtilityDecisionReport<T> {
+    if scored.is_empty() {
+        return DwUtilityDecisionReport {
+            Selected: None,
+            Candidates: Vec::new(),
+            TieCount: 0,
+            TieBreakApplied: false,
+            SelectionReason: DwUtilitySelectionReason::NoCandidates,
+        };
+    }
+
+    let mut clamped_candidates = Vec::with_capacity(scored.len());
+    for (target, raw_score) in scored {
+        clamped_candidates.push((*target, *raw_score, raw_score.clamp(0.0, 1.0)));
+    }
+
+    let mut best_index = 0_usize;
+    let mut best_score = clamped_candidates[0].1;
+    for (index, candidate) in clamped_candidates.iter().enumerate().skip(1) {
+        if candidate.1 > best_score {
+            best_index = index;
+            best_score = candidate.1;
+        }
+    }
+
+    let tie_count = clamped_candidates
+        .iter()
+        .filter(|candidate| (candidate.1 - best_score).abs() <= f32::EPSILON)
+        .count();
+
+    let mut candidates = Vec::with_capacity(clamped_candidates.len());
+    for (index, (target, raw_score, clamped_score)) in clamped_candidates.iter().enumerate() {
+        let rank = clamped_candidates
+            .iter()
+            .filter(|other| other.1 > *raw_score)
+            .count();
+        candidates.push(DwUtilityCandidateReport {
+            Target: *target,
+            RawScore: *raw_score,
+            ClampedScore: *clamped_score,
+            Rank: rank,
+            IsSelected: index == best_index,
+        });
+    }
+
+    DwUtilityDecisionReport {
+        Selected: Some(clamped_candidates[best_index].0),
+        Candidates: candidates,
+        TieCount: tie_count,
+        TieBreakApplied: tie_count > 1,
+        SelectionReason: if best_score <= 0.0 {
+            DwUtilitySelectionReason::NoPositiveScore
+        } else if tie_count > 1 {
+            DwUtilitySelectionReason::TieBreakFirst
+        } else {
+            DwUtilitySelectionReason::HighestScore
+        },
+    }
+}
+
 pub fn SelectHighestUtilityTarget<T: Copy>(scored: &[(T, f32)]) -> Option<(T, f32)> {
     if scored.is_empty() {
         return None;
@@ -48,6 +136,120 @@ pub enum DwControl {
     Stay,
     Complete,
     Fail { Reason: &'static str },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ReportSelectsHighestScoreAndMarksCandidateFlags() {
+        let report = SelectHighestUtilityTargetWithReport(&[('A', 0.2), ('B', 0.9), ('C', 0.7)]);
+        assert_eq!(
+            report.Selected,
+            Some('B'),
+            "highest score candidate should be selected"
+        );
+        assert_eq!(report.TieCount, 1, "single winner should not report tie");
+        assert_eq!(
+            report.SelectionReason,
+            DwUtilitySelectionReason::HighestScore,
+            "positive untied winner should report HighestScore reason"
+        );
+        assert!(
+            report.Candidates[1].IsSelected,
+            "selected candidate flag should be true for winner"
+        );
+        assert!(
+            !report.Candidates[0].IsSelected && !report.Candidates[2].IsSelected,
+            "non-selected candidates should report IsSelected=false"
+        );
+        assert_eq!(
+            report.Candidates[1].RawScore, 0.9,
+            "raw score should be retained"
+        );
+        assert_eq!(
+            report.Candidates[1].ClampedScore, 0.9,
+            "clamped score should reflect score clamping rule"
+        );
+    }
+
+    #[test]
+    fn ReportTieBehaviorIsDeterministicAndUsesFirst() {
+        let report = SelectHighestUtilityTargetWithReport(&[('A', 0.8), ('B', 0.8), ('C', 0.2)]);
+        assert_eq!(
+            report.Selected,
+            Some('A'),
+            "ties should select first input candidate"
+        );
+        assert_eq!(
+            report.TieCount, 2,
+            "tie count should include all top-score candidates"
+        );
+        assert!(report.TieBreakApplied, "ties should mark tie-break applied");
+        assert_eq!(
+            report.SelectionReason,
+            DwUtilitySelectionReason::TieBreakFirst,
+            "tie selection reason should report first-candidate tie break"
+        );
+    }
+
+    #[test]
+    fn ReportEmptyCandidatesMarksNoCandidatesReason() {
+        let report = SelectHighestUtilityTargetWithReport::<char>(&[]);
+        assert_eq!(
+            report.Selected, None,
+            "empty input should not select a candidate"
+        );
+        assert_eq!(
+            report.SelectionReason,
+            DwUtilitySelectionReason::NoCandidates,
+            "empty input should report NoCandidates reason"
+        );
+        assert!(
+            SelectHighestUtilityTarget::<char>(&[]).is_none(),
+            "legacy selector should remain unchanged for empty candidates"
+        );
+    }
+
+    #[test]
+    fn ReportNegativeAndZeroScoresRemainCompatible() {
+        let input = [('A', -0.2), ('B', 0.0), ('C', -1.0)];
+        let report = SelectHighestUtilityTargetWithReport(&input);
+        let old = SelectHighestUtilityTarget(&input);
+        assert_eq!(
+            report.Selected,
+            Some('B'),
+            "highest raw score should remain selected"
+        );
+        assert_eq!(
+            old,
+            Some(('B', 0.0)),
+            "legacy selector output should remain unchanged"
+        );
+        assert_eq!(
+            report.SelectionReason,
+            DwUtilitySelectionReason::NoPositiveScore,
+            "zero-or-negative winner should report NoPositiveScore"
+        );
+        assert_eq!(
+            report.Candidates[0].ClampedScore, 0.0,
+            "report should include clamped score diagnostics"
+        );
+    }
+
+    #[test]
+    fn ReportIsDeterministicAcrossRepeatedRuns() {
+        let input = [('A', 0.4), ('B', 0.9), ('C', 0.9), ('D', -0.5)];
+        let first = SelectHighestUtilityTargetWithReport(&input);
+        let second = SelectHighestUtilityTargetWithReport(&input);
+        assert_eq!(first, second, "same input should produce identical report");
+        assert_eq!(
+            SelectHighestUtilityTarget(&input),
+            Some(('B', 0.9)),
+            "legacy selector should still resolve ties by first candidate"
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -211,6 +211,16 @@ Utility uses plain scorer functions:
 - candidates built with `Dw::When(target, scorer)`
 - evaluated by `Dw::Decide(ctx, candidates, options)`
 
+Shared utility policy selection also exposes a pure diagnostics surface for non-frame engine policy paths:
+
+- `SelectHighestUtilityTarget(scored)` preserves existing max-score selection semantics.
+- `SelectHighestUtilityTargetWithReport(scored)` returns structured diagnostics:
+  - selected target (or none),
+  - per-candidate raw/clamped score + rank + selected marker,
+  - deterministic tie metadata,
+  - selection reason (`HighestScore`, `TieBreakFirst`, `NoCandidates`, `NoPositiveScore`).
+- This report surface is for observability/policy diagnostics; it does not change `Dw::Decide` behavior.
+
 Options (`DwDecideOptions`):
 
 - `Hysteresis`

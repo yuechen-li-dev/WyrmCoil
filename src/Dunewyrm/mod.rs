@@ -14,7 +14,8 @@ pub use board::{
 };
 pub use control::{
     Dw, DwControl, DwControlSummary, DwDecideOptions, DwScoreFn, DwTieBreak, DwUtilityCandidate,
-    SelectHighestUtilityTarget,
+    DwUtilityCandidateReport, DwUtilityDecisionReport, DwUtilitySelectionReason,
+    SelectHighestUtilityTarget, SelectHighestUtilityTargetWithReport,
 };
 pub use ids::{DwActId, DwActRequest, DwDeferredAct, DwFrameId};
 pub use mailbox::{DwMailbox, DwMailboxChunk, DwMessage, DwMessagePayload};
