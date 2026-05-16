@@ -56,7 +56,21 @@ pub struct SdslvFlowDecl {
     pub Name: String,
     pub Parameters: Vec<SdslvFunctionParameter>,
     pub ReturnType: SdslvPath,
+    pub Board: Option<SdslvFlowBoard>,
     pub States: Vec<SdslvFlowState>,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvFlowBoard {
+    pub Fields: Vec<SdslvFlowBoardField>,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvFlowBoardField {
+    pub Name: String,
+    pub TypeName: SdslvPath,
     pub Span: SdslvSpan,
 }
 

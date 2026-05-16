@@ -574,31 +574,43 @@ Intentional non-goals in M7a:
 Compiler development and validation continue to use Rust `cargo test`.
 
 
-## SDSL-V M8 shader flows (parser/validation seed)
+## SDSL-V M9 shader flows (parser/validation design tightening)
 
-M8 adds an Octomata-inspired shader-flow declaration shape for explicit shader/material composition decisions at compile-time, not GPU runtime scheduling.
+M9 keeps shader flows Octomata-inspired and extends M8 with fixed-shape flow-local board declarations. This is still compile-time flow structure authoring, not runtime scheduling.
 
-Supported syntax in M8:
+Supported syntax in M9:
 - top-level `flow Name(params) -> ReturnType { ... }`
+- optional `board { Name: Type; ... }` block inside a flow, before any `state`
 - `state Name { ... }`
 - `when { case <expr> -> goto <State> | return <expr>; ... else -> goto <State> | return <expr> }`
 - direct `goto State;` and `return Expr;` state statements
 
-M8 flow validation rules:
+Board contract in M9:
+- board fields are fixed-shape declarations (`Name: Type;`) with no initializers
+- board is flow-local memory for future shader/material composition control data
+- board shape is declared up front and is not dynamically extensible
+- board is not GPU mutable storage, not general application state, and is not lowered/emitted yet
+
+M9 flow + board validation rules:
 - flow names participate in top-level uniqueness checks
 - flow must contain at least one state
 - state names must be unique per flow
 - each state must contain at least one statement
 - each `when` must contain at least one `case` and must include `else`
 - every `goto` target must resolve to a state in the same flow
+- at most one `board` block per flow
+- `board` block must appear before the first `state`
+- board block must contain at least one field
+- board field names must be unique per board
+- unknown/unsupported board field types are rejected
 
-Current non-goals (unchanged):
+Current non-goals (unchanged for M9):
 - no flow lowering to HLSL yet
 - no flow execution/runtime-state-machine behavior
-- no flow board memory
+- no board writes/mutation statements in state bodies yet
 - no utility `when`
 - no `suspend`, `remember`, or `resume`
 - no generic flows
 
-Emitter behavior in M8:
-- HLSL emission returns a diagnostic when a module contains flow declarations: `flow emission is not implemented in SDSL-V M8`.
+Emitter behavior in M9:
+- HLSL emission returns a diagnostic when a module contains flow declarations: `flow emission is not implemented in SDSL-V M9`.

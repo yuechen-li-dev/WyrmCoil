@@ -24,6 +24,7 @@ pub enum SdslvTokenKind {
     KeywordOverride,
     KeywordCompile,
     KeywordFlow,
+    KeywordBoard,
     KeywordState,
     KeywordWhen,
     KeywordCase,

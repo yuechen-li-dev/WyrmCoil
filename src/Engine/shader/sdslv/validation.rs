@@ -477,6 +477,9 @@ impl<'a> Validator<'a> {
         }
     }
     fn ValidateFlow(&mut self, flow: &SdslvFlowDecl) {
+        if let Some(board) = &flow.Board {
+            self.ValidateFlowBoard(flow, board);
+        }
         if flow.States.is_empty() {
             self.err(&format!(
                 "flow '{}' must declare at least one state",
@@ -502,6 +505,31 @@ impl<'a> Validator<'a> {
             }
             for statement in &state.Statements {
                 self.ValidateFlowStatement(flow, state, statement, &names);
+            }
+        }
+    }
+
+    fn ValidateFlowBoard(&mut self, flow: &SdslvFlowDecl, board: &SdslvFlowBoard) {
+        if board.Fields.is_empty() {
+            self.err(&format!(
+                "flow '{}' board must declare at least one field",
+                flow.Name
+            ));
+        }
+        let mut names = HashSet::new();
+        for field in &board.Fields {
+            if !names.insert(field.Name.clone()) {
+                self.err(&format!(
+                    "duplicate board field '{}' in flow '{}'",
+                    field.Name, flow.Name
+                ));
+            }
+            let type_name = field.TypeName.Segments.join(".");
+            if !self.IsValidFlowBoardTypeName(&type_name) {
+                self.err(&format!(
+                    "unknown or unsupported board field type '{}' in flow '{}'",
+                    type_name, flow.Name
+                ));
             }
         }
     }
@@ -851,6 +879,19 @@ impl<'a> Validator<'a> {
         current
     }
 
+    fn IsValidFlowBoardTypeName(&self, name: &str) -> bool {
+        if Self::IsBuiltinFlowBoardType(name) {
+            return true;
+        }
+        self.AliasUnderlyingByName.contains_key(name)
+    }
+
+    fn IsBuiltinFlowBoardType(name: &str) -> bool {
+        matches!(
+            name,
+            "bool" | "i32" | "u32" | "f32" | "float" | "float2" | "float3" | "float4" | "float4x4"
+        )
+    }
     fn IsBuiltinCtor(name: &str) -> bool {
         matches!(name, "float2" | "float3" | "float4" | "float4x4")
     }

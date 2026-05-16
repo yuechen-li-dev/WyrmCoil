@@ -465,7 +465,7 @@ fn EmitHlslFlowDeclarationReturnsDiagnostic() {
     assert!(
         diagnostics.iter().any(|d| d
             .Message
-            .contains("flow emission is not implemented in SDSL-V M8")),
+            .contains("flow emission is not implemented in SDSL-V M9")),
         "flow modules should fail emission clearly in M8"
     );
 }
@@ -834,5 +834,147 @@ fn UnsupportedCall() {
         result.Tests[0].Failures[0]
             .Message
             .contains("unsupported function call")
+    );
+}
+
+#[test]
+fn ParserFlowBoardShapes() {
+    let src = r#"
+flow ShadowVariant(useSoft: bool, quality: i32) -> i32 {
+    board {
+        HasSelection: bool;
+        SelectedMode: i32;
+        BlendWeight: f32;
+    }
+    state Select { return quality; }
+}
+"#;
+    let module = ParseSource(src).expect("flow with board should parse");
+    let flow = module
+        .Declarations
+        .iter()
+        .find_map(|d| match d {
+            SdslvDecl::Flow(flow) => Some(flow),
+            _ => None,
+        })
+        .expect("expected flow declaration");
+    let board = flow.Board.as_ref().expect("expected board block");
+    assert_eq!(board.Fields.len(), 3, "expected 3 board fields");
+    assert_eq!(board.Fields[0].Name, "HasSelection", "expected field name");
+    assert_eq!(
+        board.Fields[0].TypeName.Segments.join("."),
+        "bool",
+        "expected field type"
+    );
+}
+
+#[test]
+fn ParserFlowBoardRejectsInvalidFieldSyntaxAndPlacement() {
+    let missing_colon =
+        ParseSource("flow F() -> i32 { board { X i32; } state A { return 1; } }").unwrap_err();
+    assert!(
+        missing_colon
+            .iter()
+            .any(|d| d.Message.contains("expected ':' after board field name")),
+        "missing colon should be diagnosed"
+    );
+
+    let missing_semicolon =
+        ParseSource("flow F() -> i32 { board { X: i32 } state A { return 1; } }").unwrap_err();
+    assert!(
+        missing_semicolon
+            .iter()
+            .any(|d| d.Message.contains("expected ';' after board field")),
+        "missing semicolon should be diagnosed"
+    );
+
+    let initializer =
+        ParseSource("flow F() -> i32 { board { X: i32 = 1; } state A { return 1; } }").unwrap_err();
+    assert!(
+        initializer
+            .iter()
+            .any(|d| d.Message.contains("unsupported board initializer")),
+        "board initializer should be rejected"
+    );
+
+    let board_after_state =
+        ParseSource("flow F() -> i32 { state A { return 1; } board { X: i32; } }").unwrap_err();
+    assert!(
+        board_after_state
+            .iter()
+            .any(|d| d.Message.contains("board must be declared before states")),
+        "board placement should be diagnosed"
+    );
+}
+
+#[test]
+fn ValidationFlowBoardRules() {
+    let valid = r#"
+flow F() -> i32 {
+    board {
+        Flag: bool;
+        Weight: float;
+    }
+    state A { return 1; }
+}
+"#;
+    assert!(
+        ValidateSource(valid).is_ok(),
+        "valid board flow should validate"
+    );
+
+    let without_board = "flow G() -> i32 { state A { return 1; } }";
+    assert!(
+        ValidateSource(without_board).is_ok(),
+        "flow without board should validate"
+    );
+
+    let duplicate_field = "flow F() -> i32 { board { X: i32; X: i32; } state A { return 1; } }";
+    assert!(
+        ValidateSource(duplicate_field)
+            .unwrap_err()
+            .iter()
+            .any(|d| d.Message.contains("duplicate board field 'X'")),
+        "duplicate board fields should be rejected"
+    );
+
+    let empty_board = "flow F() -> i32 { board { } state A { return 1; } }";
+    assert!(
+        ValidateSource(empty_board)
+            .unwrap_err()
+            .iter()
+            .any(|d| d.Message.contains("board must declare at least one field")),
+        "empty board should be rejected"
+    );
+
+    let unknown_type = "flow F() -> i32 { board { X: UnknownType; } state A { return 1; } }";
+    assert!(
+        ValidateSource(unknown_type).unwrap_err().iter().any(|d| d
+            .Message
+            .contains("unsupported board field type 'UnknownType'")),
+        "unknown board type should be rejected"
+    );
+
+    let duplicate_board =
+        "flow F() -> i32 { board { X: i32; } board { Y: i32; } state A { return 1; } }";
+    assert!(
+        ParseSource(duplicate_board)
+            .unwrap_err()
+            .iter()
+            .any(|d| d.Message.contains("at most one board block")),
+        "duplicate board blocks should be rejected"
+    );
+}
+
+#[test]
+fn EmitHlslFlowBoardStillNotImplemented() {
+    let module = ParseSource("flow F() -> i32 { board { X: i32; } state A { return 1; } }")
+        .expect("flow board source should parse");
+    let diagnostics = EmitHlsl(&module).unwrap_err();
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("flow emission is not implemented in SDSL-V M9")),
+        "flow+board emission should remain unsupported"
     );
 }
