@@ -5,6 +5,7 @@ pub mod buffering_lifecycle;
 pub mod extract;
 pub mod pipeline;
 pub mod upload;
+pub mod upload_execution;
 pub mod wgpu;
 pub mod wgpu_pipeline;
 pub use buffering::*;
@@ -12,6 +13,7 @@ pub use buffering_lifecycle::*;
 pub use extract::*;
 pub use pipeline::*;
 pub use upload::*;
+pub use upload_execution::*;
 
 pub use wgpu::*;
 pub use wgpu_pipeline::*;
