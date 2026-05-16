@@ -8,7 +8,9 @@ Engine is the dense-store / act-bridge layer and now hosts the reintegrated Wyrm
 
 See also `docs/Dunewyrm/architecture.md` for the Dunewyrm runtime contract.
 
-See `docs/sdsl-v.md` for the SDSL-V M0 language contract (design-only; no compiler implementation in this milestone).
+See `docs/sdsl-v.md` for the SDSL-V language/design contract and milestone history.
+
+See `docs/sdsl-v-authoring.md` for the current implemented authoring/status guide (what works today vs parse/validate-only surfaces).
 
 
 ## Milestone status
