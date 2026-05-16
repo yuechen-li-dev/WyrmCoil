@@ -63,6 +63,25 @@ Still out of scope in M20:
 - no material/bind-group system rollout
 - no draw submission path
 
+
+## M21 `wgpu` resource creation probe (descriptor-plan boundary)
+
+M21 adds the first `wgpu`-resource-facing conversion seam from validated M20 layout metadata:
+
+- `RenderPipelineLayoutPlan` now converts into `WgpuRenderPipelineDescriptorPlan` via `BuildWgpuRenderPipelineDescriptorPlan(...)`.
+- Vertex attribute formats, vertex step modes, color targets, and depth formats are mapped into `wgpu` equivalents through deterministic mapping helpers.
+- The descriptor plan owns converted vertex buffer / attribute data and is testable without creating any `wgpu::Instance`, adapter, device, surface, or window.
+
+M21 remains intentionally narrow:
+
+- no draw pass or render submission path
+- no surface/window integration changes
+- no `wgpu::ShaderModule` creation helper yet
+- no `wgpu::RenderPipeline` creation yet
+- no bind-group/material/reflection system rollout
+
+This milestone is a resource descriptor scaffold only, preserving GPU-free testability in normal `cargo test` runs.
+
 ## M9 minimal `wgpu` renderer backend scaffold
 
 M9 adds the first renderer-backend boundary while preserving the existing timing contract.
