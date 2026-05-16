@@ -1,7 +1,8 @@
 #![allow(non_snake_case)]
 
 use crate::Engine::shader::sdslv::{
-    DxcCompileRequest, SdslvEntryPoint, SdslvShaderArtifact, SdslvShaderStage,
+    CompileHlslWithDxc, DxcCompileRequest, DxcCompileResult, DxcError, DxcOptions, SdslvEntryPoint,
+    SdslvShaderArtifact, SdslvShaderStage,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +24,19 @@ pub struct RenderPipelinePlan {
 pub struct PipelineDxcRequests {
     pub Vertex: DxcCompileRequest,
     pub Pixel: DxcCompileRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledPipelineShaders {
+    pub Vertex: DxcCompileResult,
+    pub Pixel: DxcCompileResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompilePipelineShadersError {
+    Request(PipelineDxcRequestError),
+    Vertex(DxcError),
+    Pixel(DxcError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +86,24 @@ pub fn BuildDxcRequestsForPipelinePlan(
             EntryPoint: plan.PixelEntry.EntryPoint.clone(),
             TargetProfile: plan.PixelEntry.TargetProfile.clone(),
         },
+    })
+}
+
+pub fn CompilePipelineShadersWithDxc(
+    plan: &RenderPipelinePlan,
+    options: &DxcOptions,
+) -> Result<CompiledPipelineShaders, CompilePipelineShadersError> {
+    let requests =
+        BuildDxcRequestsForPipelinePlan(plan).map_err(CompilePipelineShadersError::Request)?;
+
+    let vertex = CompileHlslWithDxc(&requests.Vertex, options)
+        .map_err(CompilePipelineShadersError::Vertex)?;
+    let pixel =
+        CompileHlslWithDxc(&requests.Pixel, options).map_err(CompilePipelineShadersError::Pixel)?;
+
+    Ok(CompiledPipelineShaders {
+        Vertex: vertex,
+        Pixel: pixel,
     })
 }
 
@@ -688,6 +720,73 @@ mod tests {
                 Stage: SdslvShaderStage::Pixel
             },
             "empty pixel target profile should return structured stage-specific error"
+        );
+    }
+
+    #[test]
+    fn CompilePipelineShadersWithDxcReturnsVertexToolUnavailableForValidPlan() {
+        let src = r#"
+        type ClipPosition4 = float4 @space(clip.position);
+        stream VertexOut { Position: ClipPosition4; Color: float4; }
+        shader FlatColor {
+            stage vertex fn VS(pos: float3, color: float4) -> VertexOut {
+                let output: VertexOut;
+                output.Position = float4(pos, 1.0);
+                output.Color = color;
+                return output;
+            }
+            stage pixel fn PS(input: VertexOut) -> float4 {
+                return input.Color;
+            }
+        }
+    "#;
+        let artifact = CompileSourceToShaderArtifact("flat_color.sdslv", src)
+            .expect("flat color artifact should compile");
+        let plan =
+            BuildRenderPipelinePlan("FlatColorPlan", &artifact, "FlatColor_VS", "FlatColor_PS")
+                .expect("valid plan should build");
+        let options = DxcOptions {
+            DxcPath: "wyrmcoil_missing_dxc_m18".to_string(),
+            OutputSpirv: true,
+            ExtraArgs: Vec::new(),
+        };
+
+        let error = CompilePipelineShadersWithDxc(&plan, &options).unwrap_err();
+        assert_eq!(
+            error,
+            CompilePipelineShadersError::Vertex(DxcError::ToolUnavailable {
+                Path: "wyrmcoil_missing_dxc_m18".to_string()
+            }),
+            "valid plans should reach vertex compile and return structured vertex tool-unavailable errors"
+        );
+    }
+
+    #[test]
+    fn CompilePipelineShadersWithDxcPropagatesRequestConstructionErrors() {
+        let plan = RenderPipelinePlan {
+            Name: "InvalidPlan".to_string(),
+            SourceName: "invalid.sdslv".to_string(),
+            Hlsl: String::new(),
+            VertexEntry: ShaderStagePlan {
+                EntryPoint: "VertexEntry".to_string(),
+                TargetProfile: "vs_6_0".to_string(),
+            },
+            PixelEntry: ShaderStagePlan {
+                EntryPoint: "PixelEntry".to_string(),
+                TargetProfile: "ps_6_0".to_string(),
+            },
+        };
+        let options = DxcOptions {
+            DxcPath: "wyrmcoil_missing_dxc_m18".to_string(),
+            OutputSpirv: true,
+            ExtraArgs: Vec::new(),
+        };
+
+        let error = CompilePipelineShadersWithDxc(&plan, &options).unwrap_err();
+        assert_eq!(
+            error,
+            CompilePipelineShadersError::Request(PipelineDxcRequestError::EmptyHlsl),
+            "request-construction errors should be wrapped without invoking DXC"
         );
     }
 }

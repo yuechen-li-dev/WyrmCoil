@@ -281,6 +281,7 @@ Current non-goals (still true):
 | Flow lowering | Implemented for acyclic value-returning subset (M13) |
 | DXC/SPIR-V boundary | Implemented (optional DXC probe, non-mandatory) |
 | Renderer artifact intake / pipeline plan contract | Implemented (metadata-only) |
+| Plan-level optional DXC compile from pipeline plan | Implemented (optional boundary; non-mandatory) |
 
 ## 12) Non-goals / future work
 
@@ -431,3 +432,32 @@ Still out of scope in M17:
 - no `wgpu::RenderPipeline` creation
 - no reflection/resource-layout extraction
 
+## 17) M18 optional pipeline-plan DXC compile boundary
+
+M18 adds a renderer-facing optional compile helper over existing M17 + M15 boundaries.
+
+Current path:
+
+```text
+RenderPipelinePlan
+→ BuildDxcRequestsForPipelinePlan(...)
+→ CompileHlslWithDxc(...) for Vertex and Pixel
+→ CompiledPipelineShaders
+```
+
+APIs in `Engine::render`:
+- `CompiledPipelineShaders`
+- `CompilePipelineShadersError`
+- `CompilePipelineShadersWithDxc(plan, options)`
+
+Behavior notes:
+- request-construction errors are wrapped as `CompilePipelineShadersError::Request(...)`
+- vertex compile failures are wrapped as `CompilePipelineShadersError::Vertex(...)`
+- pixel compile failures are wrapped as `CompilePipelineShadersError::Pixel(...)`
+- normal tests still do not require DXC (nonexistent tool paths validate structured unavailable-tool behavior)
+
+Still out of scope in M18:
+- no `wgpu` shader-module creation
+- no `wgpu::RenderPipeline` creation
+- no shader reflection or bind-layout extraction
+- no material/asset pipeline integration

@@ -771,4 +771,25 @@ Future work after M17 remains explicit:
 - `wgpu` shader-module creation and render-pipeline wiring
 - reflection/resource-layout integration
 
+## SDSL-V M18 — Optional plan-level DXC compile (implemented)
+
+M18 adds an optional renderer compile boundary on top of M17 request construction.
+
+Current compile API surface in `Engine::render`:
+- `CompiledPipelineShaders` (`Vertex`, `Pixel`)
+- `CompilePipelineShadersError` (`Request`, `Vertex`, `Pixel`)
+- `CompilePipelineShadersWithDxc(plan, options)`
+
+M18 boundary behavior:
+- builds vertex/pixel `DxcCompileRequest` values using `BuildDxcRequestsForPipelinePlan(...)`
+- compiles vertex request through M15 `CompileHlslWithDxc(...)`
+- compiles pixel request through M15 `CompileHlslWithDxc(...)`
+- returns structured request/vertex/pixel failures without panics
+- keeps DXC optional; unavailable tools surface as structured `DxcError` values
+
+M18 intentionally still does not do:
+- `wgpu` shader-module creation
+- `wgpu::RenderPipeline` creation
+- shader reflection/resource-layout extraction
+- material/asset pipeline expansion
 
