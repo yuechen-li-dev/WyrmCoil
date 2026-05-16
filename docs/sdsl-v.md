@@ -4,15 +4,21 @@
 
 This document defines **SDSL-V M0** as a language contract and implementation reference for future milestones.
 
-M0 is **documentation only**:
+M0 was documentation only.
 
-- no lexer
-- no parser
-- no AST
-- no compiler
-- no HLSL emitter
-- no DXC invocation
-- no SPIR-V integration
+As of **M1 lexer/parser seed**, repository code now includes:
+
+- lexer/tokenizer
+- declaration-level parser
+- declaration AST
+- diagnostics with source spans
+
+Still intentionally absent in M1:
+
+- semantic validation (M2)
+- HLSL emitter
+- DXC invocation
+- SPIR-V integration
 
 SDSL-V is inspired by Stride SDSL, but it is not required to be source-compatible with SDSL.
 
@@ -459,3 +465,8 @@ This M0 document intentionally narrows implementation risk:
 - It defines what v0 should and should not do.
 - It marks unresolved points explicitly instead of pretending they are settled.
 - It anchors future parser/typechecker/lowering milestones to concrete staged outcomes.
+
+
+## M1 implementation note
+
+Current M1 parser behavior parses declaration structure only and does not semantically parse function bodies. Function and stage bodies are accepted as balanced brace blocks and preserved as raw body spans/text for future milestones.
