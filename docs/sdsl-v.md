@@ -205,6 +205,7 @@ SDSL-V now has sibling aggregate declarations with distinct roles:
 - `stream` = stage-boundary value aggregate.
 
 Records and streams are intentionally not interchangeable.
+For value-semantics safety at function/stage boundaries, record/stream parameters are immutable in function bodies: field assignment through such parameters is rejected, and `with` is the supported copy-update path.
 
 Stream declaration:
 
@@ -257,6 +258,8 @@ Record-lowering notes:
 - records do not emit stage semantics (`SV_Position`, `TEXCOORDn`, etc.).
 - records are plain value structs usable in function signatures and local declarations.
 - `with` copy-update expressions are supported in M53b for records and streams in bounded contexts.
+- local record/stream variables remain assignable for staged construction/update in M53c (for example, building a local vertex output before returning it).
+- broader binding mutability (`let`/`var`) remains future work; M53c only enforces aggregate-parameter immutability at assignment targets rooted in record/stream parameters.
 
 M53b `with` expression:
 

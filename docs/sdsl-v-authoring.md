@@ -125,6 +125,13 @@ Current record lowering behavior:
 - field value type compatibility uses existing bounded M6 checks.
 - result type is the same as the base expression type.
 
+Aggregate parameter immutability (M53c):
+- function/stage parameters of `record` or `stream` type are immutable in body assignment targets.
+- direct field mutation like `input.Color = ...` or `surface.Roughness = ...` is rejected for those parameters.
+- use `with` to derive modified copies from incoming aggregate parameters.
+- local `record`/`stream` variables remain assignable for construction/update patterns (for example `let output: VertexOut; output.Position = ...;`).
+- broader `let`/`var` mutability rules are still future work.
+
 Current bounded emission support:
 - local declaration initializers
 - assignment RHS

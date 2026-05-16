@@ -838,8 +838,11 @@ impl<'a> Validator<'a> {
             return;
         };
         let mut locals = HashMap::new();
+        let mut parameter_types = HashMap::new();
         for parameter in &function.Parameters {
-            locals.insert(parameter.Name.clone(), self.PathToType(&parameter.TypeName));
+            let parameter_type = self.PathToType(&parameter.TypeName);
+            locals.insert(parameter.Name.clone(), parameter_type.clone());
+            parameter_types.insert(parameter.Name.clone(), parameter_type);
         }
         let return_type = self.PathToType(&function.ReturnType);
 
@@ -862,6 +865,7 @@ impl<'a> Validator<'a> {
                 }
                 SdslvStatement::Assign { Target, Value } => {
                     self.CheckExpressionCalls(shader, &locals, Value);
+                    self.ValidateImmutableAggregateParameterAssignment(&parameter_types, Target);
                     let expected = self.ResolveAssignmentTargetType(shader, &locals, Target);
                     let actual = self.ResolveExpressionType(shader, &locals, Value);
                     if let Some(msg) =
@@ -887,6 +891,51 @@ impl<'a> Validator<'a> {
                 SdslvStatement::Empty => {}
             }
         }
+    }
+
+    fn ValidateImmutableAggregateParameterAssignment(
+        &mut self,
+        parameter_types: &HashMap<String, TypeRef>,
+        target: &SdslvExpression,
+    ) {
+        let Some((base_parameter_name, target_field_name)) =
+            Self::TryGetFieldAssignmentRootParameter(target)
+        else {
+            return;
+        };
+        let Some(parameter_type) = parameter_types.get(&base_parameter_name) else {
+            return;
+        };
+        let Some(parameter_type_name) = parameter_type.Name() else {
+            return;
+        };
+        if self.StreamByName.contains_key(parameter_type_name) {
+            self.err(&format!(
+                "cannot assign to field '{}' of immutable stream parameter '{}'; use with to create a modified copy",
+                target_field_name, base_parameter_name
+            ));
+            return;
+        }
+        if self.RecordByName.contains_key(parameter_type_name) {
+            self.err(&format!(
+                "cannot assign to field '{}' of immutable record parameter '{}'; use with to create a modified copy",
+                target_field_name, base_parameter_name
+            ));
+        }
+    }
+
+    fn TryGetFieldAssignmentRootParameter(target: &SdslvExpression) -> Option<(String, String)> {
+        let SdslvExpression::FieldAccess { Base, Field } = target else {
+            return None;
+        };
+        let mut cursor = Base.as_ref();
+        while let SdslvExpression::FieldAccess { Base, .. } = cursor {
+            cursor = Base.as_ref();
+        }
+        let SdslvExpression::Identifier(root_name) = cursor else {
+            return None;
+        };
+        Some((root_name.clone(), Field.clone()))
     }
 
     fn ResolveAssignmentTargetType(
