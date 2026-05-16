@@ -975,6 +975,104 @@ fn EmitHlslWithExpressionLowersDeterministically() {
 }
 
 #[test]
+fn ValidationRejectsImmutableStreamParameterFieldAssignment() {
+    let src = r#"
+        stream VertexOut { Color: float4; }
+        shader S {
+            stage pixel fn PS(input: VertexOut) -> float4 {
+                input.Color = float4(1.0, 0.0, 0.0, 1.0);
+                return input.Color;
+            }
+        }
+    "#;
+    let diagnostics = ValidateSource(src).expect_err("stream parameter field mutation should fail");
+    assert!(
+        diagnostics.iter().any(|d| d.Message.contains(
+            "cannot assign to field 'Color' of immutable stream parameter 'input'; use with to create a modified copy"
+        )),
+        "stream parameter field assignment should be rejected with immutability guidance"
+    );
+}
+
+#[test]
+fn ValidationRejectsImmutableRecordParameterFieldAssignment() {
+    let src = r#"
+        record SurfaceData { Roughness: f32; }
+        shader S {
+            fn Adjust(surface: SurfaceData) -> SurfaceData {
+                surface.Roughness = 0.5;
+                return surface;
+            }
+        }
+    "#;
+    let diagnostics = ValidateSource(src).expect_err("record parameter field mutation should fail");
+    assert!(
+        diagnostics.iter().any(|d| d.Message.contains(
+            "cannot assign to field 'Roughness' of immutable record parameter 'surface'; use with to create a modified copy"
+        )),
+        "record parameter field assignment should be rejected with immutability guidance"
+    );
+}
+
+#[test]
+fn ValidationAllowsLocalAggregateConstructionAndCopyUpdateMutation() {
+    let src = r#"
+        type ClipPosition4 = float4 @space(clip.position);
+        stream VertexOut { Position: ClipPosition4; Color: float4; }
+        record SurfaceData { Roughness: f32; }
+        shader S {
+            stage vertex fn VS(pos: float3, color: float4) -> VertexOut {
+                let output: VertexOut;
+                output.Position = float4(pos, 1.0);
+                output.Color = color;
+                return output;
+            }
+            fn Adjust(surface: SurfaceData) -> SurfaceData {
+                let copy: SurfaceData = surface;
+                copy.Roughness = 0.5;
+                return copy;
+            }
+        }
+    "#;
+    assert!(
+        ValidateSource(src).is_ok(),
+        "local stream construction and local record copy update should remain valid"
+    );
+    let hlsl =
+        CompileSourceToHlsl(src).expect("valid local aggregate assignment patterns should emit");
+    assert!(
+        hlsl.contains("output.Position = float4(pos, 1.0);"),
+        "stream local-construction assignment should still emit"
+    );
+    assert!(
+        hlsl.contains("copy.Roughness = 0.5;"),
+        "local record field update should still emit"
+    );
+}
+
+#[test]
+fn ValidationAllowsWithForImmutableAggregateParameters() {
+    let src = r#"
+        stream VertexOut { Color: float4; }
+        record SurfaceData { Roughness: f32; }
+        shader S {
+            fn Adjust(surface: SurfaceData) -> SurfaceData {
+                let adjusted: SurfaceData = surface with { Roughness: 0.5, };
+                return adjusted;
+            }
+            stage pixel fn PS(input: VertexOut) -> float4 {
+                let adjusted: VertexOut = input with { Color: input.Color, };
+                return adjusted.Color;
+            }
+        }
+    "#;
+    assert!(
+        ValidateSource(src).is_ok(),
+        "with should remain the supported update path for immutable aggregate parameters"
+    );
+}
+
+#[test]
 fn EmitHlslBodySubsetDeterministicFormatting() {
     let src = r#"
         type ClipPosition4 = float4 @space(clip.position);
