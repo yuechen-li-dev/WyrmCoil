@@ -84,6 +84,29 @@ This milestone is a resource descriptor scaffold only, preserving GPU-free testa
 
 
 
+
+## M33 headless draw assembly contract
+
+M33 adds a plain-data compatibility assembly seam for future offscreen draw submission without requiring a GPU in default tests:
+
+- `BuildHeadlessDrawAssemblyPlan(...)` validates `RenderCommandPlan` + `RenderPipelineLayoutPlan` + `VertexBufferUploadPlan` + `HeadlessRenderTargetDesc` metadata compatibility.
+- `HeadlessDrawAssemblyPlan` records deterministic draw-ready metadata (names, target dimensions, vertex count, stride, and color format) without owning any `wgpu` handles.
+- Structured `HeadlessDrawAssemblyError` variants report readiness failures, command/upload metadata mismatches, target descriptor validation failures, color-format mismatch, and pipeline-identity mismatch.
+
+M33 intentionally remains narrow:
+
+- no command encoder or render pass recording
+- no queue submission
+- no window/surface/swapchain integration
+- no material/bind-group/reflection system
+
+Future work remains explicit:
+
+- optional real-device headless draw probe
+- optional offscreen readback
+- future surface/swapchain integration
+- future material/bind-group rollout
+
 ## M32 optional headless/offscreen render-target probe
 
 M32 adds a narrow optional offscreen render-target seam for headless GPU probes while preserving GPU-free default tests:
