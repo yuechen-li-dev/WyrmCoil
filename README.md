@@ -17,7 +17,8 @@ src/Engine/
   shader/          shader source strategy, SDSL-V/WGSL tooling seams
 
 src/Demo/
-  world.rs         demo world, stores, frames, acts, keys, mail, input, registry
+  world.rs                  demo world, stores, frames, acts, keys, mail, input, registry
+  persistent_controller.rs  persistent root controller authoring sample (KeepRootFrame + Steady + typed mail + TTL)
 ```
 
 ## Public API import shape
@@ -113,3 +114,13 @@ cargo run --bin wyrmfmt -- check --lang rust src tests examples
 ```bash
 cargo test
 ```
+
+## Persistent controller sample (M52)
+
+`Demo::persistent_controller` is a copyable authoring pattern for persistent root-controller flows:
+
+- root session uses `DwRootPolicy::KeepRootFrame`
+- idle root returns `Dw::Steady()`
+- typed mailbox alert (`DwMessage::I32`) is consumed with `ConsumeFirstKind(...)`
+- board state is written with TTL helpers and deterministic expiry
+- root pushes a tiny child frame, child emits begin/complete acts, then root resumes steady
