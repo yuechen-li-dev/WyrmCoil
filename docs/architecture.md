@@ -83,6 +83,26 @@ M21 remains intentionally narrow:
 This milestone is a resource descriptor scaffold only, preserving GPU-free testability in normal `cargo test` runs.
 
 
+
+## M32 optional headless/offscreen render-target probe
+
+M32 adds a narrow optional offscreen render-target seam for headless GPU probes while preserving GPU-free default tests:
+
+- `BuildHeadlessRenderTargetDesc(...)` and `ValidateHeadlessRenderTargetDesc(...)` provide deterministic CPU-only validation for label/dimensions/format metadata.
+- `CreateWgpuHeadlessRenderTarget(...)` optionally creates a caller-owned-device `wgpu::Texture` + default `wgpu::TextureView` wrapper suitable for future draw probes.
+- Target usage is intentionally minimal (`RENDER_ATTACHMENT` + `COPY_SRC`) to support future offscreen clear/draw/readback experiments without introducing readback logic in M32.
+- No `wgpu::Instance`, adapter, device, window, surface, or swapchain is created by default tests.
+
+M32 intentionally remains narrow:
+
+- no window/surface/swapchain integration
+- no full renderer loop or draw submission expansion
+- no material/bind-group/reflection system
+- no render graph rollout
+- no readback implementation yet
+
+The M31 draw seam can consume the returned texture view in future real-device probes when callers supply compatible pipeline/vertex resources and command-encoder ownership.
+
 ## M31 optional `wgpu` render pass / draw-command probe
 
 M31 adds a narrow optional draw-command recording seam while preserving GPU-free default tests:
