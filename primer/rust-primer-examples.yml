@@ -1,119 +1,553 @@
-# Dunewyrm Architecture Contract (M9)
+document:
+  name: rust-primer-examples
+  format: yaml
+  version: 1
 
-Dunewyrm is a Rust-native sibling of DragonGod, not a line-by-line port.
+intent:
+  summary:
+    Provide small example pairs that demonstrate the allowed Rust subset in practice.
+    These examples are normative anchors for authors.
+  audience:
+    primary:
+      LLM authors
+    secondary:
+      human contributors
 
-## Runtime truth preserved
+examples:
+  ownership:
+    summary:
+      Own data by default. Do not build ordinary designs out of long-lived borrowed relationships.
 
-- Explicit state and explicit PC/phase progression.
-- Deterministic ticks and stack-based control.
-- Typed board memory, dirty tracking, and deterministic mailbox boundaries.
-- Persistence chunks and trace comparison.
+    good_owned_struct:
+      why:
+        The struct owns its data, so the type is easy to construct, move, and reason about.
+      code: |
+        #[derive(Debug, Clone)]
+        struct UserRecord {
+            user_id: String,
+            display_name: String,
+        }
 
-## Rust posture
+        fn new_user(user_id: &str, display_name: &str) -> UserRecord {
+            UserRecord {
+                user_id: user_id.to_string(),
+                display_name: display_name.to_string(),
+            }
+        }
 
-- Use Rust features where they clarify design (enums, matching, typed phases, helper functions).
-- Prefer owned runtime state over lifetime-heavy borrowed architectures.
-- Keep authoring friendly and explicit; avoid trait/object/generic theater.
+    good_owned_collection:
+      why:
+        The container owns its contents and does not require lifetime plumbing across the module.
+      code: |
+        #[derive(Debug, Clone)]
+        struct Project {
+            name: String,
+            files: Vec<String>,
+        }
 
-## Early constraints
+        impl Project {
+            fn add_file(&mut self, path: String) {
+                self.files.push(path);
+            }
+        }
 
-- No async/generators/nightly/proc-macro dependency in early runtime stages.
-- `FrameId` and `ActId` should evolve as domain-scoped numeric identities from the start.
-- Board memory should be typed and bounded, not a generic object store.
+    bad_borrowed_field_pretzel:
+      why:
+        The struct stores borrowed data unnecessarily, forcing lifetime coupling into ordinary code.
+      code: |
+        struct UserRecord<'a> {
+            user_id: &'a str,
+            display_name: &'a str,
+        }
 
+        fn new_user<'a>(user_id: &'a str, display_name: &'a str) -> UserRecord<'a> {
+            UserRecord { user_id, display_name }
+        }
 
-## M2 stack semantics
+    bad_reference_graph_shape:
+      why:
+        Persistent relationships are modeled with references instead of owned data or stable handles.
+      code: |
+        struct Node<'a> {
+            name: &'a str,
+            parent: Option<&'a Node<'a>>,
+            children: Vec<&'a Node<'a>>,
+        }
 
-- Runtime uses an explicit frame stack with one frame-step call per tick.
-- `Push` stores parent resume PC and schedules child start at PC 0 on a later tick.
-- `Pop` removes top frame and resumes parent on a later tick.
-- `Replace` removes current top frame and installs target frame at PC 0 on a later tick.
-- Child `Complete` is treated as a successful pop; root `Complete` ends the session.
-- `WaitTicks` applies only to the current top frame and blocks parent execution while waiting.
-- Stack runtime is still pre-board, pre-mailbox, pre-utility, and pre-actuation.
+  borrowing:
+    summary:
+      Borrow briefly and locally. Do not let borrows sprawl across unrelated logic.
 
+    good_short_borrow_scope:
+      why:
+        The immutable borrow ends before the next mutation, keeping the code easy for both compiler and reviewer.
+      code: |
+        fn append_summary(names: &mut Vec<String>) {
+            let count = names.len();
+            let summary = format!("count={count}");
+            names.push(summary);
+        }
 
-## M3 typed board memory
+    good_split_into_steps:
+      why:
+        Breaking work into steps shortens borrow lifetimes and makes state transitions easier to inspect.
+      code: |
+        fn uppercase_first(items: &mut [String]) {
+            if items.is_empty() {
+                return;
+            }
 
-- Session-owned board shared by all frames in the active stack.
-- Typed keys (`DwKey<T>`) are currently closed to `bool`, `i32`, and `f32`.
-- Board supports `Set`, `TryGet`, `GetOr`, `IsDirty`, `DirtySlots`, and `ClearDirty`.
-- Dirty tracking is automatic for successful writes and reset at tick start.
-- Slot collisions are diagnosed when a slot is reused with different name or type.
-- Board is control working memory only, not a generic object store and not persistence.
+            let upper = items[0].to_uppercase();
+            items[0] = upper;
+        }
 
-## M4 mailbox visible/staged semantics
+    bad_chained_borrow_coupling:
+      why:
+        Chaining can accidentally widen borrow scope and make the code harder to modify safely.
+      code: |
+        fn append_summary(names: &mut Vec<String>) {
+            let summary = names
+                .first()
+                .map(|name| format!("{name}-{}", names.len()))
+                .unwrap_or_else(|| "empty".to_string());
 
-- Session-owned mailbox has deterministic FIFO visible and staged queues.
-- `BeginTick` promotes staged messages into visible before wait processing or frame execution.
-- Frame code reads and mutates mailbox through `DwFrameCtx` (`Mailbox` / `MailboxMut`).
-- `Enqueue` during a tick appends only to staged, never to same-tick visible reads.
-- Visible messages remain in FIFO order until consumed.
-- Mailbox is synchronous runtime state only: no async/event loop machinery.
+            names.push(summary);
+        }
 
-## M5 persistence chunks
+    bad_borrow_spans_too_much_code:
+      why:
+        A reference is held across unrelated logic, increasing coupling and compiler friction.
+      code: |
+        fn update_and_log(values: &mut Vec<String>) {
+            let first = &values[0];
 
-- Runtime chunk export/import exists as plain Rust data structs, not file serialization.
-- Restore requires caller-provided `DwFrameRegistry`; no global registry lookup is used.
-- Chunk boundaries are tick/result boundaries; mid-frame serialization is not supported.
-- Chunks persist session tick/status/failure, wait state, runtime stack, board state, dirty slots, and mailbox visible/staged queues.
-- Persistence currently avoids serde and versioned storage formats by design.
+            println!("first before update = {}", first);
 
+            values.push("new".to_string());
 
-## M6 tick trace and comparison
+            println!("first after update = {}", first);
+        }
 
-- Session records one structured `DwTickTraceEntry` per tick in memory.
-- Trace entries include tick/status/frame/pc/stack/control/dirty slots/mailbox snapshots/failure reason.
-- `CompareTrace` reports first mismatch index and reason, including expected/actual entries when available.
-- Formatting helpers (`FormatTraceEntry`, `FormatTrace`, `FormatComparison`) are diagnostics only.
-- No trace file artifact writer or serde serialization is added in M6.
+  cloning:
+    summary:
+      Cloning is allowed when it meaningfully simplifies ownership and lifetime structure.
 
+    good_small_clone_for_clarity:
+      why:
+        A small clone removes lifetime coupling and keeps the code straightforward.
+      code: |
+        fn duplicate_first(items: &[String]) -> Option<(String, String)> {
+            let first = items.first()?.clone();
+            Some((first.clone(), first))
+        }
 
-## M7 utility decisions
+    good_clone_before_mutation:
+      why:
+        Cloning a small value before mutation avoids awkward borrow overlap.
+      code: |
+        fn rename_first_with_suffix(items: &mut [String], suffix: &str) {
+            if items.is_empty() {
+                return;
+            }
 
-- Decision authoring remains explicit (`Dw::When`, `Dw::Decide`) with plain scorer function pointers.
-- Scores clamp to `[0,1]` before ranking.
-- Tie-break, min-commit, and hysteresis provide anti-thrashing arbitration.
-- Decision helper pushes selected child and resumes parent at the same PC on later ticks (decision tick is real).
-- Utility commitment memory is runtime-owned, keyed by frame+PC, and persisted through chunk export/import.
-- Tick traces include structured decision entries for deterministic diagnostics.
-- M8 includes actuation intent recording only (no side-effect execution):
-  - `DwActId` is domain-scoped numeric identity (`Domain`, `Local`).
-  - Frames can emit immediate acts and schedule deferred acts through frame context.
-  - Deferred acts mature at tick boundary start; acts scheduled during tick `N` with `delay=0` mature on tick `N+1`.
-  - Tick results/traces include immediate and matured deferred acts.
-  - Pending deferred acts (with due ticks) persist through runtime chunks.
+            let original = items[0].clone();
+            items[0] = format!("{original}{suffix}");
+        }
 
+    bad_clone_avoidance_pretzel:
+      why:
+        The code preserves a borrow-heavy shape mainly to avoid a cheap clone.
+      code: |
+        fn rename_first_with_suffix<'a>(items: &'a mut [String], suffix: &'a str) -> &'a str {
+            let first = &items[0];
+            items[0] = format!("{first}{suffix}");
+            &items[0]
+        }
 
-## M9 first external sample
+    bad_clone_everything_without_reason:
+      why:
+        Cloning can simplify design, but indiscriminate cloning creates unnecessary cost and noise.
+      code: |
+        fn total_lengths(items: &[String]) -> usize {
+            items
+                .iter()
+                .cloned()
+                .map(|item| item.clone())
+                .map(|item| item.len())
+                .sum()
+        }
 
-- A tiny Guard Patrol / Recover sample exists outside core runtime modules at `samples/guard_patrol.rs`.
-- The sample is authored like downstream library usage and relies only on public `dunewyrm` APIs.
-- It exercises stack transitions, typed board writes, mailbox consumption, utility decisions (`Dw::Decide`), immediate and deferred actuation, trace determinism, and chunk restore equivalence via integration tests.
-- M9 intentionally does not add broad sample frameworks or runtime redesign.
+  result_and_option:
+    summary:
+      Use Result and Option directly and honestly. Keep error handling boring.
 
+    good_option_for_absence:
+      why:
+        Option is the right fit when the only question is whether a value exists.
+      code: |
+        fn find_name(names: &[String], target: &str) -> Option<usize> {
+            names.iter().position(|name| name == target)
+        }
 
-## M11/M12 WyrmCoil prototype scaffold
+    good_result_with_simple_error:
+      why:
+        Result makes failure explicit without theatrical error architecture.
+      code: |
+        fn parse_positive_int(text: &str) -> Result<u32, String> {
+            let value: u32 = text.parse().map_err(|_| "invalid integer".to_string())?;
+            if value == 0 {
+                return Err("value must be positive".to_string());
+            }
+            Ok(value)
+        }
 
-- WyrmCoil is a sample/prototype layer outside core runtime modules (`samples/wyrmcoil.rs`).
-- Dunewyrm remains the behavioral control spine (frames/stack/mailbox/acts/chunks).
-- World data lanes stay dense and typed in explicit stores (no ECS/archetype/query framework in M11).
-- Engine chunk composition is explicit: `WcEngineChunk = DwRuntimeChunk + WcWorldChunk`.
-- M11 intentionally excludes renderer/physics/UI systems and act payload redesign.
+    good_question_mark_usage:
+      why:
+        The ? operator keeps fallible control flow direct and readable.
+      code: |
+        use std::fs;
+        use std::path::Path;
 
+        fn load_trimmed_text(path: &Path) -> Result<String, std::io::Error> {
+            let text = fs::read_to_string(path)?;
+            Ok(text.trim().to_string())
+        }
 
-### M12 entity command pressure extension
+    bad_overbuilt_error_theater:
+      why:
+        Small local logic does not need a dramatic custom error taxonomy.
+      code: |
+        enum ParsePositiveIntLayerOneError {
+            Parse(ParsePositiveIntLayerTwoError),
+        }
 
-- WyrmCoil extends the prototype with multi-entity command routing using sample-local typed board intent.
-- Dunewyrm core actuation stays unchanged: act IDs remain payload-free and generic.
-- The M12 bridge reads board keys to resolve entity-targeted command parameters and updates dense world lanes explicitly.
-- This pass is intentionally bounded to sample/prototype behavior and exists to measure pressure for any later core payload design.
+        enum ParsePositiveIntLayerTwoError {
+            Validation(ParsePositiveIntLayerThreeError),
+        }
 
-### M13 query / selection pressure extension
+        enum ParsePositiveIntLayerThreeError {
+            Empty,
+            Invalid,
+            NonPositive,
+        }
 
-- WyrmCoil extends the sample/prototype with deterministic dense-store query/selection over explicit health lanes.
-- Query and selection remain data-layer responsibilities in sample-local world helpers, not core runtime APIs.
-- Query results are summarized into explicit board keys and consumed by frame control logic on later runtime steps.
-- Existing act payload-free Dunewyrm actuation remains unchanged; selected entities flow through board-backed command intent.
-- This pass does not add ECS, archetype storage, dynamic component queries, renderer, physics, or UI layers.
-- **Stores query. Frames decide. Acts connect. Mailbox reports back. Chunks persist both.**
+    bad_hidden_failure_side_channel:
+      why:
+        Logging is not a replacement for explicit failure in the type.
+      code: |
+        fn parse_positive_int(text: &str) -> u32 {
+            match text.parse::<u32>() {
+                Ok(value) if value > 0 => value,
+                _ => {
+                    eprintln!("failed to parse positive integer");
+                    0
+                }
+            }
+        }
+
+  structs_enums_and_traits:
+    summary:
+      Start concrete. Use traits only when there is a real interface boundary.
+
+    good_concrete_first_design:
+      why:
+        A plain struct with inherent methods is often the simplest correct shape.
+      code: |
+        struct Counter {
+            value: usize,
+        }
+
+        impl Counter {
+            fn new() -> Self {
+                Self { value: 0 }
+            }
+
+            fn increment(&mut self) {
+                self.value += 1;
+            }
+
+            fn value(&self) -> usize {
+                self.value
+            }
+        }
+
+    good_enum_for_state:
+      why:
+        Enums make variants explicit without requiring trait indirection.
+      code: |
+        enum JobState {
+            Pending,
+            Running,
+            Finished,
+            Failed(String),
+        }
+
+        fn is_terminal(state: &JobState) -> bool {
+            matches!(state, JobState::Finished | JobState::Failed(_))
+        }
+
+    good_trait_for_real_boundary:
+      why:
+        A trait is justified when there is a genuine interface boundary.
+      code: |
+        trait FileStore {
+            fn read_text(&self, path: &str) -> Result<String, String>;
+        }
+
+        struct LocalFileStore;
+
+        impl FileStore for LocalFileStore {
+            fn read_text(&self, path: &str) -> Result<String, String> {
+                std::fs::read_to_string(path).map_err(|e| e.to_string())
+            }
+        }
+
+    bad_traitify_everything:
+      why:
+        Trait indirection is introduced where a concrete type would be simpler and clearer.
+      code: |
+        trait CounterBehavior {
+            fn increment(&mut self);
+            fn value(&self) -> usize;
+        }
+
+        struct CounterImpl {
+            value: usize,
+        }
+
+        impl CounterBehavior for CounterImpl {
+            fn increment(&mut self) {
+                self.value += 1;
+            }
+
+            fn value(&self) -> usize {
+                self.value
+            }
+        }
+
+    bad_premature_generic_abstraction:
+      why:
+        Generic machinery appears before the code proves it needs it.
+      code: |
+        struct Processor<TInput, TOutput, TError, THandler>
+        where
+            THandler: Fn(TInput) -> Result<TOutput, TError>,
+        {
+            handler: THandler,
+        }
+
+  iteration_and_control_flow:
+    summary:
+      Loops are respectable. Use iterator chains only when they are truly clearer.
+
+    good_clear_loop:
+      why:
+        The loop makes control flow, mutation, and intermediate state obvious.
+      code: |
+        fn collect_even_strings(values: &[i32]) -> Vec<String> {
+            let mut result = Vec::new();
+
+            for value in values {
+                if value % 2 == 0 {
+                    result.push(value.to_string());
+                }
+            }
+
+            result
+        }
+
+    good_small_iterator_chain:
+      why:
+        A short iterator chain is acceptable when it stays obvious.
+      code: |
+        fn collect_even_strings(values: &[i32]) -> Vec<String> {
+            values
+                .iter()
+                .filter(|value| **value % 2 == 0)
+                .map(|value| value.to_string())
+                .collect()
+        }
+
+    bad_iterator_soup:
+      why:
+        The chain is harder to inspect and modify than a simple loop.
+      code: |
+        fn summarize(values: &[i32]) -> Vec<String> {
+            values
+                .iter()
+                .enumerate()
+                .filter_map(|(index, value)| {
+                    if *value > 0 && index % 2 == 0 {
+                        Some((index, value.to_string()))
+                    } else {
+                        None
+                    }
+                })
+                .map(|(index, text)| format!("{index}:{text}"))
+                .collect()
+        }
+
+    bad_expression_density_borrow_confusion:
+      why:
+        Dense expressions can make borrow scope and state transitions harder to understand.
+      code: |
+        fn rewrite_first(items: &mut Vec<String>) {
+            items[0] = items
+                .first()
+                .map(|value| value.trim().to_uppercase())
+                .unwrap_or_else(|| "EMPTY".to_string());
+        }
+
+  interior_mutability:
+    summary:
+      Interior mutability is a narrow tool, not a default escape hatch.
+
+    good_explicit_local_mutation:
+      why:
+        Mutation is local, visible, and does not require shared ownership machinery.
+      code: |
+        struct Queue {
+            items: Vec<String>,
+        }
+
+        impl Queue {
+            fn push(&mut self, item: String) {
+                self.items.push(item);
+            }
+
+            fn pop(&mut self) -> Option<String> {
+                self.items.pop()
+            }
+        }
+
+    good_handle_based_design:
+      why:
+        Stable handles avoid persistent reference graphs and shared mutable borrowing problems.
+      code: |
+        struct Graph {
+            names: Vec<String>,
+        }
+
+        impl Graph {
+            fn add_node(&mut self, name: String) -> usize {
+                self.names.push(name);
+                self.names.len() - 1
+            }
+
+            fn name(&self, id: usize) -> Option<&str> {
+                self.names.get(id).map(String::as_str)
+            }
+        }
+
+    bad_rc_refcell_emotional_support:
+      why:
+        Shared mutable state is introduced mainly because ownership was not simplified first.
+      code: |
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct Node {
+            name: Rc<RefCell<String>>,
+        }
+
+        fn rename(node: &Node, new_name: &str) {
+            *node.name.borrow_mut() = new_name.to_string();
+        }
+
+    bad_arc_mutex_by_default:
+      why:
+        Concurrency-oriented shared mutation appears before the design proves it is needed.
+      code: |
+        use std::sync::{Arc, Mutex};
+
+        struct AppState {
+            users: Arc<Mutex<Vec<String>>>,
+        }
+
+  async:
+    summary:
+      Async is not the default. Use it only where the repository truly needs it.
+
+    good_sync_by_default:
+      why:
+        A synchronous design is simpler and should remain synchronous when it is good enough.
+      code: |
+        use std::fs;
+        use std::path::Path;
+
+        fn load_config(path: &Path) -> Result<String, std::io::Error> {
+            fs::read_to_string(path)
+        }
+
+    good_narrow_async_boundary:
+      why:
+        Async is confined to a boundary that genuinely benefits from it.
+      code: |
+        async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String, reqwest::Error> {
+            let response = client.get(url).send().await?;
+            response.text().await
+        }
+
+    bad_async_spread:
+      why:
+        Async spreads through code that does not materially benefit from it.
+      code: |
+        async fn parse_name(text: &str) -> String {
+            text.trim().to_string()
+        }
+
+        async fn build_message(text: &str) -> String {
+            let name = parse_name(text).await;
+            format!("hello {name}")
+        }
+
+    bad_async_shared_state_pain:
+      why:
+        Async is mixed with shared mutable state in a way that multiplies complexity.
+      code: |
+        use std::sync::{Arc, Mutex};
+
+        struct AppState {
+            jobs: Arc<Mutex<Vec<String>>>,
+        }
+
+        async fn add_job(state: Arc<AppState>, name: String) {
+            state.jobs.lock().unwrap().push(name);
+        }
+
+  unsafe:
+    summary:
+      Unsafe must be rare, isolated, and justified.
+
+    good_safe_standard_code:
+      why:
+        The standard library already solves the problem safely and clearly.
+      code: |
+        fn first_byte(data: &[u8]) -> Option<u8> {
+            data.first().copied()
+        }
+
+    bad_unsafe_for_no_reason:
+      why:
+        Unsafe is introduced without a real boundary need or documented invariant.
+      code: |
+        fn first_byte(data: &[u8]) -> u8 {
+            unsafe { *data.get_unchecked(0) }
+        }
+
+review_hints:
+  summary:
+    Use these examples directionally, not mechanically.
+  rules:
+    - Prefer designs that own data cleanly over designs that preserve awkward borrowed shapes.
+    - Prefer short borrows, split steps, and named locals when they simplify compiler reasoning.
+    - Prefer small clones over large lifetime pretzels.
+    - Prefer concrete structs and enums over premature trait and generic abstraction.
+    - Prefer loops over iterator chains when clarity improves.
+    - Treat Rc<RefCell<T>>, Arc<Mutex<T>>, async spread, and unsafe as escalation points, not defaults.
+
+closing:
+  message:
+    These examples are anchors, not decoration.
+    The goal is not impressive Rust.
+    The goal is trustworthy Rust that the compiler can validate without turning the code into a pretzel factory.

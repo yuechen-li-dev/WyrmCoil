@@ -1,553 +1,543 @@
-document:
-  name: rust-primer-examples
-  format: yaml
-  version: 1
+#![allow(non_snake_case)]
+#![allow(non_upper_case_globals)]
 
-intent:
-  summary:
-    Provide small example pairs that demonstrate the allowed Rust subset in practice.
-    These examples are normative anchors for authors.
-  audience:
-    primary:
-      LLM authors
-    secondary:
-      human contributors
+use dunewyrm::{
+    Dw, DwActRequest, DwControl, DwFrameCtx, DwFrameDef, DwFrameRegistry, DwKey, DwMessage,
+    DwPhase, DwRuntimeChunk, DwSession, DwTickResult,
+};
 
-examples:
-  ownership:
-    summary:
-      Own data by default. Do not build ordinary designs out of long-lived borrowed relationships.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WcVec2 {
+    pub X: f32,
+    pub Y: f32,
+}
 
-    good_owned_struct:
-      why:
-        The struct owns its data, so the type is easy to construct, move, and reason about.
-      code: |
-        #[derive(Debug, Clone)]
-        struct UserRecord {
-            user_id: String,
-            display_name: String,
+impl WcVec2 {
+    pub fn Zero() -> Self {
+        Self { X: 0.0, Y: 0.0 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WcEntityId(pub usize);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WcTransformStore {
+    pub Positions: Vec<WcVec2>,
+    pub Velocities: Vec<WcVec2>,
+    pub Alive: Vec<bool>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct WcHealthStore {
+    pub Health: Vec<f32>,
+}
+impl WcHealthStore {
+    pub fn New() -> Self {
+        Self { Health: Vec::new() }
+    }
+    pub fn Spawn(&mut self, health: f32) {
+        self.Health.push(health);
+    }
+    pub fn SetHealth(&mut self, id: WcEntityId, health: f32) {
+        if id.0 < self.Health.len() {
+            self.Health[id.0] = health;
         }
+    }
+    pub fn ExportChunk(&self) -> WcHealthStoreChunk {
+        WcHealthStoreChunk {
+            Health: self.Health.clone(),
+        }
+    }
+    pub fn FromChunk(chunk: WcHealthStoreChunk) -> Self {
+        Self {
+            Health: chunk.Health,
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct WcHealthStoreChunk {
+    pub Health: Vec<f32>,
+}
 
-        fn new_user(user_id: &str, display_name: &str) -> UserRecord {
-            UserRecord {
-                user_id: user_id.to_string(),
-                display_name: display_name.to_string(),
+#[derive(Clone, Debug, PartialEq)]
+pub struct WcTransformStoreChunk {
+    pub Positions: Vec<WcVec2>,
+    pub Velocities: Vec<WcVec2>,
+    pub Alive: Vec<bool>,
+}
+
+impl WcTransformStore {
+    pub fn New() -> Self {
+        Self {
+            Positions: Vec::new(),
+            Velocities: Vec::new(),
+            Alive: Vec::new(),
+        }
+    }
+    pub fn Spawn(&mut self, position: WcVec2) -> WcEntityId {
+        let id = WcEntityId(self.Positions.len());
+        self.Positions.push(position);
+        self.Velocities.push(WcVec2::Zero());
+        self.Alive.push(true);
+        id
+    }
+    pub fn SetAlive(&mut self, id: WcEntityId, alive: bool) {
+        if id.0 < self.Alive.len() {
+            self.Alive[id.0] = alive;
+        }
+    }
+    pub fn SetVelocity(&mut self, id: WcEntityId, velocity: WcVec2) {
+        if id.0 < self.Velocities.len() && self.Alive[id.0] {
+            self.Velocities[id.0] = velocity;
+        }
+    }
+    pub fn Position(&self, id: WcEntityId) -> Option<WcVec2> {
+        self.Positions.get(id.0).copied()
+    }
+    pub fn Velocity(&self, id: WcEntityId) -> Option<WcVec2> {
+        self.Velocities.get(id.0).copied()
+    }
+    pub fn Tick(&mut self) {
+        for index in 0..self.Positions.len() {
+            if self.Alive[index] {
+                self.Positions[index].X += self.Velocities[index].X;
+                self.Positions[index].Y += self.Velocities[index].Y;
             }
         }
-
-    good_owned_collection:
-      why:
-        The container owns its contents and does not require lifetime plumbing across the module.
-      code: |
-        #[derive(Debug, Clone)]
-        struct Project {
-            name: String,
-            files: Vec<String>,
+    }
+    pub fn ExportChunk(&self) -> WcTransformStoreChunk {
+        WcTransformStoreChunk {
+            Positions: self.Positions.clone(),
+            Velocities: self.Velocities.clone(),
+            Alive: self.Alive.clone(),
         }
+    }
+    pub fn FromChunk(chunk: WcTransformStoreChunk) -> Self {
+        Self {
+            Positions: chunk.Positions,
+            Velocities: chunk.Velocities,
+            Alive: chunk.Alive,
+        }
+    }
+}
 
-        impl Project {
-            fn add_file(&mut self, path: String) {
-                self.files.push(path);
+#[derive(Clone, Debug, PartialEq)]
+pub struct WcWorld {
+    pub Transforms: WcTransformStore,
+    pub Health: WcHealthStore,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct WcWorldChunk {
+    pub Transforms: WcTransformStoreChunk,
+    pub Health: WcHealthStoreChunk,
+}
+impl WcWorld {
+    pub fn New() -> Self {
+        Self {
+            Transforms: WcTransformStore::New(),
+            Health: WcHealthStore::New(),
+        }
+    }
+    pub fn SpawnEntity(&mut self, position: WcVec2, health: f32) -> WcEntityId {
+        let entity = self.Transforms.Spawn(position);
+        self.Health.Spawn(health);
+        entity
+    }
+    pub fn FindLowestHealthAliveEntity(&self) -> Option<WcEntityId> {
+        let mut selected: Option<WcEntityId> = None;
+        let mut selected_health = 0.0_f32;
+        let count = self.Transforms.Alive.len().min(self.Health.Health.len());
+        for index in 0..count {
+            if !self.Transforms.Alive[index] {
+                continue;
+            }
+            let health = self.Health.Health[index];
+            if selected.is_none() || health < selected_health {
+                selected = Some(WcEntityId(index));
+                selected_health = health;
             }
         }
-
-    bad_borrowed_field_pretzel:
-      why:
-        The struct stores borrowed data unnecessarily, forcing lifetime coupling into ordinary code.
-      code: |
-        struct UserRecord<'a> {
-            user_id: &'a str,
-            display_name: &'a str,
+        selected
+    }
+    pub fn RefreshSelectionBoard(&self, board: &mut dunewyrm::DwBoard) {
+        let selected = self.FindLowestHealthAliveEntity();
+        if let Some(entity) = selected {
+            board
+                .Set(WcKeys::HasSelection, true)
+                .expect("selection flag should write when query finds alive entity");
+            board
+                .Set(WcKeys::SelectedEntity, entity.0 as i32)
+                .expect("selected entity should write when query finds alive entity");
+            board
+                .Set(WcKeys::SelectedHealth, self.Health.Health[entity.0])
+                .expect("selected health should write when query finds alive entity");
+        } else {
+            board
+                .Set(WcKeys::HasSelection, false)
+                .expect("selection flag should write when query does not find alive entity");
+            board
+                .Set(WcKeys::SelectedEntity, -1)
+                .expect("selected entity sentinel should write when query finds no alive entity");
+            board
+                .Set(WcKeys::SelectedHealth, -1.0)
+                .expect("selected health sentinel should write when query finds no alive entity");
         }
-
-        fn new_user<'a>(user_id: &'a str, display_name: &'a str) -> UserRecord<'a> {
-            UserRecord { user_id, display_name }
+    }
+    pub fn Tick(&mut self) {
+        self.Transforms.Tick();
+    }
+    pub fn ExportChunk(&self) -> WcWorldChunk {
+        WcWorldChunk {
+            Transforms: self.Transforms.ExportChunk(),
+            Health: self.Health.ExportChunk(),
         }
-
-    bad_reference_graph_shape:
-      why:
-        Persistent relationships are modeled with references instead of owned data or stable handles.
-      code: |
-        struct Node<'a> {
-            name: &'a str,
-            parent: Option<&'a Node<'a>>,
-            children: Vec<&'a Node<'a>>,
+    }
+    pub fn FromChunk(chunk: WcWorldChunk) -> Self {
+        Self {
+            Transforms: WcTransformStore::FromChunk(chunk.Transforms),
+            Health: WcHealthStore::FromChunk(chunk.Health),
         }
+    }
+}
 
-  borrowing:
-    summary:
-      Borrow briefly and locally. Do not let borrows sprawl across unrelated logic.
+pub mod WcFrames {
+    use dunewyrm::DwFrameId;
+    pub const Domain: u64 = 310;
+    pub const Root: DwFrameId = DwFrameId { Domain, Local: 1 };
+    pub const Player: DwFrameId = DwFrameId { Domain, Local: 2 };
+    pub const Guard: DwFrameId = DwFrameId { Domain, Local: 3 };
+}
+pub mod WcActs {
+    use dunewyrm::DwActId;
+    pub const Domain: u64 = 311;
+    pub const ApplyVelocityCommand: DwActId = DwActId { Domain, Local: 1 };
+    pub const NudgeEntityCommand: DwActId = DwActId { Domain, Local: 2 };
+    pub const GuardStep: DwActId = DwActId { Domain, Local: 3 };
+}
+pub mod WcKeys {
+    use super::DwKey;
+    pub const GuardAlert: DwKey<bool> = DwKey::New("GuardAlert", 20);
+    pub const CommandEntity: DwKey<i32> = DwKey::New("CommandEntity", 21);
+    pub const CommandVelocityX: DwKey<f32> = DwKey::New("CommandVelocityX", 22);
+    pub const CommandVelocityY: DwKey<f32> = DwKey::New("CommandVelocityY", 23);
+    pub const CommandDeltaX: DwKey<f32> = DwKey::New("CommandDeltaX", 24);
+    pub const CommandDeltaY: DwKey<f32> = DwKey::New("CommandDeltaY", 25);
+    pub const HasSelection: DwKey<bool> = DwKey::New("HasSelection", 26);
+    pub const SelectedEntity: DwKey<i32> = DwKey::New("SelectedEntity", 27);
+    pub const SelectedHealth: DwKey<f32> = DwKey::New("SelectedHealth", 28);
+}
+pub mod WcMailKinds {
+    pub const MovePlayerRight: u32 = 1;
+    pub const MovePlayerLeft: u32 = 2;
+    pub const StopPlayer: u32 = 3;
+    pub const AlertGuard: u32 = 4;
+    pub const NudgeGuardUp: u32 = 5;
+}
 
-    good_short_borrow_scope:
-      why:
-        The immutable borrow ends before the next mutation, keeping the code easy for both compiler and reviewer.
-      code: |
-        fn append_summary(names: &mut Vec<String>) {
-            let count = names.len();
-            let summary = format!("count={count}");
-            names.push(summary);
+#[derive(Clone, Copy)]
+enum RootPhase {
+    Player,
+    Guard,
+    Loop,
+}
+impl DwPhase for RootPhase {
+    fn ToPc(self) -> u32 {
+        match self {
+            RootPhase::Player => 0,
+            RootPhase::Guard => 1,
+            RootPhase::Loop => 2,
         }
-
-    good_split_into_steps:
-      why:
-        Breaking work into steps shortens borrow lifetimes and makes state transitions easier to inspect.
-      code: |
-        fn uppercase_first(items: &mut [String]) {
-            if items.is_empty() {
-                return;
-            }
-
-            let upper = items[0].to_uppercase();
-            items[0] = upper;
+    }
+    fn FromPc(pc: u32) -> Option<Self> {
+        match pc {
+            0 => Some(RootPhase::Player),
+            1 => Some(RootPhase::Guard),
+            2 => Some(RootPhase::Loop),
+            _ => None,
         }
-
-    bad_chained_borrow_coupling:
-      why:
-        Chaining can accidentally widen borrow scope and make the code harder to modify safely.
-      code: |
-        fn append_summary(names: &mut Vec<String>) {
-            let summary = names
-                .first()
-                .map(|name| format!("{name}-{}", names.len()))
-                .unwrap_or_else(|| "empty".to_string());
-
-            names.push(summary);
+    }
+}
+#[derive(Clone, Copy)]
+enum UnitPhase {
+    Enter,
+    Finish,
+}
+impl DwPhase for UnitPhase {
+    fn ToPc(self) -> u32 {
+        match self {
+            UnitPhase::Enter => 0,
+            UnitPhase::Finish => 1,
         }
-
-    bad_borrow_spans_too_much_code:
-      why:
-        A reference is held across unrelated logic, increasing coupling and compiler friction.
-      code: |
-        fn update_and_log(values: &mut Vec<String>) {
-            let first = &values[0];
-
-            println!("first before update = {}", first);
-
-            values.push("new".to_string());
-
-            println!("first after update = {}", first);
+    }
+    fn FromPc(pc: u32) -> Option<Self> {
+        match pc {
+            0 => Some(UnitPhase::Enter),
+            1 => Some(UnitPhase::Finish),
+            _ => None,
         }
+    }
+}
 
-  cloning:
-    summary:
-      Cloning is allowed when it meaningfully simplifies ownership and lifetime structure.
+fn Root(ctx: &mut DwFrameCtx) -> DwControl {
+    match ctx.Phase::<RootPhase>() {
+        Some(RootPhase::Player) => Dw::Push(WcFrames::Player, RootPhase::Guard),
+        Some(RootPhase::Guard) => Dw::Push(WcFrames::Guard, RootPhase::Loop),
+        Some(RootPhase::Loop) => Dw::Continue(RootPhase::Player),
+        None => Dw::Fail("wyrmcoil root phase invalid"),
+    }
+}
 
-    good_small_clone_for_clarity:
-      why:
-        A small clone removes lifetime coupling and keeps the code straightforward.
-      code: |
-        fn duplicate_first(items: &[String]) -> Option<(String, String)> {
-            let first = items.first()?.clone();
-            Some((first.clone(), first))
-        }
+fn QueueVelocityCommand(ctx: &mut DwFrameCtx, entity: i32, x: f32, y: f32) {
+    ctx.BoardMut()
+        .Set(WcKeys::CommandEntity, entity)
+        .expect("command entity key write should succeed");
+    ctx.BoardMut()
+        .Set(WcKeys::CommandVelocityX, x)
+        .expect("command velocity x key write should succeed");
+    ctx.BoardMut()
+        .Set(WcKeys::CommandVelocityY, y)
+        .expect("command velocity y key write should succeed");
+    ctx.Immediate(WcActs::ApplyVelocityCommand);
+}
 
-    good_clone_before_mutation:
-      why:
-        Cloning a small value before mutation avoids awkward borrow overlap.
-      code: |
-        fn rename_first_with_suffix(items: &mut [String], suffix: &str) {
-            if items.is_empty() {
-                return;
-            }
-
-            let original = items[0].clone();
-            items[0] = format!("{original}{suffix}");
-        }
-
-    bad_clone_avoidance_pretzel:
-      why:
-        The code preserves a borrow-heavy shape mainly to avoid a cheap clone.
-      code: |
-        fn rename_first_with_suffix<'a>(items: &'a mut [String], suffix: &'a str) -> &'a str {
-            let first = &items[0];
-            items[0] = format!("{first}{suffix}");
-            &items[0]
-        }
-
-    bad_clone_everything_without_reason:
-      why:
-        Cloning can simplify design, but indiscriminate cloning creates unnecessary cost and noise.
-      code: |
-        fn total_lengths(items: &[String]) -> usize {
-            items
-                .iter()
-                .cloned()
-                .map(|item| item.clone())
-                .map(|item| item.len())
-                .sum()
-        }
-
-  result_and_option:
-    summary:
-      Use Result and Option directly and honestly. Keep error handling boring.
-
-    good_option_for_absence:
-      why:
-        Option is the right fit when the only question is whether a value exists.
-      code: |
-        fn find_name(names: &[String], target: &str) -> Option<usize> {
-            names.iter().position(|name| name == target)
-        }
-
-    good_result_with_simple_error:
-      why:
-        Result makes failure explicit without theatrical error architecture.
-      code: |
-        fn parse_positive_int(text: &str) -> Result<u32, String> {
-            let value: u32 = text.parse().map_err(|_| "invalid integer".to_string())?;
-            if value == 0 {
-                return Err("value must be positive".to_string());
-            }
-            Ok(value)
-        }
-
-    good_question_mark_usage:
-      why:
-        The ? operator keeps fallible control flow direct and readable.
-      code: |
-        use std::fs;
-        use std::path::Path;
-
-        fn load_trimmed_text(path: &Path) -> Result<String, std::io::Error> {
-            let text = fs::read_to_string(path)?;
-            Ok(text.trim().to_string())
-        }
-
-    bad_overbuilt_error_theater:
-      why:
-        Small local logic does not need a dramatic custom error taxonomy.
-      code: |
-        enum ParsePositiveIntLayerOneError {
-            Parse(ParsePositiveIntLayerTwoError),
-        }
-
-        enum ParsePositiveIntLayerTwoError {
-            Validation(ParsePositiveIntLayerThreeError),
-        }
-
-        enum ParsePositiveIntLayerThreeError {
-            Empty,
-            Invalid,
-            NonPositive,
-        }
-
-    bad_hidden_failure_side_channel:
-      why:
-        Logging is not a replacement for explicit failure in the type.
-      code: |
-        fn parse_positive_int(text: &str) -> u32 {
-            match text.parse::<u32>() {
-                Ok(value) if value > 0 => value,
-                _ => {
-                    eprintln!("failed to parse positive integer");
-                    0
+fn Player(ctx: &mut DwFrameCtx) -> DwControl {
+    match ctx.Phase::<UnitPhase>() {
+        Some(UnitPhase::Enter) => {
+            while let Some(message) = ctx.MailboxMut().ConsumeFront() {
+                if message.Kind == WcMailKinds::MovePlayerRight {
+                    QueueVelocityCommand(ctx, 0, 1.0, 0.0);
+                } else if message.Kind == WcMailKinds::MovePlayerLeft {
+                    QueueVelocityCommand(ctx, 0, -1.0, 0.0);
+                } else if message.Kind == WcMailKinds::StopPlayer {
+                    QueueVelocityCommand(ctx, 0, 0.0, 0.0);
+                } else if message.Kind == WcMailKinds::AlertGuard {
+                    ctx.BoardMut()
+                        .Set(WcKeys::GuardAlert, true)
+                        .expect("guard alert key write should succeed");
+                } else if message.Kind == WcMailKinds::NudgeGuardUp {
+                    ctx.BoardMut()
+                        .Set(WcKeys::CommandEntity, 1)
+                        .expect("nudge command entity write should succeed");
+                    ctx.BoardMut()
+                        .Set(WcKeys::CommandDeltaX, 0.0)
+                        .expect("nudge command delta x write should succeed");
+                    ctx.BoardMut()
+                        .Set(WcKeys::CommandDeltaY, 2.0)
+                        .expect("nudge command delta y write should succeed");
+                    ctx.Immediate(WcActs::NudgeEntityCommand);
                 }
             }
+            Dw::Continue(UnitPhase::Finish)
         }
-
-  structs_enums_and_traits:
-    summary:
-      Start concrete. Use traits only when there is a real interface boundary.
-
-    good_concrete_first_design:
-      why:
-        A plain struct with inherent methods is often the simplest correct shape.
-      code: |
-        struct Counter {
-            value: usize,
-        }
-
-        impl Counter {
-            fn new() -> Self {
-                Self { value: 0 }
-            }
-
-            fn increment(&mut self) {
-                self.value += 1;
-            }
-
-            fn value(&self) -> usize {
-                self.value
-            }
-        }
-
-    good_enum_for_state:
-      why:
-        Enums make variants explicit without requiring trait indirection.
-      code: |
-        enum JobState {
-            Pending,
-            Running,
-            Finished,
-            Failed(String),
-        }
-
-        fn is_terminal(state: &JobState) -> bool {
-            matches!(state, JobState::Finished | JobState::Failed(_))
-        }
-
-    good_trait_for_real_boundary:
-      why:
-        A trait is justified when there is a genuine interface boundary.
-      code: |
-        trait FileStore {
-            fn read_text(&self, path: &str) -> Result<String, String>;
-        }
-
-        struct LocalFileStore;
-
-        impl FileStore for LocalFileStore {
-            fn read_text(&self, path: &str) -> Result<String, String> {
-                std::fs::read_to_string(path).map_err(|e| e.to_string())
-            }
-        }
-
-    bad_traitify_everything:
-      why:
-        Trait indirection is introduced where a concrete type would be simpler and clearer.
-      code: |
-        trait CounterBehavior {
-            fn increment(&mut self);
-            fn value(&self) -> usize;
-        }
-
-        struct CounterImpl {
-            value: usize,
-        }
-
-        impl CounterBehavior for CounterImpl {
-            fn increment(&mut self) {
-                self.value += 1;
-            }
-
-            fn value(&self) -> usize {
-                self.value
-            }
-        }
-
-    bad_premature_generic_abstraction:
-      why:
-        Generic machinery appears before the code proves it needs it.
-      code: |
-        struct Processor<TInput, TOutput, TError, THandler>
-        where
-            THandler: Fn(TInput) -> Result<TOutput, TError>,
-        {
-            handler: THandler,
-        }
-
-  iteration_and_control_flow:
-    summary:
-      Loops are respectable. Use iterator chains only when they are truly clearer.
-
-    good_clear_loop:
-      why:
-        The loop makes control flow, mutation, and intermediate state obvious.
-      code: |
-        fn collect_even_strings(values: &[i32]) -> Vec<String> {
-            let mut result = Vec::new();
-
-            for value in values {
-                if value % 2 == 0 {
-                    result.push(value.to_string());
+        Some(UnitPhase::Finish) => Dw::Pop(),
+        None => Dw::Fail("wyrmcoil player phase invalid"),
+    }
+}
+fn Guard(ctx: &mut DwFrameCtx) -> DwControl {
+    match ctx.Phase::<UnitPhase>() {
+        Some(UnitPhase::Enter) => {
+            let mut velocity_x = 0.0;
+            let mut velocity_y = 1.0;
+            if ctx.Board().GetOr(WcKeys::HasSelection, false) {
+                let selected_entity = ctx.Board().GetOr(WcKeys::SelectedEntity, -1);
+                if selected_entity >= 0 {
+                    ctx.BoardMut()
+                        .Set(WcKeys::CommandEntity, selected_entity)
+                        .expect("guard query selected entity write should succeed");
+                    velocity_x = 0.5;
+                    velocity_y = 0.5;
                 }
+            } else {
+                ctx.BoardMut()
+                    .Set(WcKeys::CommandEntity, 1)
+                    .expect("guard fallback command entity write should succeed");
             }
-
-            result
+            QueueVelocityCommand(
+                ctx,
+                ctx.Board().GetOr(WcKeys::CommandEntity, 1),
+                velocity_x,
+                velocity_y,
+            );
+            if ctx.Board().GetOr(WcKeys::GuardAlert, false)
+                && ctx.Board().GetOr(WcKeys::HasSelection, false)
+            {
+                ctx.BoardMut()
+                    .Set(WcKeys::CommandVelocityX, 1.0)
+                    .expect("guard command velocity x write should succeed");
+                ctx.BoardMut()
+                    .Set(WcKeys::CommandVelocityY, 1.0)
+                    .expect("guard command velocity y write should succeed");
+                ctx.Deferred(WcActs::ApplyVelocityCommand, 1);
+            }
+            ctx.Immediate(WcActs::GuardStep);
+            Dw::Continue(UnitPhase::Finish)
         }
+        Some(UnitPhase::Finish) => Dw::Pop(),
+        None => Dw::Fail("wyrmcoil guard phase invalid"),
+    }
+}
 
-    good_small_iterator_chain:
-      why:
-        A short iterator chain is acceptable when it stays obvious.
-      code: |
-        fn collect_even_strings(values: &[i32]) -> Vec<String> {
-            values
-                .iter()
-                .filter(|value| **value % 2 == 0)
-                .map(|value| value.to_string())
-                .collect()
-        }
+pub fn BuildRegistry() -> DwFrameRegistry {
+    let mut registry = DwFrameRegistry::New();
+    registry
+        .Register(DwFrameDef {
+            Id: WcFrames::Root,
+            Step: Root,
+            DebugName: "WcRoot",
+        })
+        .expect("WcRoot should register exactly once");
+    registry
+        .Register(DwFrameDef {
+            Id: WcFrames::Player,
+            Step: Player,
+            DebugName: "WcPlayer",
+        })
+        .expect("WcPlayer should register exactly once");
+    registry
+        .Register(DwFrameDef {
+            Id: WcFrames::Guard,
+            Step: Guard,
+            DebugName: "WcGuard",
+        })
+        .expect("WcGuard should register exactly once");
+    registry
+}
 
-    bad_iterator_soup:
-      why:
-        The chain is harder to inspect and modify than a simple loop.
-      code: |
-        fn summarize(values: &[i32]) -> Vec<String> {
-            values
-                .iter()
-                .enumerate()
-                .filter_map(|(index, value)| {
-                    if *value > 0 && index % 2 == 0 {
-                        Some((index, value.to_string()))
-                    } else {
-                        None
+pub fn DispatchActs(world: &mut WcWorld, board: &dunewyrm::DwBoard, acts: &[DwActRequest]) {
+    for act in acts {
+        if act.Id == WcActs::ApplyVelocityCommand {
+            let entity = board.GetOr(WcKeys::CommandEntity, -1);
+            let velocity_x = board.GetOr(WcKeys::CommandVelocityX, 0.0);
+            let velocity_y = board.GetOr(WcKeys::CommandVelocityY, 0.0);
+            if entity >= 0 {
+                world.Transforms.SetVelocity(
+                    WcEntityId(entity as usize),
+                    WcVec2 {
+                        X: velocity_x,
+                        Y: velocity_y,
+                    },
+                );
+            }
+        } else if act.Id == WcActs::NudgeEntityCommand {
+            let entity = board.GetOr(WcKeys::CommandEntity, -1);
+            let delta_x = board.GetOr(WcKeys::CommandDeltaX, 0.0);
+            let delta_y = board.GetOr(WcKeys::CommandDeltaY, 0.0);
+            if entity >= 0 {
+                let target = WcEntityId(entity as usize);
+                if let Some(position) = world.Transforms.Position(target) {
+                    if target.0 < world.Transforms.Alive.len() && world.Transforms.Alive[target.0] {
+                        world.Transforms.Positions[target.0] = WcVec2 {
+                            X: position.X + delta_x,
+                            Y: position.Y + delta_y,
+                        };
                     }
-                })
-                .map(|(index, text)| format!("{index}:{text}"))
-                .collect()
-        }
-
-    bad_expression_density_borrow_confusion:
-      why:
-        Dense expressions can make borrow scope and state transitions harder to understand.
-      code: |
-        fn rewrite_first(items: &mut Vec<String>) {
-            items[0] = items
-                .first()
-                .map(|value| value.trim().to_uppercase())
-                .unwrap_or_else(|| "EMPTY".to_string());
-        }
-
-  interior_mutability:
-    summary:
-      Interior mutability is a narrow tool, not a default escape hatch.
-
-    good_explicit_local_mutation:
-      why:
-        Mutation is local, visible, and does not require shared ownership machinery.
-      code: |
-        struct Queue {
-            items: Vec<String>,
-        }
-
-        impl Queue {
-            fn push(&mut self, item: String) {
-                self.items.push(item);
-            }
-
-            fn pop(&mut self) -> Option<String> {
-                self.items.pop()
+                }
             }
         }
+    }
+}
 
-    good_handle_based_design:
-      why:
-        Stable handles avoid persistent reference graphs and shared mutable borrowing problems.
-      code: |
-        struct Graph {
-            names: Vec<String>,
+pub struct WcEngine {
+    pub Session: DwSession,
+    pub World: WcWorld,
+    pub Player: WcEntityId,
+    pub Guard: WcEntityId,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct WcEngineChunk {
+    pub Runtime: DwRuntimeChunk,
+    pub World: WcWorldChunk,
+    pub Player: WcEntityId,
+    pub Guard: WcEntityId,
+}
+pub struct WcTickResult {
+    pub Runtime: DwTickResult,
+    pub World: WcWorld,
+}
+
+impl WcEngine {
+    pub fn New() -> Self {
+        let mut world = WcWorld::New();
+        let player = world.SpawnEntity(WcVec2::Zero(), 100.0);
+        let guard = world.SpawnEntity(WcVec2 { X: 5.0, Y: 5.0 }, 80.0);
+        let session = DwSession::New(BuildRegistry(), WcFrames::Root, 0)
+            .expect("WyrmCoil session should construct");
+        Self {
+            Session: session,
+            World: world,
+            Player: player,
+            Guard: guard,
         }
-
-        impl Graph {
-            fn add_node(&mut self, name: String) -> usize {
-                self.names.push(name);
-                self.names.len() - 1
-            }
-
-            fn name(&self, id: usize) -> Option<&str> {
-                self.names.get(id).map(String::as_str)
-            }
+    }
+    pub fn Tick(&mut self) -> WcTickResult {
+        self.World.RefreshSelectionBoard(self.Session.BoardMut());
+        let runtime = self
+            .Session
+            .Tick()
+            .expect("WyrmCoil engine tick should succeed");
+        DispatchActs(
+            &mut self.World,
+            self.Session.Board(),
+            &runtime.ImmediateActs,
+        );
+        DispatchActs(
+            &mut self.World,
+            self.Session.Board(),
+            &runtime.MaturedDeferredActs,
+        );
+        self.World.Tick();
+        WcTickResult {
+            Runtime: runtime,
+            World: self.World.clone(),
         }
-
-    bad_rc_refcell_emotional_support:
-      why:
-        Shared mutable state is introduced mainly because ownership was not simplified first.
-      code: |
-        use std::cell::RefCell;
-        use std::rc::Rc;
-
-        struct Node {
-            name: Rc<RefCell<String>>,
+    }
+    pub fn ExportChunk(&self) -> WcEngineChunk {
+        WcEngineChunk {
+            Runtime: self.Session.ExportChunk(),
+            World: self.World.ExportChunk(),
+            Player: self.Player,
+            Guard: self.Guard,
         }
-
-        fn rename(node: &Node, new_name: &str) {
-            *node.name.borrow_mut() = new_name.to_string();
+    }
+    pub fn FromChunk(chunk: WcEngineChunk) -> Self {
+        let session = DwSession::FromChunk(BuildRegistry(), chunk.Runtime)
+            .expect("WyrmCoil session restore should succeed");
+        Self {
+            Session: session,
+            World: WcWorld::FromChunk(chunk.World),
+            Player: chunk.Player,
+            Guard: chunk.Guard,
         }
+    }
+}
 
-    bad_arc_mutex_by_default:
-      why:
-        Concurrency-oriented shared mutation appears before the design proves it is needed.
-      code: |
-        use std::sync::{Arc, Mutex};
-
-        struct AppState {
-            users: Arc<Mutex<Vec<String>>>,
-        }
-
-  async:
-    summary:
-      Async is not the default. Use it only where the repository truly needs it.
-
-    good_sync_by_default:
-      why:
-        A synchronous design is simpler and should remain synchronous when it is good enough.
-      code: |
-        use std::fs;
-        use std::path::Path;
-
-        fn load_config(path: &Path) -> Result<String, std::io::Error> {
-            fs::read_to_string(path)
-        }
-
-    good_narrow_async_boundary:
-      why:
-        Async is confined to a boundary that genuinely benefits from it.
-      code: |
-        async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String, reqwest::Error> {
-            let response = client.get(url).send().await?;
-            response.text().await
-        }
-
-    bad_async_spread:
-      why:
-        Async spreads through code that does not materially benefit from it.
-      code: |
-        async fn parse_name(text: &str) -> String {
-            text.trim().to_string()
-        }
-
-        async fn build_message(text: &str) -> String {
-            let name = parse_name(text).await;
-            format!("hello {name}")
-        }
-
-    bad_async_shared_state_pain:
-      why:
-        Async is mixed with shared mutable state in a way that multiplies complexity.
-      code: |
-        use std::sync::{Arc, Mutex};
-
-        struct AppState {
-            jobs: Arc<Mutex<Vec<String>>>,
-        }
-
-        async fn add_job(state: Arc<AppState>, name: String) {
-            state.jobs.lock().unwrap().push(name);
-        }
-
-  unsafe:
-    summary:
-      Unsafe must be rare, isolated, and justified.
-
-    good_safe_standard_code:
-      why:
-        The standard library already solves the problem safely and clearly.
-      code: |
-        fn first_byte(data: &[u8]) -> Option<u8> {
-            data.first().copied()
-        }
-
-    bad_unsafe_for_no_reason:
-      why:
-        Unsafe is introduced without a real boundary need or documented invariant.
-      code: |
-        fn first_byte(data: &[u8]) -> u8 {
-            unsafe { *data.get_unchecked(0) }
-        }
-
-review_hints:
-  summary:
-    Use these examples directionally, not mechanically.
-  rules:
-    - Prefer designs that own data cleanly over designs that preserve awkward borrowed shapes.
-    - Prefer short borrows, split steps, and named locals when they simplify compiler reasoning.
-    - Prefer small clones over large lifetime pretzels.
-    - Prefer concrete structs and enums over premature trait and generic abstraction.
-    - Prefer loops over iterator chains when clarity improves.
-    - Treat Rc<RefCell<T>>, Arc<Mutex<T>>, async spread, and unsafe as escalation points, not defaults.
-
-closing:
-  message:
-    These examples are anchors, not decoration.
-    The goal is not impressive Rust.
-    The goal is trustworthy Rust that the compiler can validate without turning the code into a pretzel factory.
+pub fn MoveRightMessage() -> DwMessage {
+    DwMessage {
+        Kind: WcMailKinds::MovePlayerRight,
+        Value: 1,
+    }
+}
+pub fn MoveLeftMessage() -> DwMessage {
+    DwMessage {
+        Kind: WcMailKinds::MovePlayerLeft,
+        Value: 1,
+    }
+}
+pub fn StopMessage() -> DwMessage {
+    DwMessage {
+        Kind: WcMailKinds::StopPlayer,
+        Value: 1,
+    }
+}
+pub fn AlertGuardMessage() -> DwMessage {
+    DwMessage {
+        Kind: WcMailKinds::AlertGuard,
+        Value: 1,
+    }
+}
+pub fn NudgeGuardMessage() -> DwMessage {
+    DwMessage {
+        Kind: WcMailKinds::NudgeGuardUp,
+        Value: 1,
+    }
+}

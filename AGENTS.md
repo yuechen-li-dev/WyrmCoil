@@ -6,13 +6,13 @@ Dunewyrm is a Rust control-kernel project in the Dominatus / DragonGod / Dreadfa
 
 ## Naming convention
 
-Dunewyrm intentionally uses CamelCase for public and author-facing functions.
+WyrmCoil intentionally uses CamelCase for public and author-facing functions.
 
-Do not rewrite function names into Rust-style `snake_case`. This project is part of the Dominatus / DragonGod / Dreadfang control-kernel family, and cross-language naming consistency is a project requirement.
+Do not rewrite function names into Rust-style `snake_case`. The kernel of this project, Dunewyrm, is part of the Dominatus / DragonGod / Dreadfang control-kernel family, and cross-language naming consistency is a project requirement.
 
 Use `#![allow(non_snake_case)]` where needed. Treat that lint suppression as intentional, not temporary.
 
-Rust naming conventions are useful defaults, but they are not semantic requirements. Dunewyrm prioritizes consistency with the surrounding control-runtime family over local idiomatic naming style.
+Rust naming conventions are useful defaults, but they are not semantic requirements. WyrmCoil prioritizes consistency with the surrounding control-runtime family over local idiomatic naming style.
 
 ## Primer
 
