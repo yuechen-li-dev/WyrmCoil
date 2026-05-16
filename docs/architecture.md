@@ -82,6 +82,26 @@ M21 remains intentionally narrow:
 
 This milestone is a resource descriptor scaffold only, preserving GPU-free testability in normal `cargo test` runs.
 
+## M30 optional `wgpu` render-pipeline creation probe
+
+M30 adds a narrow optional seam for real `wgpu::RenderPipeline` creation while keeping normal tests GPU-free:
+
+- `BuildWgpuRenderPipelineDescriptorPlan(...)` remains the deterministic metadata conversion boundary.
+- `ValidateWgpuShaderBytesForPipeline(...)` validates staged shader bytes/entry points without creating a device.
+- `CreateWgpuRenderPipelineFromModules(...)` creates `wgpu::PipelineLayout` (empty bind-group list in M30) and a real `wgpu::RenderPipeline` when the caller provides:
+  - a real `wgpu::Device`
+  - `WgpuRenderPipelineDescriptorPlan` metadata
+  - the source `RenderPipelineLayoutPlan`
+  - caller-owned compatible vertex/pixel `wgpu::ShaderModule` handles
+
+M30 intentionally avoids forcing SPIR-V shader-module creation policy into this pass. WyrmCoil currently carries DXC/SPIR-V bytes in metadata, but shader-module construction remains caller-owned so default `cargo test` runs stay GPU-free.
+
+M30 remains intentionally narrow:
+
+- no window/surface integration
+- no command encoder/render pass/draw submission
+- no material/bind-group/reflection rollout
+
 
 
 
