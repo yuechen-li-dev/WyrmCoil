@@ -450,6 +450,7 @@ pub struct WcEngineChunk {
     pub Player: WcEntityId,
     pub Guard: WcEntityId,
 }
+#[allow(dead_code)]
 pub struct WcTickResult {
     pub Runtime: DwTickResult,
     pub World: WcWorld,
@@ -523,6 +524,7 @@ pub fn MoveLeftMessage() -> DwMessage {
         Value: 1,
     }
 }
+#[allow(dead_code)]
 pub fn StopMessage() -> DwMessage {
     DwMessage {
         Kind: WcMailKinds::StopPlayer,
