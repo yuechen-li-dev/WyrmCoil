@@ -318,3 +318,131 @@ fn EngineChunkRestoreMatchesUninterruptedMultiEntityCommandExecution() {
         "restored runtime trace should match uninterrupted trace for multi-entity command-pressure continuation"
     );
 }
+
+#[test]
+fn EngineTimingPhasesAdvanceIndependently() {
+    let mut engine = wyrmcoil_sample_impl::Engine::New();
+    let initial_clock = engine.Clock();
+
+    let _runtime = engine.TickControl();
+    let after_control = engine.Clock();
+    assert_eq!(
+        after_control.ControlTick,
+        initial_clock.ControlTick + 1,
+        "control-only tick must advance control clock by exactly one"
+    );
+    assert_eq!(
+        after_control.SimulationTick, initial_clock.SimulationTick,
+        "control-only tick must not advance simulation clock"
+    );
+
+    engine.TickSimulation();
+    let after_simulation = engine.Clock();
+    assert_eq!(
+        after_simulation.SimulationTick,
+        initial_clock.SimulationTick + 1,
+        "simulation-only tick must advance simulation clock by exactly one"
+    );
+    assert_eq!(
+        after_simulation.ControlTick,
+        initial_clock.ControlTick + 1,
+        "simulation-only tick must not advance control clock"
+    );
+
+    let _snapshot = engine.RenderSnapshot();
+    let after_render = engine.Clock();
+    assert_eq!(
+        after_render.RenderFrame,
+        initial_clock.RenderFrame + 1,
+        "render snapshot call should record one observed render frame"
+    );
+    assert_eq!(
+        after_render.ControlTick, after_simulation.ControlTick,
+        "render snapshot must not mutate control clock"
+    );
+    assert_eq!(
+        after_render.SimulationTick, after_simulation.SimulationTick,
+        "render snapshot must not mutate simulation clock"
+    );
+}
+
+#[test]
+fn EngineTickConvenienceRunsControlThenSimulation() {
+    let mut convenience = wyrmcoil_sample_impl::Engine::New();
+    let mut explicit = wyrmcoil_sample_impl::Engine::New();
+
+    convenience.Tick();
+    explicit.TickControl();
+    explicit.TickSimulation();
+
+    assert_eq!(
+        convenience.Clock(),
+        explicit.Clock(),
+        "Tick convenience must be equivalent to one control phase followed by one simulation phase"
+    );
+    assert_eq!(
+        convenience.World, explicit.World,
+        "Tick convenience must preserve deterministic world evolution equivalent to explicit phase stepping"
+    );
+}
+
+#[test]
+fn WorldMutationHappensOnSimulationBoundary() {
+    let mut engine = wyrmcoil_sample_impl::Engine::New();
+    engine
+        .Session
+        .MailboxMut()
+        .Enqueue(wyrmcoil_sample_impl::MoveRightMessage());
+
+    let player_before = engine
+        .World
+        .Transforms
+        .Position(engine.Player)
+        .expect("player must exist before timing-boundary mutation test");
+
+    let _ = engine.TickControl();
+    let _ = engine.TickControl();
+    let player_after_control = engine
+        .World
+        .Transforms
+        .Position(engine.Player)
+        .expect("player must exist after control-only tick");
+    assert_eq!(
+        player_after_control, player_before,
+        "control-only ticks may set command lanes but must not integrate world positions"
+    );
+
+    engine.TickSimulation();
+    let player_after_simulation = engine
+        .World
+        .Transforms
+        .Position(engine.Player)
+        .expect("player must exist after simulation tick");
+    assert_eq!(
+        player_after_simulation,
+        wyrmcoil_sample_impl::Vec2 {
+            X: player_before.X + 1.0,
+            Y: player_before.Y
+        },
+        "simulation tick must integrate the velocity written by control-phase act dispatch"
+    );
+}
+
+#[test]
+fn EngineChunkRoundTripPreservesTimingCounters() {
+    let mut engine = wyrmcoil_sample_impl::Engine::New();
+    engine.TickControl();
+    engine.TickSimulation();
+    engine.TickSimulation();
+    let _ = engine.RenderSnapshot();
+
+    let before_chunk_clock = engine.Clock();
+    let chunk = engine.ExportChunk();
+    let restored = wyrmcoil_sample_impl::Engine::FromChunk(chunk);
+
+    assert_eq!(
+        restored.Clock(),
+        before_chunk_clock,
+        "engine chunk restore must preserve control, simulation, and render frame counters exactly"
+    );
+}

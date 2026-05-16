@@ -17,3 +17,23 @@ See also `docs/Dunewyrm/architecture.md` for the Dunewyrm runtime contract.
 
 
 Dunewyrm `Dw*` names remain intentionally prefixed to mark embedded-kernel APIs, while Engine-layer product names live unprefixed inside the WyrmCoil namespace.
+
+
+## M3 timing contract (agentic engine boundary)
+
+WyrmCoil is **not** a render-frame-driven engine loop.
+
+The M3 contract is explicit:
+
+- **Control ticks decide behavior.**
+- **Simulation ticks update dense stores.**
+- **Render frames observe snapshots.**
+
+Current `Engine` prototype phase boundaries:
+
+- `TickControl()` refreshes selection board state, ticks the Dunewyrm session, and dispatches emitted acts into world command lanes.
+- `TickSimulation()` integrates dense world transforms.
+- `RenderSnapshot()` returns an immutable world snapshot clone and advances only the render-frame counter.
+- `Tick()` remains a convenience wrapper for one control tick followed by one simulation tick.
+
+This pass establishes explicit timing domains and counters (`ControlTick`, `SimulationTick`, `RenderFrame`) but intentionally does **not** add a scheduler, wall-clock cadence model, renderer backend, physics backend, or ECS framework.
