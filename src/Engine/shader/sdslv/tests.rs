@@ -465,8 +465,8 @@ fn EmitHlslFlowDeclarationReturnsDiagnostic() {
     assert!(
         diagnostics.iter().any(|d| d
             .Message
-            .contains("flow emission is not implemented in SDSL-V M9")),
-        "flow modules should fail emission clearly in M8"
+            .contains("flow emission is not implemented in SDSL-V M10")),
+        "flow modules should fail emission clearly in M10"
     );
 }
 
@@ -967,6 +967,94 @@ flow F() -> i32 {
 }
 
 #[test]
+fn ValidationFlowBoardReadsResolvesKnownFields() {
+    let src = r#"
+flow ShadowVariant(useSoft: bool) -> i32 {
+    board {
+        HasSelection: bool;
+        SelectedMode: i32;
+    }
+    state Select {
+        when {
+            case board.HasSelection -> goto Selected
+            case board.SelectedMode == 2 -> return board.SelectedMode
+            else -> return Choose(board.SelectedMode)
+        }
+    }
+    state Selected { return board.SelectedMode; }
+}
+"#;
+    assert!(
+        ValidateSource(src).is_ok(),
+        "known board reads in case/return expressions should validate"
+    );
+}
+
+#[test]
+fn ValidationFlowBoardReadsRejectUnknownAndMissingBoard() {
+    let unknown_case = r#"
+flow ShadowVariant() -> i32 {
+    board {
+        HasSelection: bool;
+    }
+    state Select {
+        when {
+            case board.SelectedMode == 2 -> goto Done
+            else -> goto Done
+        }
+    }
+    state Done { return 1; }
+}
+"#;
+    assert!(
+        ValidateSource(unknown_case).unwrap_err().iter().any(|d| d
+            .Message
+            .contains("unknown board field 'SelectedMode' in flow 'ShadowVariant'")),
+        "unknown board field in guard condition should be rejected"
+    );
+
+    let unknown_return = r#"
+flow F() -> i32 {
+    board { Known: i32; }
+    state A { return board.Missing; }
+}
+"#;
+    assert!(
+        ValidateSource(unknown_return).unwrap_err().iter().any(|d| d
+            .Message
+            .contains("unknown board field 'Missing' in flow 'F'")),
+        "unknown board field in return expression should be rejected"
+    );
+
+    let missing_board = r#"
+flow F() -> i32 {
+    state A {
+        when {
+            case board.Mode == 1 -> return board.Mode
+            else -> return 0
+        }
+    }
+}
+"#;
+    assert!(
+        ValidateSource(missing_board).unwrap_err().iter().any(|d| d
+            .Message
+            .contains("flow 'F' does not declare a board, but expression references board.Mode")),
+        "board reads without board declaration should be rejected"
+    );
+}
+
+#[test]
+fn ValidationFlowRejectsReservedBoardParameterName() {
+    let src = r#"
+flow F(board: i32) -> i32 {
+    state A { return 1; }
+}
+"#;
+    assert!(ParseSource(src).is_err(), "flow parameter name 'board' should be rejected");
+}
+
+#[test]
 fn EmitHlslFlowBoardStillNotImplemented() {
     let module = ParseSource("flow F() -> i32 { board { X: i32; } state A { return 1; } }")
         .expect("flow board source should parse");
@@ -974,7 +1062,7 @@ fn EmitHlslFlowBoardStillNotImplemented() {
     assert!(
         diagnostics.iter().any(|d| d
             .Message
-            .contains("flow emission is not implemented in SDSL-V M9")),
+            .contains("flow emission is not implemented in SDSL-V M10")),
         "flow+board emission should remain unsupported"
     );
 }

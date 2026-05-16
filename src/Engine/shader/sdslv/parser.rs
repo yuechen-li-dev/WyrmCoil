@@ -860,6 +860,10 @@ impl<'a> Parser<'a> {
                     Some(SdslvExpression::Identifier(value))
                 }
             }
+            SdslvTokenKind::KeywordBoard => {
+                self.I += 1;
+                Some(SdslvExpression::Identifier("board".to_string()))
+            }
             SdslvTokenKind::IntegerLiteral(value) => {
                 let out = value.clone();
                 self.I += 1;
