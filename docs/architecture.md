@@ -91,6 +91,24 @@ This milestone is a resource descriptor scaffold only, preserving GPU-free testa
 
 
 
+
+## M41 optional window render-loop skeleton
+
+M41 adds an opt-in window-loop skeleton example (`examples/window_loop_skeleton.rs`) and keeps default tests GPU/window-free:
+
+- The example creates a `winit` window, `wgpu::Instance`, surface, adapter, device, and queue.
+- It reuses M40 surface planning seams (`BuildWgpuSurfaceCapabilitiesInfo`, `BuildWgpuSurfaceConfigPlan`, `BuildWgpuSurfaceConfiguration`) for initial configure and non-zero resize reconfigure.
+- Keyboard events route through normalized M7 input helpers (`QueueWinitPhysicalKey(...)`), which enqueue engine input without direct world mutation.
+- Redraw handling calls explicit engine phases in order (`TickControl()`, `TickSimulation()`, `RenderSnapshot()`) so render frames observe snapshots rather than owning simulation timing.
+- The render path is intentionally minimal clear-only acquire/submit/present; no visible primitive/material/render-graph work is introduced in M41.
+
+M41 intentionally remains narrow:
+
+- no full app framework/scheduler
+- no hard GPU/window requirement in normal `cargo test`
+- no material/bind-group/reflection/render-graph rollout
+- no final visible primitive pass (targeted for a later milestone)
+
 ## M40 `winit` + `wgpu` surface configuration seam
 
 M40 adds a narrow backend-specific `wgpu` surface configuration seam without introducing a render loop or on-surface drawing:
