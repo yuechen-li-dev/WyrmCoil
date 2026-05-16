@@ -517,3 +517,36 @@ Still out of scope in M20:
 - no `wgpu::ShaderModule` / `wgpu::PipelineLayout` / `wgpu::RenderPipeline` creation
 - no reflection-driven input-layout extraction
 - no bind-group/material/asset system integration
+
+
+## 20) M21 `wgpu` resource creation probe (implemented)
+
+M21 adds a GPU-resource-facing descriptor conversion seam while preserving GPU-free test defaults:
+
+```text
+RenderPipelineLayoutPlan
+→ BuildWgpuRenderPipelineDescriptorPlan(...)
+→ WgpuRenderPipelineDescriptorPlan
+```
+
+APIs in `Engine::render`:
+- `WgpuVertexAttributeDesc`
+- `WgpuVertexBufferLayoutDesc`
+- `WgpuRenderPipelineDescriptorPlan`
+- `WgpuPipelineResourceError`
+- `MapVertexFormatToWgpu(...)`
+- `MapVertexStepModeToWgpu(...)`
+- `MapColorTargetFormatToWgpu(...)`
+- `MapDepthFormatToWgpu(...)`
+- `BuildWgpuRenderPipelineDescriptorPlan(...)`
+
+Behavior notes:
+- conversion is deterministic and plain-data only
+- output owns converted vertex-buffer and attribute metadata
+- normal tests do not create adapters/devices/surfaces/windows
+
+Still out of scope in M21:
+- no draw pass or command submission
+- no `wgpu::ShaderModule` creation helper
+- no `wgpu::RenderPipeline` creation
+- no reflection-driven bind-layout/material pipeline
