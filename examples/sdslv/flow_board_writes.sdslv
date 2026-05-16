@@ -1,0 +1,24 @@
+namespace WyrmCoil.Examples;
+
+flow SelectShadow(useSoft: bool) -> i32 {
+    board {
+        HasSelection: bool;
+        SelectedMode: i32;
+        BlendWeight: f32;
+    }
+
+    state Select {
+        board.HasSelection = useSoft;
+        board.SelectedMode = 2;
+        board.BlendWeight = 0.75;
+
+        when {
+            case board.HasSelection -> goto Done
+            else -> goto Done
+        }
+    }
+
+    state Done {
+        return board.SelectedMode;
+    }
+}

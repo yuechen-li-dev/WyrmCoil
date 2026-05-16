@@ -263,7 +263,6 @@ Current validation includes:
 Current non-goals (still true):
 - no flow lowering/emission to HLSL
 - no flow execution/runtime state machine
-- no board writes/mutation syntax
 - no utility `when`
 - no `suspend`, `remember`, `resume`
 
@@ -280,7 +279,7 @@ Current non-goals (still true):
 | `.sdslvtest` `[Fact]` syntax | Implemented |
 | `.sdslvtest` execution | Implemented (scalar subset runner) |
 | Shader flows | Parse/validate only |
-| Flow boards + board reads | Parse/validate only |
+| Flow boards + board reads/writes | Parse/validate only (no lowering/execution) |
 | Flow lowering | Not implemented |
 | DXC/SPIR-V | Not implemented |
 | Renderer shader integration | Not implemented |
@@ -294,7 +293,6 @@ Known future work items:
 - fuller expression/type checking
 - shader-body control flow (`if`/loops) expansion as scoped milestones
 - flow lowering
-- flow board writes
 - utility `when`
 - `[Theory]` / `[Case]`
 - richer `.sdslvtest` runner surface
@@ -304,3 +302,20 @@ Known future work items:
 - richer enum payload/match model
 
 No timeline commitments are implied by this list.
+
+
+### M12 flow update
+
+Flows now support board writes inside flow states:
+- `board.Field = expr;`
+
+Current flow validation in M12 includes:
+- board field existence checks for reads and writes
+- board write type checks
+- bool guard checks for known `when case` condition types
+- flow return type checks (direct state return and `when` return actions)
+
+Still out of scope in M12:
+- flow lowering/execution
+- definite assignment analysis
+- utility/suspend/remember/resume

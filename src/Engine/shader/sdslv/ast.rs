@@ -86,6 +86,11 @@ pub enum SdslvFlowStatement {
     When(SdslvFlowWhen),
     Goto(SdslvPath),
     Return(SdslvExpression),
+    BoardAssign {
+        Field: String,
+        Value: SdslvExpression,
+        Span: SdslvSpan,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

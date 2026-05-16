@@ -639,4 +639,27 @@ Current limits in M10:
 - full flow expression typechecking remains future work.
 
 Emitter behavior in M10:
-- HLSL emission returns a diagnostic when a module contains flow declarations: `flow emission is not implemented in SDSL-V M10`.
+- HLSL emission returns a diagnostic when a module contains flow declarations: `flow emission is not implemented in SDSL-V M12`.
+
+
+## SDSL-V M12 flow board writes and bounded flow type validation
+
+M12 extends flow parse/validation-only semantics with controlled flow-local board writes and bounded type checks.
+
+Supported new state statement syntax:
+- `board.Field = expr;` (target must be exactly `board.<field>`).
+
+M12 flow validation adds:
+- board-write target validation (`unknown board field ...`, missing-board write diagnostics).
+- board-write RHS type compatibility checks against declared board field types.
+- guard-condition bool checks for known condition types (`case expr -> ...` requires `bool` when known).
+- flow return-expression type checks for direct `return` and `when ... -> return ...` actions.
+- flow parameters are available in flow expression type resolution.
+
+M12 intentionally still does not implement:
+- flow lowering or execution
+- definite assignment / reachability analysis
+- utility `when`, `suspend`, `remember`, `resume`
+
+Emitter behavior remains parse/validate-only for flows:
+- modules with flows return `flow emission is not implemented in SDSL-V M12`.
