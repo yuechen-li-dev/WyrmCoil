@@ -88,6 +88,25 @@ This milestone is a resource descriptor scaffold only, preserving GPU-free testa
 
 
 
+
+## M36 render backend boundary (`wgpu` adapter clarification)
+
+M36 formalizes the render backend seam without adding new rendering behavior:
+
+- WyrmCoil render core contracts remain backend-neutral (snapshot extraction, upload planning/execution policy metadata, command planning, and headless assembly planning).
+- `wgpu` is explicitly positioned as the first concrete backend adapter path, not the render architecture itself.
+- Backend-facing adapter exports are grouped under `Engine::render::backend::wgpu`, while compatibility re-exports are preserved from `Engine::render` to avoid unnecessary call-site churn.
+- A docs-only `Engine::render::backend::vulkan` placeholder marks the future native Vulkan backend seam with no implementation in M36.
+
+WyrmCoil uses wgpu to bootstrap the golden path, but wgpu is a backend adapter, not the engine architecture.
+
+M36 intentionally remains narrow:
+
+- no Vulkan implementation or dependencies
+- no window/surface/swapchain work
+- no material/bind-group/reflection/render-graph expansion
+- no draw-path feature expansion
+
 ## M35 shader source strategy policy (implemented)
 
 M35 adds an explicit shader source policy-selection seam without creating shader modules or invoking compilation:
