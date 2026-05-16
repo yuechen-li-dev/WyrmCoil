@@ -2,15 +2,15 @@
 
 WyrmCoil is a deterministic Rust engine-core prototype with an embedded Dunewyrm control kernel.
 
-**Current status:** M0 scaffold normalization.
+**Current status:** M1 Dunewyrm kernel reintegration.
 
 **Architecture slogan:** Frames decide. Stores iterate. Acts connect. Mailbox reports back. Chunks persist both.
 
 ## Module layout
 
-- `src/lib.rs`: top-level crate identity and M0 scaffold entrypoints.
-- `src/Dunewyrm/`: preserved Dunewyrm kernel/runtime source from the reorg snapshot.
-- `src/Engine/`: preserved WyrmCoil prototype engine layer source from the reorg snapshot.
+- `src/lib.rs`: top-level crate identity and crate exports for Dunewyrm + Engine boundary.
+- `src/Dunewyrm/`: reintegrated Dunewyrm deterministic kernel modules (IDs, phases, registry, session, board, traces, chunks, acts).
+- `src/Engine/`: WyrmCoil engine-layer placeholder module for later milestones.
 - `docs/architecture.md`: architecture boundary and status document.
 - `primer/`: repository-authoritative coding and Rust-shape rules.
 

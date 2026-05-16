@@ -1,4 +1,4 @@
-# WyrmCoil Architecture (M0)
+# WyrmCoil Architecture (M1)
 
 ## Thesis
 
@@ -36,7 +36,7 @@ Owns engine-side composition mechanics:
 
 ### 3) Future backend layers (not implemented yet)
 
-Planned later, intentionally absent in M0:
+Planned later, intentionally absent in M1:
 
 - renderer
 - input backend
@@ -47,14 +47,15 @@ Planned later, intentionally absent in M0:
 
 ## Current implementation status
 
-M0 normalizes project identity and scaffold:
+M1 keeps M0 identity normalization and reintegrates the Dunewyrm kernel module surface:
 
 - repository identity is WyrmCoil at the crate/documentation level
-- Dunewyrm and Engine source trees are preserved as explicit subtrees
-- architecture/docs are aligned to engine-core-first intent
-- compile/test baseline is restored for the scaffold crate while deeper runtime reintegration is tracked as follow-up work
+- Dunewyrm kernel modules are active in the crate module graph and re-exported for author-facing use
+- Engine remains a placeholder boundary for later engine-layer composition work
+- architecture/docs remain aligned to engine-core-first intent
+- kernel behavior validation runs through restored Dunewyrm tests under `src/Dunewyrm/`
 
-## What M0 does not do
+## What M1 does not do
 
 - introduce new engine/runtime features
 - add renderer/physics/shader stacks
