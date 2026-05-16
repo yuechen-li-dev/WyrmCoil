@@ -2,7 +2,7 @@
 
 ## Project identity
 
-Dunewyrm is a Rust control-kernel project in the Dominatus / DragonGod / Dreadfang family.
+WyrmCoil is a 3D engine based on Dunewyrm, a Rust control-kernel project in the Dominatus / DragonGod / Dreadfang family.
 
 ## Naming convention
 
