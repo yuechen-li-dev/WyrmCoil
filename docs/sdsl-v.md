@@ -522,9 +522,10 @@ This M0 document intentionally narrows implementation risk:
 Current M1 parser behavior parses declaration structure only and does not semantically parse function bodies. Function and stage bodies are accepted as balanced brace blocks and preserved as raw body spans/text for future milestones.
 
 
-## SDSL-V M7a test-file syntax seed
+## SDSL-V M7a/M7b test-file syntax and minimal runner
 
-M7a introduces parse/validation support for dedicated test files with extension `.sdslvtest`.
+M7a introduced parse/validation support for dedicated test files with extension `.sdslvtest`.
+M7b adds a minimal CPU-side test runner (`RunTestSource`) for executing `[Fact]` test bodies over a bounded scalar subset.
 
 Current test syntax:
 - top-level `namespace` and `use`
@@ -544,6 +545,25 @@ Validation rules in M7a:
 - assertion custom message is mandatory and must be a string literal
 - unknown `Assert.*` methods are rejected
 - non-assert expression statements are rejected
+
+
+M7b runner execution subset:
+- statements: `let` (with initializer or scalar default), assignment to local identifiers, assert expression statements, empty statements
+- expressions: scalar literals, local identifiers, `+ - * /`, unary `-`, parentheses, comparisons (`== != < <= > >=`)
+- built-in calls: `abs`, `min`, `max`, `clamp`, `saturate`
+- assertions executed: `Assert.True`, `Assert.Equals`, `Assert.Near`
+
+M7b result surface:
+- structured run result with overall pass/fail, pre-execution diagnostics, and per-test case failures
+- parse/validation diagnostics are returned without panics and tests are not executed when diagnostics exist
+- assertion failures include the custom message text and are collected within a test (continue-on-assert-fail)
+
+M7b intentional limits:
+- no shader function execution
+- no GPU execution
+- no DXC/SPIR-V integration
+- no file-system test discovery
+- unsupported statements/calls fail the test case with explicit runtime failure messages
 
 Intentional non-goals in M7a:
 - no test execution/runtime

@@ -526,7 +526,35 @@ impl<'a> Parser<'a> {
         )
     }
     fn parse_expression(&mut self) -> Option<SdslvExpression> {
-        self.parse_additive()
+        self.parse_comparison()
+    }
+    fn parse_comparison(&mut self) -> Option<SdslvExpression> {
+        let mut left = self.parse_additive()?;
+        loop {
+            let op = if self.match_kw(SdslvTokenKind::DoubleEquals) {
+                Some(SdslvBinaryOperator::Equal)
+            } else if self.match_kw(SdslvTokenKind::BangEquals) {
+                Some(SdslvBinaryOperator::NotEqual)
+            } else if self.match_kw(SdslvTokenKind::LeftAngleEquals) {
+                Some(SdslvBinaryOperator::LessEqual)
+            } else if self.match_kw(SdslvTokenKind::RightAngleEquals) {
+                Some(SdslvBinaryOperator::GreaterEqual)
+            } else if self.match_kw(SdslvTokenKind::LeftAngle) {
+                Some(SdslvBinaryOperator::Less)
+            } else if self.match_kw(SdslvTokenKind::RightAngle) {
+                Some(SdslvBinaryOperator::Greater)
+            } else {
+                None
+            };
+            let Some(operator) = op else { break };
+            let right = self.parse_additive()?;
+            left = SdslvExpression::Binary {
+                Left: Box::new(left),
+                Operator: operator,
+                Right: Box::new(right),
+            };
+        }
+        Some(left)
     }
     fn parse_additive(&mut self) -> Option<SdslvExpression> {
         let mut left = self.parse_multiplicative()?;

@@ -341,10 +341,16 @@ impl<'a> HlslEmitter<'a> {
                 Right,
             } => {
                 let (op, prec) = match Operator {
-                    SdslvBinaryOperator::Add => ("+", 1),
-                    SdslvBinaryOperator::Subtract => ("-", 1),
-                    SdslvBinaryOperator::Multiply => ("*", 2),
-                    SdslvBinaryOperator::Divide => ("/", 2),
+                    SdslvBinaryOperator::Add => ("+", 2),
+                    SdslvBinaryOperator::Subtract => ("-", 2),
+                    SdslvBinaryOperator::Multiply => ("*", 3),
+                    SdslvBinaryOperator::Divide => ("/", 3),
+                    SdslvBinaryOperator::Equal => ("==", 1),
+                    SdslvBinaryOperator::NotEqual => ("!=", 1),
+                    SdslvBinaryOperator::Less => ("<", 1),
+                    SdslvBinaryOperator::LessEqual => ("<=", 1),
+                    SdslvBinaryOperator::Greater => (">", 1),
+                    SdslvBinaryOperator::GreaterEqual => (">=", 1),
                 };
                 let text = format!(
                     "{} {} {}",

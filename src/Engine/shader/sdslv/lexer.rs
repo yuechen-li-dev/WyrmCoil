@@ -106,6 +106,30 @@ impl<'a> Lexer<'a> {
                 self.push(SdslvTokenKind::StringLiteral(text), st);
                 continue;
             }
+            if c == '=' && self.peek(1) == Some('=') {
+                self.bump('=');
+                self.bump('=');
+                self.push(SdslvTokenKind::DoubleEquals, st);
+                continue;
+            }
+            if c == '!' && self.peek(1) == Some('=') {
+                self.bump('!');
+                self.bump('=');
+                self.push(SdslvTokenKind::BangEquals, st);
+                continue;
+            }
+            if c == '<' && self.peek(1) == Some('=') {
+                self.bump('<');
+                self.bump('=');
+                self.push(SdslvTokenKind::LeftAngleEquals, st);
+                continue;
+            }
+            if c == '>' && self.peek(1) == Some('=') {
+                self.bump('>');
+                self.bump('=');
+                self.push(SdslvTokenKind::RightAngleEquals, st);
+                continue;
+            }
             if c == '-' && self.peek(1) == Some('>') {
                 self.bump('-');
                 self.bump('>');
