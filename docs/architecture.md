@@ -39,6 +39,28 @@ Current `Engine` prototype phase boundaries:
 This pass establishes explicit timing domains and counters (`ControlTick`, `SimulationTick`, `RenderFrame`) but intentionally does **not** add a scheduler, wall-clock cadence model, renderer backend, physics backend, or ECS framework.
 
 
+## M5 render snapshot / extraction contract
+
+M5 strengthens the render boundary while still keeping rendering backends out of scope.
+
+- `World` now contains an explicit dense `Renderables` lane (`SpriteIds`, `Visible`) aligned to entity indices.
+- `RenderSnapshot()` now returns plain snapshot data (`Frame`, `Items`) instead of exposing mutable world stores.
+- Snapshot extraction includes only alive + visible entities, reads transform positions, and emits deterministic entity-index order.
+- `RenderSnapshot()` advances only `RenderFrame`; it does not advance `ControlTick` or `SimulationTick`.
+- Snapshot extraction is observation-only and does not mutate world data.
+
+Timing slogan remains load-bearing:
+
+**Control ticks decide behavior. Simulation ticks update dense stores. Render frames observe snapshots.**
+
+Intentional non-goals remain unchanged for this milestone:
+
+- No `wgpu` integration.
+- No shader language/compiler pipeline.
+- No windowing/event-loop backend.
+- No asset/texture pipeline.
+
+
 ## M4 input boundary contract (mailbox bridge)
 
 M4 adds an engine-owned normalized input boundary without adding any platform backend dependency.

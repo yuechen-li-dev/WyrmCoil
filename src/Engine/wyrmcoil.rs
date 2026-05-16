@@ -60,6 +60,71 @@ pub struct HealthStoreChunk {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct RenderableStore {
+    pub SpriteIds: Vec<u32>,
+    pub Visible: Vec<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderableStoreChunk {
+    pub SpriteIds: Vec<u32>,
+    pub Visible: Vec<bool>,
+}
+
+impl RenderableStore {
+    pub fn New() -> Self {
+        Self {
+            SpriteIds: Vec::new(),
+            Visible: Vec::new(),
+        }
+    }
+
+    pub fn Spawn(&mut self, sprite_id: u32) {
+        self.SpriteIds.push(sprite_id);
+        self.Visible.push(true);
+    }
+
+    pub fn SetSprite(&mut self, id: EntityId, sprite_id: u32) {
+        if id.0 < self.SpriteIds.len() {
+            self.SpriteIds[id.0] = sprite_id;
+        }
+    }
+
+    pub fn SetVisible(&mut self, id: EntityId, visible: bool) {
+        if id.0 < self.Visible.len() {
+            self.Visible[id.0] = visible;
+        }
+    }
+
+    pub fn ExportChunk(&self) -> RenderableStoreChunk {
+        RenderableStoreChunk {
+            SpriteIds: self.SpriteIds.clone(),
+            Visible: self.Visible.clone(),
+        }
+    }
+
+    pub fn FromChunk(chunk: RenderableStoreChunk) -> Self {
+        Self {
+            SpriteIds: chunk.SpriteIds,
+            Visible: chunk.Visible,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderItem {
+    pub Entity: EntityId,
+    pub Position: Vec2,
+    pub SpriteId: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderSnapshot {
+    pub Frame: u64,
+    pub Items: Vec<RenderItem>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct TransformStoreChunk {
     pub Positions: Vec<Vec2>,
     pub Velocities: Vec<Vec2>,
@@ -125,23 +190,49 @@ impl TransformStore {
 pub struct World {
     pub Transforms: TransformStore,
     pub Health: HealthStore,
+    pub Renderables: RenderableStore,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorldChunk {
     pub Transforms: TransformStoreChunk,
     pub Health: HealthStoreChunk,
+    pub Renderables: RenderableStoreChunk,
 }
 impl World {
     pub fn New() -> Self {
         Self {
             Transforms: TransformStore::New(),
             Health: HealthStore::New(),
+            Renderables: RenderableStore::New(),
         }
     }
     pub fn SpawnEntity(&mut self, position: Vec2, health: f32) -> EntityId {
         let entity = self.Transforms.Spawn(position);
         self.Health.Spawn(health);
+        self.Renderables.Spawn(0);
         entity
+    }
+
+    pub fn ExtractRenderItems(&self) -> Vec<RenderItem> {
+        let mut items = Vec::new();
+        let count = self
+            .Transforms
+            .Positions
+            .len()
+            .min(self.Transforms.Alive.len())
+            .min(self.Renderables.SpriteIds.len())
+            .min(self.Renderables.Visible.len());
+        for index in 0..count {
+            if !self.Transforms.Alive[index] || !self.Renderables.Visible[index] {
+                continue;
+            }
+            items.push(RenderItem {
+                Entity: EntityId(index),
+                Position: self.Transforms.Positions[index],
+                SpriteId: self.Renderables.SpriteIds[index],
+            });
+        }
+        items
     }
     pub fn FindLowestHealthAliveEntity(&self) -> Option<EntityId> {
         let mut selected: Option<EntityId> = None;
@@ -190,12 +281,14 @@ impl World {
         WorldChunk {
             Transforms: self.Transforms.ExportChunk(),
             Health: self.Health.ExportChunk(),
+            Renderables: self.Renderables.ExportChunk(),
         }
     }
     pub fn FromChunk(chunk: WorldChunk) -> Self {
         Self {
             Transforms: TransformStore::FromChunk(chunk.Transforms),
             Health: HealthStore::FromChunk(chunk.Health),
+            Renderables: RenderableStore::FromChunk(chunk.Renderables),
         }
     }
 }
@@ -549,9 +642,12 @@ impl Engine {
         self.Clock.SimulationTick += 1;
     }
 
-    pub fn RenderSnapshot(&mut self) -> World {
+    pub fn RenderSnapshot(&mut self) -> RenderSnapshot {
         self.Clock.RenderFrame += 1;
-        self.World.clone()
+        RenderSnapshot {
+            Frame: self.Clock.RenderFrame,
+            Items: self.World.ExtractRenderItems(),
+        }
     }
 
     pub fn Tick(&mut self) -> TickResult {
