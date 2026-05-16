@@ -130,6 +130,7 @@ pub fn SelectHighestUtilityTarget<T: Copy>(scored: &[(T, f32)]) -> Option<(T, f3
 pub enum DwControl {
     Continue { Pc: u32 },
     WaitTicks { Ticks: u32, Pc: u32 },
+    Steady,
     Push { Target: DwFrameId, ResumePc: u32 },
     Pop,
     Replace { Target: DwFrameId },
@@ -256,6 +257,7 @@ mod tests {
 pub enum DwControlSummary {
     Continue,
     WaitTicks { Ticks: u32 },
+    Steady,
     Push,
     Pop,
     Replace,
@@ -420,6 +422,10 @@ pub mod Dw {
 
     pub fn Stay() -> DwControl {
         DwControl::Stay
+    }
+
+    pub fn Steady() -> DwControl {
+        DwControl::Steady
     }
 
     pub fn Complete() -> DwControl {

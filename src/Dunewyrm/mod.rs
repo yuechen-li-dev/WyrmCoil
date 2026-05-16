@@ -1042,6 +1042,100 @@ mod tests {
             "formatted trace should contain deterministic domain:local frame IDs"
         );
     }
+
+    #[test]
+    fn SteadyTickKeepsRootFrameAliveAndQuiescent() {
+        #[derive(Clone, Copy)]
+        enum Phase {
+            Observe,
+        }
+        impl DwPhase for Phase {
+            fn ToPc(self) -> u32 {
+                0
+            }
+            fn FromPc(pc: u32) -> Option<Self> {
+                if pc == 0 { Some(Phase::Observe) } else { None }
+            }
+        }
+        let root = DwFrameId {
+            Domain: 50,
+            Local: 1,
+        };
+        fn RootF(_: &mut DwFrameCtx) -> DwControl {
+            Dw::Steady()
+        }
+        let mut reg = DwFrameRegistry::New();
+        reg.Register(DwFrameDef {
+            Id: root,
+            Step: RootF,
+            DebugName: "SteadyRoot",
+        })
+        .unwrap();
+        let mut session = DwSession::New(reg, root, Phase::Observe.ToPc()).unwrap();
+        let first = session.Tick().unwrap();
+        assert_eq!(
+            first.Status,
+            DwRunStatus::Steady,
+            "steady control should report steady run status"
+        );
+        assert_eq!(
+            first.StackDepth, 1,
+            "steady should keep root frame on stack"
+        );
+        assert_eq!(
+            first.Frame,
+            Some(root),
+            "steady should keep the same active frame"
+        );
+        assert_eq!(first.Pc, Some(0), "steady should keep phase pc unchanged");
+        assert_eq!(
+            first.Control,
+            Some(DwControlSummary::Steady),
+            "steady control summary should be recorded"
+        );
+        assert_eq!(first.FailureReason, None, "steady should not mark failure");
+    }
+
+    #[test]
+    fn SteadyRepeatsAndRunUntilBlockedStopsAtSteady() {
+        let root = DwFrameId {
+            Domain: 50,
+            Local: 2,
+        };
+        fn RootF(_: &mut DwFrameCtx) -> DwControl {
+            Dw::Steady()
+        }
+        let mut reg = DwFrameRegistry::New();
+        reg.Register(DwFrameDef {
+            Id: root,
+            Step: RootF,
+            DebugName: "SteadyLoop",
+        })
+        .unwrap();
+        let mut session = DwSession::New(reg, root, 0).unwrap();
+        let first = session.Tick().unwrap();
+        let second = session.Tick().unwrap();
+        assert_eq!(
+            first.Status,
+            DwRunStatus::Steady,
+            "first steady tick should report steady status"
+        );
+        assert_eq!(
+            second.Status,
+            DwRunStatus::Steady,
+            "second steady tick should also report steady status"
+        );
+        assert_eq!(
+            second.Tick, 1,
+            "tick index should advance deterministically across repeated steady ticks"
+        );
+        let blocked = session.RunUntilBlocked(3).unwrap();
+        assert_eq!(
+            blocked.Status,
+            DwRunStatus::Steady,
+            "run-until-blocked should stop on steady status"
+        );
+    }
 }
 
 #[cfg(test)]

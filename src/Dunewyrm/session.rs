@@ -39,6 +39,7 @@ pub struct DwDecisionTraceEntry {
 pub enum DwRunStatus {
     Running,
     Waiting,
+    Steady,
     Completed,
     Failed,
 }
@@ -418,6 +419,9 @@ impl DwSession {
         {
             self.BuildResult(tick_now, None, decisions, matured_acts)
         } else {
+            if self.Status == DwRunStatus::Steady {
+                self.Status = DwRunStatus::Running;
+            }
             self.Mailbox.BeginTick();
             self.Board.ClearDirty();
             self.Board.TickTtl();
@@ -474,6 +478,20 @@ impl DwSession {
         self.Trace.push(Self::TraceFromResult(&result));
         self.Tick += 1;
         Ok(result)
+    }
+
+    pub fn RunUntilBlocked(&mut self, max_ticks: u32) -> Result<DwTickResult, &'static str> {
+        if max_ticks == 0 {
+            return Err("max_ticks must be greater than zero");
+        }
+        let mut last = self.Tick()?;
+        for _ in 1..max_ticks {
+            if Self::IsBlockedStatus(last.Status) {
+                return Ok(last);
+            }
+            last = self.Tick()?;
+        }
+        Ok(last)
     }
     fn TraceFromResult(result: &DwTickResult) -> DwTickTraceEntry {
         DwTickTraceEntry {
@@ -567,6 +585,9 @@ impl DwSession {
                     self.Status = DwRunStatus::Waiting;
                 }
             }
+            DwControl::Steady => {
+                self.Status = DwRunStatus::Steady;
+            }
             DwControl::Push { Target, ResumePc } => {
                 if self.Registry.Find(Target).is_none() {
                     self.FailNow("push target frame not found");
@@ -657,6 +678,7 @@ impl DwSession {
         match control {
             DwControl::Continue { .. } => DwControlSummary::Continue,
             DwControl::WaitTicks { Ticks, .. } => DwControlSummary::WaitTicks { Ticks },
+            DwControl::Steady => DwControlSummary::Steady,
             DwControl::Push { .. } => DwControlSummary::Push,
             DwControl::Pop => DwControlSummary::Pop,
             DwControl::Replace { .. } => DwControlSummary::Replace,
@@ -664,5 +686,15 @@ impl DwSession {
             DwControl::Complete => DwControlSummary::Complete,
             DwControl::Fail { .. } => DwControlSummary::Fail,
         }
+    }
+
+    fn IsBlockedStatus(status: DwRunStatus) -> bool {
+        matches!(
+            status,
+            DwRunStatus::Waiting
+                | DwRunStatus::Steady
+                | DwRunStatus::Completed
+                | DwRunStatus::Failed
+        )
     }
 }

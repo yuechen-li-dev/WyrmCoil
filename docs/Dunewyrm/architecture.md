@@ -128,3 +128,11 @@ Dunewyrm is a Rust-native sibling of DragonGod, not a line-by-line port.
 - `ttl_ticks == 0` performs immediate expiry via the same value write path.
 - TTL metadata persists in board/runtime chunks and resumes deterministically across export/restore boundaries.
 - Diagnostics helpers include `Snapshot()` and `TtlSnapshot()` with deterministic slot ordering.
+
+## M50 steady control / root quiescence
+
+- `DwControl::Steady` / `Dw::Steady()` is a first-class quiescent-alive control result.
+- A `Steady` tick keeps the current frame and PC active on stack, marks tick status as `Steady`, and is non-terminal.
+- `Steady` is not a timer wait and does not set wait counters.
+- `RunUntilBlocked`-style loops should stop on `Steady` as a blocked/quiescent boundary.
+- This milestone does not add root keep-alive policy overlays; it only adds runtime control semantics.
