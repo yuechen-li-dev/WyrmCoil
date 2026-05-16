@@ -175,6 +175,7 @@ impl<'a> Lexer<'a> {
             "use" => SdslvTokenKind::KeywordUse,
             "type" => SdslvTokenKind::KeywordType,
             "stream" => SdslvTokenKind::KeywordStream,
+            "record" => SdslvTokenKind::KeywordRecord,
             "interface" => SdslvTokenKind::KeywordInterface,
             "shader" => SdslvTokenKind::KeywordShader,
             "material" => SdslvTokenKind::KeywordMaterial,

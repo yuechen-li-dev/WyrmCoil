@@ -85,6 +85,11 @@ Notes:
 
 Streams are explicit stage-boundary payload structs in SDSL-V source.
 
+SDSL-V also supports `record` declarations for plain value aggregates:
+
+- `record` = ordinary value aggregate (no stage semantics).
+- `stream` = stage-boundary aggregate (semantic-bearing stage IO).
+
 Current lowering behavior:
 - stream declarations lower to HLSL `struct`s.
 - stream field lowering preserves declaration order.
@@ -95,6 +100,26 @@ Current lowering behavior:
 Current limits:
 - semantic assignment is intentionally narrow and deterministic, not fully programmable yet.
 - flow declarations do not lower, so flow data does not participate in stream emission.
+
+Record example:
+
+```sdslv
+record SurfaceData {
+    WorldPos: WorldPosition3;
+    Normal: WorldNormal3;
+    BaseColor: float4;
+    Roughness: f32;
+}
+```
+
+Current record lowering behavior:
+- record declarations lower to plain HLSL `struct`s.
+- record fields do not receive `SV_Position`/`TEXCOORDn` semantics.
+- record types are valid in function parameter/return/local type positions where current type handling already applies.
+
+Future work:
+- `with` expressions are not implemented yet.
+- broader stream/record immutability rules are not implemented yet.
 
 ## 5) Coordinate-space aliases
 

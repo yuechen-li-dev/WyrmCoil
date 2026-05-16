@@ -46,6 +46,7 @@ pub struct SdslvUseDecl {
 pub enum SdslvDecl {
     TypeAlias(SdslvTypeAliasDecl),
     Stream(SdslvStreamDecl),
+    Record(SdslvRecordDecl),
     Interface(SdslvInterfaceDecl),
     Shader(SdslvShaderDecl),
     Flow(SdslvFlowDecl),
@@ -132,6 +133,11 @@ pub struct SdslvFieldDecl {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvStreamDecl {
+    pub Name: String,
+    pub Fields: Vec<SdslvFieldDecl>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvRecordDecl {
     pub Name: String,
     pub Fields: Vec<SdslvFieldDecl>,
 }

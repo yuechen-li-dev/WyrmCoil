@@ -64,6 +64,7 @@ impl<'a> HlslEmitter<'a> {
             match decl {
                 SdslvDecl::TypeAlias(alias) => self.EmitTypeAlias(alias),
                 SdslvDecl::Stream(stream) => self.EmitStream(stream),
+                SdslvDecl::Record(record) => self.EmitRecord(record),
                 SdslvDecl::Shader(shader) => self.EmitShader(shader),
                 SdslvDecl::Flow(flow) => self.EmitFlow(flow),
                 SdslvDecl::Compile(compile) => self.EmitCompile(compile),
@@ -121,6 +122,17 @@ impl<'a> HlslEmitter<'a> {
                 self.Lines
                     .push(format!("    {} {} : {};", field_type, field.Name, semantic));
             }
+        }
+        self.Lines.push("};".to_string());
+    }
+    fn EmitRecord(&mut self, record: &SdslvRecordDecl) {
+        self.Lines.push(format!("struct {} {{", record.Name));
+        for field in &record.Fields {
+            let Some(field_type) = self.MapTypeFromPath(&field.TypeName) else {
+                continue;
+            };
+            self.Lines
+                .push(format!("    {} {};", field_type, field.Name));
         }
         self.Lines.push("};".to_string());
     }
@@ -406,7 +418,7 @@ impl<'a> HlslEmitter<'a> {
             return self.ResolveTypeName(&alias.TargetType.Segments.join("."), depth + 1);
         }
 
-        if self.IsKnownStream(type_name) {
+        if self.IsKnownAggregateType(type_name) {
             return Some(type_name.to_string());
         }
 
@@ -414,9 +426,10 @@ impl<'a> HlslEmitter<'a> {
         None
     }
 
-    fn IsKnownStream(&self, type_name: &str) -> bool {
+    fn IsKnownAggregateType(&self, type_name: &str) -> bool {
         self.Module.Declarations.iter().any(|decl| match decl {
             SdslvDecl::Stream(stream) => stream.Name == type_name,
+            SdslvDecl::Record(record) => record.Name == type_name,
             SdslvDecl::Shader(shader) => shader.Name == type_name,
             _ => false,
         })

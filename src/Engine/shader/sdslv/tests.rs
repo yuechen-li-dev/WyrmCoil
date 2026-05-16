@@ -68,6 +68,44 @@ fn ParserStreamAndInterfaceAndShaderShapes() {
 }
 
 #[test]
+fn ParserRecordDeclarationShape() {
+    let src = r#"
+        record SurfaceData {
+            WorldPos: float3;
+            Normal: float3;
+            BaseColor: float4;
+            Roughness: f32;
+        }
+        stream VertexOut {
+            Position: float4;
+        }
+    "#;
+    let m = ParseSource(src).unwrap();
+    let record = m
+        .Declarations
+        .iter()
+        .find_map(|d| {
+            if let SdslvDecl::Record(r) = d {
+                Some(r)
+            } else {
+                None
+            }
+        })
+        .expect("record declaration should parse");
+    assert_eq!(record.Name, "SurfaceData", "record name should parse");
+    assert_eq!(record.Fields.len(), 4, "record fields should parse");
+    assert_eq!(
+        record.Fields[0].Name, "WorldPos",
+        "field names should parse"
+    );
+    assert_eq!(
+        record.Fields[3].TypeName.Segments.join("."),
+        "f32",
+        "field types should parse"
+    );
+}
+
+#[test]
 fn ParserGenericWhereConstraints() {
     let src = include_str!("../../../../examples/sdslv/generic_forward_pass.sdslv");
     let m = ParseSource(src).unwrap();
@@ -123,6 +161,27 @@ fn ValidationDuplicateTopLevel() {
         x.Message
             .contains("duplicate top-level declaration 'Surface'")
     }));
+}
+
+#[test]
+fn ValidationRejectsDuplicateRecordFieldAndTopLevelCollision() {
+    let duplicate_field = "record SurfaceData { Color: float4; Color: float4; }";
+    let duplicate_field_diags = ValidateSource(duplicate_field).unwrap_err();
+    assert!(
+        duplicate_field_diags.iter().any(|x| x
+            .Message
+            .contains("duplicate record field 'Color' in record 'SurfaceData'")),
+        "duplicate record fields should be rejected"
+    );
+
+    let collision = "record SurfaceData { Color: float4; } stream SurfaceData { Color: float4; }";
+    let collision_diags = ValidateSource(collision).unwrap_err();
+    assert!(
+        collision_diags.iter().any(|x| x
+            .Message
+            .contains("duplicate top-level declaration 'SurfaceData'")),
+        "record names should participate in top-level uniqueness"
+    );
 }
 
 #[test]
@@ -286,6 +345,49 @@ fn EmitHlslStreamSemanticsAreDeterministic() {
     assert!(
         hlsl.contains("float4 Color : TEXCOORD1;"),
         "expected second TEXCOORD mapping"
+    );
+}
+
+#[test]
+fn EmitHlslRecordHasNoStageSemanticsAndLocalsUseRecordType() {
+    let src = r#"
+        type ClipPosition4 = float4 @space(clip.position);
+        record VertexData {
+            Position: ClipPosition4;
+            Color: float4;
+        }
+        stream VertexOut {
+            Position: ClipPosition4;
+            Color: float4;
+        }
+        shader Test {
+            stage pixel fn PS() -> float4 {
+                let surface: VertexData;
+                return float4(1.0, 0.0, 1.0, 1.0);
+            }
+        }
+    "#;
+    let module = ValidateSource(src).unwrap();
+    let hlsl = EmitHlsl(&module).unwrap();
+    assert!(
+        hlsl.contains("struct VertexData {"),
+        "record should emit plain struct"
+    );
+    assert!(
+        hlsl.contains("float4 Position;"),
+        "record fields should not have stage semantics"
+    );
+    assert!(
+        !hlsl.contains("struct VertexData {\n    float4 Position :"),
+        "record fields should not emit SV_Position"
+    );
+    assert!(
+        hlsl.contains("float4 Position : SV_Position;"),
+        "stream fields should still emit SV_Position"
+    );
+    assert!(
+        hlsl.contains("VertexData surface;"),
+        "record locals should emit as record type declarations"
     );
 }
 

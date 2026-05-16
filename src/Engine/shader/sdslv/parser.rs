@@ -54,6 +54,10 @@ impl<'a> Parser<'a> {
                 if let Some(d) = self.parse_stream() {
                     m.Declarations.push(SdslvDecl::Stream(d));
                 }
+            } else if self.match_kw(SdslvTokenKind::KeywordRecord) {
+                if let Some(d) = self.parse_record() {
+                    m.Declarations.push(SdslvDecl::Record(d));
+                }
             } else if self.match_kw(SdslvTokenKind::KeywordInterface) {
                 if let Some(d) = self.parse_interface() {
                     m.Declarations.push(SdslvDecl::Interface(d));
@@ -251,20 +255,7 @@ impl<'a> Parser<'a> {
     fn parse_stream(&mut self) -> Option<SdslvStreamDecl> {
         let name = self.ident()?;
         self.expect(SdslvTokenKind::LeftBrace, "expected '{' after stream name");
-        let mut fs = vec![];
-        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
-            let fname = self.ident()?;
-            self.expect(
-                SdslvTokenKind::Colon,
-                "expected ':' after stream field name",
-            );
-            let t = self.parse_path_req("expected field type")?;
-            self.expect(SdslvTokenKind::Semicolon, "expected ';' after field");
-            fs.push(SdslvFieldDecl {
-                Name: fname,
-                TypeName: t,
-            });
-        }
+        let fs = self.parse_aggregate_fields("stream field name")?;
         self.expect(
             SdslvTokenKind::RightBrace,
             "expected '}' after stream fields",
@@ -273,6 +264,33 @@ impl<'a> Parser<'a> {
             Name: name,
             Fields: fs,
         })
+    }
+    fn parse_record(&mut self) -> Option<SdslvRecordDecl> {
+        let name = self.ident()?;
+        self.expect(SdslvTokenKind::LeftBrace, "expected '{' after record name");
+        let fs = self.parse_aggregate_fields("record field name")?;
+        self.expect(
+            SdslvTokenKind::RightBrace,
+            "expected '}' after record fields",
+        );
+        Some(SdslvRecordDecl {
+            Name: name,
+            Fields: fs,
+        })
+    }
+    fn parse_aggregate_fields(&mut self, field_context: &str) -> Option<Vec<SdslvFieldDecl>> {
+        let mut fs = vec![];
+        while !self.check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            let fname = self.ident_req(&format!("expected {}", field_context))?;
+            self.expect(SdslvTokenKind::Colon, "expected ':' after field name");
+            let t = self.parse_path_req("expected field type")?;
+            self.expect(SdslvTokenKind::Semicolon, "expected ';' after field");
+            fs.push(SdslvFieldDecl {
+                Name: fname,
+                TypeName: t,
+            });
+        }
+        Some(fs)
     }
     fn parse_interface(&mut self) -> Option<SdslvInterfaceDecl> {
         let name = self.ident()?;
