@@ -2,7 +2,7 @@
 
 WyrmCoil is a deterministic Rust engine-core prototype with an embedded Dunewyrm control kernel.
 
-**Current status:** M1 Dunewyrm kernel reintegration.
+**Current status:** M1b full Dunewyrm kernel reintegration (module exports + restored behavior tests + Guard Patrol external API proof).
 
 **Architecture slogan:** Frames decide. Stores iterate. Acts connect. Mailbox reports back. Chunks persist both.
 
