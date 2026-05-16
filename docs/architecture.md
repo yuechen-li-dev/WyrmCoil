@@ -448,6 +448,22 @@ M26 remains intentionally narrow:
 - no adaptive re-planning during restore
 
 
+
+## M38 WGSL pipeline creation probe (`wgpu` backend)
+
+M38 connects the M37 WGSL shader-module seam to M30 render-pipeline creation under the `wgpu` backend boundary:
+
+- `BuildWgslPipelinePlan(...)` provides CPU-only planning/validation for WGSL pipeline metadata (label/source-name/vertex-entry/pixel-entry), defaulting to `vs_main` and `fs_main`.
+- `CreateWgpuRenderPipelineFromWgsl(...)` optionally creates one WGSL `wgpu::ShaderModule` and then a real `wgpu::RenderPipeline` (single module used for both vertex+fragment stages) when the caller supplies a real `wgpu::Device`.
+- The helper reuses existing validated render layout/descriptor seams (`RenderPipelineLayoutPlan` + M30 pipeline creation helper) and remains backend-specific under `Engine::render::backend::wgpu`.
+
+M38 preserves policy and scope constraints:
+
+- WGSL remains a valid native shader source path.
+- SDSL-V remains the preferred high-level authoring path.
+- Normal `cargo test` remains GPU-free.
+- No draw submission, window/surface/swapchain, material/reflection/bind-group, or render-graph rollout is added in M38.
+
 ## M37 WGSL shader-module path (`wgpu` backend)
 
 M37 adds a backend-specific WGSL shader-module seam under `Engine::render::backend::wgpu`:

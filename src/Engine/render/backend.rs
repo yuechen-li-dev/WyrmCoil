@@ -18,6 +18,7 @@ pub mod wgpu {
     pub use crate::Engine::render::wgpu::*;
     pub use crate::Engine::render::wgpu_pipeline::*;
     pub use crate::Engine::render::wgpu_shader_module::*;
+    pub use crate::Engine::render::wgpu_wgsl_pipeline::*;
 }
 
 pub mod vulkan {
