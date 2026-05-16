@@ -82,6 +82,24 @@ M21 remains intentionally narrow:
 
 This milestone is a resource descriptor scaffold only, preserving GPU-free testability in normal `cargo test` runs.
 
+
+## M22 CPU render extraction boundary
+
+M22 adds the next renderer-side CPU boundary after M5 snapshots and M20/M21 layout planning:
+
+- `ExtractSpriteVertices(&RenderSnapshot)` converts immutable render snapshot items into deterministic `SpriteVertex` values (`X`, `Y`, `SpriteId`) in snapshot item order.
+- `PackSpriteVertices(...)` produces explicit little-endian bytes (`f32 x`, `f32 y`, `u32 sprite id`) with a 12-byte stride for future upload.
+- `SpriteVertexBufferLayout()` publishes matching layout metadata (`Float32x2` at location 0 offset 0, `Uint32` at location 1 offset 8, step mode `Vertex`, stride 12).
+- The pass is CPU only: no `wgpu::Buffer`, no device/surface requirements, no draw submission.
+
+Current scope remains intentionally minimal:
+
+- one vertex per render item (no quad expansion yet)
+- no index-buffer generation yet
+- no UV/atlas/material/texture system yet
+- no camera/projection transform path yet
+- no GPU upload or render-pass submission yet
+
 ## M9 minimal `wgpu` renderer backend scaffold
 
 M9 adds the first renderer-backend boundary while preserving the existing timing contract.
