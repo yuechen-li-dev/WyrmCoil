@@ -361,6 +361,212 @@ fn CompileSourceToHlslInvalidSourceReturnsDiagnostics() {
 }
 
 #[test]
+fn CompileSourceToShaderArtifactBasicArtifactMetadata() {
+    let src = r#"
+        type ClipPosition4 = float4 @space(clip.position);
+        stream VertexOut { Position: ClipPosition4; Color: float4; }
+        shader FlatColor {
+            stage vertex fn VS(pos: float3, color: float4) -> VertexOut {
+                let output: VertexOut;
+                output.Position = float4(pos, 1.0);
+                output.Color = color;
+                return output;
+            }
+            stage pixel fn PS(input: VertexOut) -> float4 {
+                return input.Color;
+            }
+        }
+    "#;
+    let artifact = CompileSourceToShaderArtifact("flat_color.sdslv", src)
+        .expect("expected flat color artifact to compile");
+
+    assert_eq!(
+        artifact.SourceName, "flat_color.sdslv",
+        "source name should be preserved"
+    );
+    assert!(
+        !artifact.Hlsl.is_empty(),
+        "artifact hlsl text should not be empty"
+    );
+    assert_eq!(
+        artifact.EntryPoints.len(),
+        2,
+        "expected vertex + pixel entry points"
+    );
+    assert_eq!(
+        artifact.EntryPoints[0].Name, "FlatColor_VS",
+        "vertex entry name should match HLSL name"
+    );
+    assert_eq!(
+        artifact.EntryPoints[0].TargetProfile, "vs_6_0",
+        "vertex profile should map to vs_6_0"
+    );
+    assert_eq!(
+        artifact.EntryPoints[1].Name, "FlatColor_PS",
+        "pixel entry name should match HLSL name"
+    );
+    assert_eq!(
+        artifact.EntryPoints[1].TargetProfile, "ps_6_0",
+        "pixel profile should map to ps_6_0"
+    );
+    assert_eq!(
+        artifact.EntryPoints[0].ShaderName, "FlatColor",
+        "shader name should be captured"
+    );
+    assert_eq!(
+        artifact.EntryPoints[0].MethodName, "VS",
+        "method name should be captured"
+    );
+}
+
+#[test]
+fn CompileSourceToShaderArtifactExcludesHelpersAndFlows() {
+    let src = r#"
+        type ClipPosition4 = float4 @space(clip.position);
+        stream VertexOut { Position: ClipPosition4; Color: float4; }
+        shader FlatColor {
+            fn BaseColor(input: VertexOut) -> float4 { return input.Color; }
+            stage vertex fn VS(pos: float3, color: float4) -> VertexOut {
+                let output: VertexOut;
+                output.Position = float4(pos, 1.0);
+                output.Color = color;
+                return output;
+            }
+            stage pixel fn PS(input: VertexOut) -> float4 {
+                return FlatColor_BaseColor(input);
+            }
+        }
+        flow PickMode(useSoft: bool, quality: i32) -> i32 {
+            state Select {
+                when {
+                    case useSoft -> return 2
+                    else -> return quality
+                }
+            }
+        }
+    "#;
+    let artifact = CompileSourceToShaderArtifact("flow_value_lowering.sdslv", src)
+        .expect("expected flow fixture artifact to compile");
+    assert!(
+        artifact.Hlsl.contains("int PickMode("),
+        "flow helper should be emitted into HLSL"
+    );
+    assert!(
+        artifact.Hlsl.contains("FlatColor_BaseColor"),
+        "ordinary helper methods should still be emitted"
+    );
+    assert!(
+        artifact
+            .EntryPoints
+            .iter()
+            .all(|entry| entry.Name != "PickMode"),
+        "flow helper must not be listed as entry point"
+    );
+    assert!(
+        artifact
+            .EntryPoints
+            .iter()
+            .all(|entry| entry.Name != "FlatColor_BaseColor"),
+        "non-stage helper must not be listed as entry point"
+    );
+}
+
+#[test]
+fn CompileSourceToShaderArtifactUsesCompileAliasEntries() {
+    let src = include_str!("../../../../examples/sdslv/generic_forward_pass.sdslv");
+    let artifact = CompileSourceToShaderArtifact("generic_forward_pass.sdslv", src)
+        .expect("expected generic fixture artifact to compile");
+
+    assert!(
+        artifact
+            .EntryPoints
+            .iter()
+            .any(|entry| entry.Name == "ForwardFlatMaterial_PS"),
+        "compile alias entry should be present"
+    );
+    assert!(
+        artifact
+            .EntryPoints
+            .iter()
+            .all(|entry| entry.Name != "ForwardPass_PS"),
+        "generic template entry should not be present"
+    );
+    let alias_entry = artifact
+        .EntryPoints
+        .iter()
+        .find(|entry| entry.Name == "ForwardFlatMaterial_PS")
+        .expect("expected compile alias entry");
+    assert_eq!(
+        alias_entry.TargetProfile, "ps_6_0",
+        "pixel alias profile should map to ps_6_0"
+    );
+}
+
+#[test]
+fn CompileSourceToShaderArtifactFailuresReturnDiagnostics() {
+    let invalid = "shader S { stage pixel fn PS() -> float4; }";
+    let invalid_diagnostics = CompileSourceToShaderArtifact("invalid.sdslv", invalid).unwrap_err();
+    assert!(
+        invalid_diagnostics
+            .iter()
+            .any(|d| d.Message.contains("must have a body")),
+        "invalid parse/validate/emission path should return diagnostics"
+    );
+
+    let unsupported_compute =
+        "shader C { stage compute fn CS() -> float4 { return float4(0.0, 0.0, 0.0, 1.0); } }";
+    let compute_diagnostics =
+        CompileSourceToShaderArtifact("compute.sdslv", unsupported_compute).unwrap_err();
+    assert!(
+        compute_diagnostics
+            .iter()
+            .any(|d| d.Message.contains("unsupported stage 'compute'")),
+        "unsupported compute emission should return diagnostics and no artifact"
+    );
+}
+
+#[test]
+fn CompileSourceToShaderArtifactDeterministicOutputAndOrder() {
+    let src = r#"
+        type ClipPosition4 = float4 @space(clip.position);
+        stream VertexOut { Position: ClipPosition4; Color: float4; }
+        shader FlatColor {
+            stage vertex fn VS(pos: float3, color: float4) -> VertexOut {
+                let output: VertexOut;
+                output.Position = float4(pos, 1.0);
+                output.Color = color;
+                return output;
+            }
+            stage pixel fn PS(input: VertexOut) -> float4 {
+                return input.Color;
+            }
+        }
+    "#;
+    let artifact_a = CompileSourceToShaderArtifact("flat_color.sdslv", src)
+        .expect("first artifact build should succeed");
+    let artifact_b = CompileSourceToShaderArtifact("flat_color.sdslv", src)
+        .expect("second artifact build should succeed");
+
+    assert_eq!(
+        artifact_a.Hlsl, artifact_b.Hlsl,
+        "artifact HLSL should be deterministic"
+    );
+    assert_eq!(
+        artifact_a.EntryPoints, artifact_b.EntryPoints,
+        "artifact entry points should be deterministic"
+    );
+    assert_eq!(
+        artifact_a
+            .EntryPoints
+            .iter()
+            .map(|entry| entry.Name.as_str())
+            .collect::<Vec<&str>>(),
+        vec!["FlatColor_VS", "FlatColor_PS"],
+        "entry order should remain stable and declaration ordered"
+    );
+}
+
+#[test]
 fn ParserFlowShapes() {
     let src = r#"
 flow SelectShadow(mode: i32) -> float4 {

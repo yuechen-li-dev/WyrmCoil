@@ -319,3 +319,35 @@ Still out of scope in M12:
 - flow lowering/execution
 - definite assignment analysis
 - utility/suspend/remember/resume
+
+## 13) M14 shader artifact API (current)
+
+SDSL-V now exposes a structured shader artifact contract on top of parse/validate/emit:
+
+- `CompileSourceToShaderArtifact(source_name, source)`
+- `BuildShaderArtifact(source_name, module)`
+
+Artifact shape:
+- `SourceName: String`
+- `Hlsl: String`
+- `EntryPoints: Vec<SdslvEntryPoint>`
+
+Entry point metadata contains:
+- `Name` (generated HLSL entry name, e.g. `FlatColor_VS`)
+- `Stage` (`Vertex` / `Pixel` / `Compute`)
+- `ShaderName`
+- `MethodName`
+- `TargetProfile` (`vs_6_0` / `ps_6_0` / `cs_6_0`)
+
+Behavior notes:
+- entry points are collected from `stage` methods only
+- helper methods and flow helpers are not entry points
+- compile aliases are reflected as entry points (e.g. `ForwardFlatMaterial_PS`)
+- generic templates are not directly listed as entry points
+- failures in parse/validate/emit return diagnostics and do not return partial artifacts
+
+Still out of scope in M14:
+- no DXC invocation
+- no SPIR-V generation
+- no renderer integration
+- no shader reflection

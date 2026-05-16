@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+pub mod artifact;
 pub mod ast;
 pub mod diagnostic;
 pub mod emitter;
@@ -9,6 +10,7 @@ pub mod runner;
 pub mod token;
 pub mod validation;
 
+pub use artifact::*;
 pub use ast::*;
 pub use diagnostic::*;
 pub use emitter::*;
