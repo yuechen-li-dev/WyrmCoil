@@ -141,8 +141,7 @@ fn Root(ctx: &mut DwFrameCtx) -> DwControl {
             Hysteresis: 0.05,
             MinCommitTicks: 1,
             TieBreak: DwTieBreak::KeepCurrent,
-        },
-    )
+        })
 }
 
 fn Patrol(ctx: &mut DwFrameCtx) -> DwControl {
@@ -177,8 +176,5 @@ fn Recover(ctx: &mut DwFrameCtx) -> DwControl {
 }
 
 pub fn TargetLostMessage() -> DwMessage {
-    DwMessage {
-        Kind: MailKinds::TargetLost,
-        Value: 1,
-    }
+    DwMessage::I32(MailKinds::TargetLost, 1)
 }

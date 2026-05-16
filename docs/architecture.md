@@ -80,3 +80,17 @@ The current golden path (`window_visible_primitive`) demonstrates Engine + Demo 
 ```bash
 cargo run --bin wyrmfmt -- check --lang rust src tests examples
 ```
+
+
+## Dunewyrm mailbox (M48)
+
+Dunewyrm mailbox remains a deterministic two-queue model:
+
+- `Visible` messages are readable/consumable this tick.
+- `Staged` messages are enqueued during this tick and only promote on the next `BeginTick`.
+- FIFO order is preserved across visible consume and staged promotion.
+- Runtime chunks persist both queues.
+
+Messages now carry a bounded typed payload enum (`None`, `Bool`, `I32`, `F32`, `PairI32`) while preserving `Kind: u32` routing. Mailbox helpers support filtered cursor operations on the visible queue (`HasKind`, `PeekFirstKind`, `ConsumeFirstKind`, `ConsumeAllKind`).
+
+Non-goals remain unchanged: no async event bus, no dynamic/object payload transport, and no arbitrary reflection-driven message channel.
