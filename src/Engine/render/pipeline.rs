@@ -1,6 +1,8 @@
 #![allow(non_snake_case)]
 
-use crate::Engine::shader::sdslv::{SdslvEntryPoint, SdslvShaderArtifact, SdslvShaderStage};
+use crate::Engine::shader::sdslv::{
+    DxcCompileRequest, SdslvEntryPoint, SdslvShaderArtifact, SdslvShaderStage,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShaderStagePlan {
@@ -15,6 +17,62 @@ pub struct RenderPipelinePlan {
     pub Hlsl: String,
     pub VertexEntry: ShaderStagePlan,
     pub PixelEntry: ShaderStagePlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineDxcRequests {
+    pub Vertex: DxcCompileRequest,
+    pub Pixel: DxcCompileRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PipelineDxcRequestError {
+    EmptyHlsl,
+    EmptyEntryPoint { Stage: SdslvShaderStage },
+    EmptyTargetProfile { Stage: SdslvShaderStage },
+}
+
+pub fn BuildDxcRequestsForPipelinePlan(
+    plan: &RenderPipelinePlan,
+) -> Result<PipelineDxcRequests, PipelineDxcRequestError> {
+    if plan.Hlsl.trim().is_empty() {
+        return Err(PipelineDxcRequestError::EmptyHlsl);
+    }
+    if plan.VertexEntry.EntryPoint.trim().is_empty() {
+        return Err(PipelineDxcRequestError::EmptyEntryPoint {
+            Stage: SdslvShaderStage::Vertex,
+        });
+    }
+    if plan.PixelEntry.EntryPoint.trim().is_empty() {
+        return Err(PipelineDxcRequestError::EmptyEntryPoint {
+            Stage: SdslvShaderStage::Pixel,
+        });
+    }
+    if plan.VertexEntry.TargetProfile.trim().is_empty() {
+        return Err(PipelineDxcRequestError::EmptyTargetProfile {
+            Stage: SdslvShaderStage::Vertex,
+        });
+    }
+    if plan.PixelEntry.TargetProfile.trim().is_empty() {
+        return Err(PipelineDxcRequestError::EmptyTargetProfile {
+            Stage: SdslvShaderStage::Pixel,
+        });
+    }
+
+    Ok(PipelineDxcRequests {
+        Vertex: DxcCompileRequest {
+            SourceName: plan.SourceName.clone(),
+            Hlsl: plan.Hlsl.clone(),
+            EntryPoint: plan.VertexEntry.EntryPoint.clone(),
+            TargetProfile: plan.VertexEntry.TargetProfile.clone(),
+        },
+        Pixel: DxcCompileRequest {
+            SourceName: plan.SourceName.clone(),
+            Hlsl: plan.Hlsl.clone(),
+            EntryPoint: plan.PixelEntry.EntryPoint.clone(),
+            TargetProfile: plan.PixelEntry.TargetProfile.clone(),
+        },
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -458,6 +516,178 @@ mod tests {
                 Name: "FlatColor_VS".to_string()
             },
             "duplicate metadata names should produce structured duplicate error"
+        );
+    }
+
+    #[test]
+    fn BuildDxcRequestsForPipelinePlanValidConversionAndCommandCompatibility() {
+        use crate::Engine::shader::sdslv::{BuildDxcCommand, DxcOptions};
+
+        let src = r#"
+        type ClipPosition4 = float4 @space(clip.position);
+        stream VertexOut { Position: ClipPosition4; Color: float4; }
+        shader FlatColor {
+            stage vertex fn VS(pos: float3, color: float4) -> VertexOut {
+                let output: VertexOut;
+                output.Position = float4(pos, 1.0);
+                output.Color = color;
+                return output;
+            }
+            stage pixel fn PS(input: VertexOut) -> float4 {
+                return input.Color;
+            }
+        }
+    "#;
+        let artifact = CompileSourceToShaderArtifact("flat_color.sdslv", src)
+            .expect("flat color artifact should compile");
+        let plan =
+            BuildRenderPipelinePlan("FlatColorPlan", &artifact, "FlatColor_VS", "FlatColor_PS")
+                .expect("valid plan should build for flat shader");
+
+        let requests = BuildDxcRequestsForPipelinePlan(&plan)
+            .expect("valid plan should convert into deterministic vertex/pixel DXC requests");
+
+        assert_eq!(
+            requests.Vertex.TargetProfile, "vs_6_0",
+            "vertex target profile should be preserved"
+        );
+        assert_eq!(
+            requests.Pixel.TargetProfile, "ps_6_0",
+            "pixel target profile should be preserved"
+        );
+        assert_eq!(
+            requests.Vertex.SourceName, plan.SourceName,
+            "vertex request should preserve source name"
+        );
+        assert_eq!(
+            requests.Pixel.SourceName, plan.SourceName,
+            "pixel request should preserve source name"
+        );
+        assert_eq!(
+            requests.Vertex.EntryPoint, plan.VertexEntry.EntryPoint,
+            "vertex request should preserve entry point"
+        );
+        assert_eq!(
+            requests.Pixel.EntryPoint, plan.PixelEntry.EntryPoint,
+            "pixel request should preserve entry point"
+        );
+        assert_eq!(
+            requests.Vertex.Hlsl, plan.Hlsl,
+            "vertex request should preserve plan HLSL payload"
+        );
+        assert_eq!(
+            requests.Pixel.Hlsl, plan.Hlsl,
+            "pixel request should preserve plan HLSL payload"
+        );
+        assert_eq!(
+            requests.Vertex.Hlsl, requests.Pixel.Hlsl,
+            "vertex and pixel requests should share identical HLSL text"
+        );
+
+        let options = DxcOptions::default();
+        let vertex_command = BuildDxcCommand(&requests.Vertex, &options).join(" ");
+        assert!(
+            vertex_command.contains("-E FlatColor_VS"),
+            "vertex DXC command should contain the vertex entry point"
+        );
+        assert!(
+            vertex_command.contains("-T vs_6_0"),
+            "vertex DXC command should contain the vertex target profile"
+        );
+
+        let pixel_command = BuildDxcCommand(&requests.Pixel, &options).join(" ");
+        assert!(
+            pixel_command.contains("-E FlatColor_PS"),
+            "pixel DXC command should contain the pixel entry point"
+        );
+        assert!(
+            pixel_command.contains("-T ps_6_0"),
+            "pixel DXC command should contain the pixel target profile"
+        );
+    }
+
+    #[test]
+    fn BuildDxcRequestsForPipelinePlanSupportsCompileAliasEntry() {
+        let src = r#"
+        type ClipPosition4 = float4 @space(clip.position);
+        stream VertexOut { Position: ClipPosition4; Color: float4; }
+        interface IBaseColor { fn BaseColor(input: VertexOut) -> float4; }
+        shader FlatMaterial implements IBaseColor {
+            material { Color: float4; }
+            override fn BaseColor(input: VertexOut) -> float4 { return Color; }
+        }
+        shader ForwardPass<TMat> where TMat : IBaseColor {
+            stage vertex fn VS(pos: float3, color: float4) -> VertexOut {
+                let output: VertexOut;
+                output.Position = float4(pos, 1.0);
+                output.Color = color;
+                return output;
+            }
+            stage pixel fn PS(input: VertexOut, mat: TMat) -> float4 {
+                return mat.BaseColor(input);
+            }
+        }
+        compile ForwardPass<FlatMaterial> as ForwardFlatMaterial;
+    "#;
+        let artifact = CompileSourceToShaderArtifact("generic_forward_pass.sdslv", src)
+            .expect("generic fixture artifact should compile");
+        let plan = BuildRenderPipelinePlan(
+            "ForwardFlatPlan",
+            &artifact,
+            "ForwardFlatMaterial_VS",
+            "ForwardFlatMaterial_PS",
+        )
+        .expect("compile alias plan should build");
+
+        let requests = BuildDxcRequestsForPipelinePlan(&plan)
+            .expect("compile alias plan should convert to DXC requests");
+        assert_eq!(
+            requests.Pixel.EntryPoint, "ForwardFlatMaterial_PS",
+            "compile alias pixel entry should be preserved in DXC request"
+        );
+    }
+
+    #[test]
+    fn BuildDxcRequestsForPipelinePlanStructuredErrorsForEmptyFields() {
+        let mut plan = RenderPipelinePlan {
+            Name: "InvalidPlan".to_string(),
+            SourceName: "invalid.sdslv".to_string(),
+            Hlsl: "float4 main() : SV_Target { return 0.0.xxxx; }".to_string(),
+            VertexEntry: ShaderStagePlan {
+                EntryPoint: "VertexEntry".to_string(),
+                TargetProfile: "vs_6_0".to_string(),
+            },
+            PixelEntry: ShaderStagePlan {
+                EntryPoint: "PixelEntry".to_string(),
+                TargetProfile: "ps_6_0".to_string(),
+            },
+        };
+
+        plan.Hlsl.clear();
+        assert_eq!(
+            BuildDxcRequestsForPipelinePlan(&plan).unwrap_err(),
+            PipelineDxcRequestError::EmptyHlsl,
+            "empty HLSL should return a structured empty-hlsl error"
+        );
+
+        plan.Hlsl = "float4 main() : SV_Target { return 0.0.xxxx; }".to_string();
+        plan.VertexEntry.EntryPoint.clear();
+        assert_eq!(
+            BuildDxcRequestsForPipelinePlan(&plan).unwrap_err(),
+            PipelineDxcRequestError::EmptyEntryPoint {
+                Stage: SdslvShaderStage::Vertex
+            },
+            "empty vertex entry point should return structured stage-specific error"
+        );
+
+        plan.VertexEntry.EntryPoint = "VertexEntry".to_string();
+        plan.PixelEntry.TargetProfile.clear();
+        assert_eq!(
+            BuildDxcRequestsForPipelinePlan(&plan).unwrap_err(),
+            PipelineDxcRequestError::EmptyTargetProfile {
+                Stage: SdslvShaderStage::Pixel
+            },
+            "empty pixel target profile should return structured stage-specific error"
         );
     }
 }

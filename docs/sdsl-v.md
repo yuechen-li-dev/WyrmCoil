@@ -744,3 +744,31 @@ M16 is intentionally planning-only:
 - no DXC invocation requirement
 - no shader reflection or bind-layout extraction
 - no material/asset pipeline integration
+## SDSL-V M17 — Pipeline plan to DXC requests bridge (implemented)
+
+M17 connects the M16 renderer pipeline-plan metadata boundary to the M15 DXC request boundary.
+
+Current bridge API surface in `Engine::render`:
+- `PipelineDxcRequests` (`Vertex`, `Pixel`)
+- `PipelineDxcRequestError` (`EmptyHlsl`, `EmptyEntryPoint`, `EmptyTargetProfile`)
+- `BuildDxcRequestsForPipelinePlan(...)`
+
+M17 boundary behavior:
+- consumes a validated `RenderPipelinePlan`
+- builds deterministic vertex and pixel `DxcCompileRequest` values
+- preserves `SourceName` and full `Hlsl` payload for both requests
+- maps entry metadata directly from `plan.VertexEntry` and `plan.PixelEntry`
+- keeps DXC command building/invocation ownership in M15 (`BuildDxcCommand`, optional compile path)
+
+M17 is intentionally metadata-only:
+- no DXC invocation requirement
+- no `wgpu` shader-module or render-pipeline creation
+- no shader reflection/bind-layout extraction
+- no material or asset pipeline expansion
+
+Future work after M17 remains explicit:
+- real backend compilation and shader-bytecode lifecycle
+- `wgpu` shader-module creation and render-pipeline wiring
+- reflection/resource-layout integration
+
+
