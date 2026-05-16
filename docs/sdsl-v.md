@@ -663,3 +663,34 @@ M12 intentionally still does not implement:
 
 Emitter behavior remains parse/validate-only for flows:
 - modules with flows return `flow emission supports acyclic value-returning subset in SDSL-V M13`.
+
+## SDSL-V M14 — Shader artifact / entry-point contract (implemented)
+
+M14 adds a structured artifact boundary between validated SDSL-V source and future backend compilation.
+
+Current artifact API:
+- `CompileSourceToShaderArtifact(source_name: &str, source: &str) -> Result<SdslvShaderArtifact, Vec<SdslvDiagnostic>>`
+- `BuildShaderArtifact(source_name: &str, module: &SdslvModule) -> Result<SdslvShaderArtifact, Vec<SdslvDiagnostic>>`
+
+Current artifact data:
+- `SourceName` (caller-provided identity, no filesystem discovery)
+- `Hlsl` (deterministic emitted HLSL text)
+- `EntryPoints` (deterministic stage entry metadata)
+
+Entry metadata includes:
+- generated entry function name (`Shader_Method` pattern)
+- stage kind (`vertex`, `pixel`, `compute` enum)
+- shader name + method name
+- default target profile mapping (`vs_6_0`, `ps_6_0`, `cs_6_0`)
+
+Entry-point collection contract in M14:
+- collect only shader `stage` methods that correspond to emitted shader entry functions
+- generic shader templates are not listed directly
+- `compile ... as Alias` entries are listed using the compile alias name
+- ordinary helper methods and flow helper functions are not listed as entry points
+
+M14 remains metadata-only:
+- no DXC invocation
+- no SPIR-V generation
+- no renderer integration
+- no reflection/bind-layout extraction
