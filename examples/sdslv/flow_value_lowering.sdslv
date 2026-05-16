@@ -1,0 +1,25 @@
+namespace WyrmCoil.Examples;
+
+flow PickMode(useSoft: bool, quality: i32) -> i32 {
+    board {
+        SelectedMode: i32;
+    }
+
+    state Select {
+        when {
+            case useSoft -> goto Soft
+            case quality > 2 -> goto Soft
+            else -> goto Hard
+        }
+    }
+
+    state Soft {
+        board.SelectedMode = 2;
+        return board.SelectedMode;
+    }
+
+    state Hard {
+        board.SelectedMode = 1;
+        return board.SelectedMode;
+    }
+}

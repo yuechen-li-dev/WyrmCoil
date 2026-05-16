@@ -261,7 +261,7 @@ Current validation includes:
 - board must be declared before states
 
 Current non-goals (still true):
-- no flow lowering/emission to HLSL
+- bounded acyclic value-flow lowering to HLSL helper functions (M13 subset)
 - no flow execution/runtime state machine
 - no utility `when`
 - no `suspend`, `remember`, `resume`
@@ -280,7 +280,7 @@ Current non-goals (still true):
 | `.sdslvtest` execution | Implemented (scalar subset runner) |
 | Shader flows | Parse/validate only |
 | Flow boards + board reads/writes | Parse/validate only (no lowering/execution) |
-| Flow lowering | Not implemented |
+| Flow lowering | Implemented for acyclic value-returning subset (M13) |
 | DXC/SPIR-V | Not implemented |
 | Renderer shader integration | Not implemented |
 

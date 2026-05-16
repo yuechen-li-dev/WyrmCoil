@@ -458,15 +458,30 @@ flow F() -> i32 {
 }
 
 #[test]
-fn EmitHlslFlowDeclarationReturnsDiagnostic() {
-    let module =
-        ParseSource("flow F() -> i32 { state A { return 1; } }").expect("flow source should parse");
-    let diagnostics = EmitHlsl(&module).unwrap_err();
+fn EmitHlslFlowValueLoweringWorks() {
+    let src = include_str!("../../../../examples/sdslv/flow_value_lowering.sdslv");
+    let module = ParseSource(src).expect("flow source should parse");
+    let hlsl = EmitHlsl(&module).expect("acyclic value flow should emit");
     assert!(
-        diagnostics.iter().any(|d| d
-            .Message
-            .contains("flow emission is not implemented in SDSL-V M12")),
-        "flow modules should fail emission clearly in M10"
+        hlsl.contains("int PickMode(bool useSoft, int quality) {"),
+        "expected flow helper signature"
+    );
+    assert!(
+        hlsl.contains("int SelectedMode = 0;"),
+        "expected board local"
+    );
+    assert!(hlsl.contains("if (useSoft) {"), "expected when if lowering");
+    assert!(
+        hlsl.contains("else if (quality > 2) {"),
+        "expected when else-if lowering"
+    );
+    assert!(
+        hlsl.contains("SelectedMode = 2;"),
+        "expected board assignment lowering"
+    );
+    assert!(
+        hlsl.contains("return SelectedMode;"),
+        "expected board read lowering"
     );
 }
 
@@ -1058,16 +1073,12 @@ flow F(board: i32) -> i32 {
 }
 
 #[test]
-fn EmitHlslFlowBoardStillNotImplemented() {
+fn EmitHlslFlowBoardEmitsValueFlowHelper() {
     let module = ParseSource("flow F() -> i32 { board { X: i32; } state A { return 1; } }")
         .expect("flow board source should parse");
-    let diagnostics = EmitHlsl(&module).unwrap_err();
-    assert!(
-        diagnostics.iter().any(|d| d
-            .Message
-            .contains("flow emission is not implemented in SDSL-V M12")),
-        "flow+board emission should remain unsupported"
-    );
+    let hlsl = EmitHlsl(&module).expect("flow+board subset should emit");
+    assert!(hlsl.contains("int F() {"), "expected flow helper signature");
+    assert!(hlsl.contains("int X = 0;"), "expected board local default");
 }
 
 #[test]
@@ -1159,4 +1170,40 @@ flow F(mode: i32) -> i32 {
         x.Message
             .contains("return type mismatch in flow 'F': expected i32, found bool")
     }));
+}
+
+#[test]
+fn EmitHlslFlowCycleAndNonReturningAndUnsupportedReturnAreDiagnosed() {
+    let cycle = include_str!("../../../../examples/sdslv/flow_cycle_invalid.sdslv");
+    let cycle_diag = CompileSourceToHlsl(cycle).unwrap_err();
+    assert!(
+        cycle_diag
+            .iter()
+            .any(|d| d.Message.contains("contains a state cycle")),
+        "expected cycle diagnostic"
+    );
+
+    let non_returning = r#"
+flow BadFlow() -> i32 {
+    board { X: i32; }
+    state A { goto B; }
+    state B { board.X = 1; }
+}
+"#;
+    let non_returning_diag = CompileSourceToHlsl(non_returning).unwrap_err();
+    assert!(
+        non_returning_diag
+            .iter()
+            .any(|d| d.Message.contains("non-returning path")),
+        "expected non-returning diagnostic"
+    );
+
+    let unknown_return = r#"
+flow SelectShadow() -> MissingType { state A { return 1; } }
+"#;
+    let unknown_diag = CompileSourceToHlsl(unknown_return).unwrap_err();
+    assert!(
+        !unknown_diag.is_empty(),
+        "expected unsupported return diagnostic"
+    );
 }
