@@ -58,7 +58,7 @@ Contract notes:
 - SDSL-V is a **shader authoring language**, not a GPU machine-code compiler.
 - HLSL is the intended first lowering target.
 - DXC handles backend GPU compilation in later milestones.
-- WGSL remains an escape hatch, but SDSL-V is the preferred high-level authoring direction.
+- WGSL is also a valid native shader source path, while SDSL-V remains the preferred high-level authoring direction by policy.
 
 ## 2) Relationship to SDSL
 
