@@ -244,6 +244,7 @@ impl<'a> Validator<'a> {
                 SdslvDecl::Shader(shader) => self.ValidateShader(shader),
                 SdslvDecl::Flow(flow) => self.ValidateFlow(flow),
                 SdslvDecl::Compile(compile) => self.ValidateCompile(compile),
+                SdslvDecl::Enum(enum_decl) => self.ValidateEnum(enum_decl),
             }
         }
         self.ValidateFunctionBodies();
@@ -338,6 +339,7 @@ impl<'a> Validator<'a> {
                 SdslvDecl::Shader(x) => (&x.Name, "shader"),
                 SdslvDecl::Flow(x) => (&x.Name, "flow"),
                 SdslvDecl::Compile(x) => (&x.Alias, "compile"),
+                SdslvDecl::Enum(x) => (&x.Name, "enum"),
             };
             if let Some(existing_kind) = self.TopLevelKinds.insert(name.clone(), kind) {
                 self.Err(&format!(
@@ -420,6 +422,19 @@ impl<'a> Validator<'a> {
         self.ValidateShaderDuplicates(shader);
         self.ValidateStages(shader);
         self.ValidateImplementsAndOverrides(shader);
+    }
+
+    fn ValidateEnum(&mut self, enum_decl: &SdslvEnumDecl) {
+        if enum_decl.Variants.is_empty() {
+            self.Diagnostics.push(SdslvDiagnostic::New("enum must have at least one variant", enum_decl.Span));
+            return;
+        }
+        let mut seen = HashSet::new();
+        for variant in &enum_decl.Variants {
+            if !seen.insert(variant.Name.clone()) {
+                self.Diagnostics.push(SdslvDiagnostic::New(&format!("duplicate enum variant '{}'", variant.Name), variant.Span));
+            }
+        }
     }
     fn ValidateCompile(&mut self, compile: &SdslvCompileDecl) {
         /* keep old logic */
@@ -830,6 +845,7 @@ impl<'a> Validator<'a> {
             SdslvExpression::Index { Base, .. } => self.ResolveFlowExpressionType(locals, Base),
             SdslvExpression::ArrayLiteral { .. } => TypeRef::Unknown,
             SdslvExpression::Switch { .. } => TypeRef::Unknown,
+            SdslvExpression::Match { .. } => TypeRef::Unknown,
             SdslvExpression::TryPropagate { Expression, .. }
             | SdslvExpression::Unwrap { Expression, .. } => {
                 self.ResolveFlowExpressionType(locals, Expression)
@@ -1416,6 +1432,7 @@ impl<'a> Validator<'a> {
                 }
                 current
             }
+            SdslvExpression::Match { .. } => TypeRef::Unknown,
         }
     }
 
