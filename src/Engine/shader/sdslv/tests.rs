@@ -2654,3 +2654,81 @@ fn EmitArrayLiteralLocalInitializerM61() {
         "array literal lowering should be deterministic"
     );
 }
+
+#[test]
+fn ValidateVectorConstructorsM62() {
+    ValidateSource("shader S { fn F() -> float2 { return float2(0.0, 1.0); } }")
+        .expect("float2 constructor with two scalar numeric arguments should validate");
+    ValidateSource("shader S { fn F() -> float3 { return float3(0.0, 1.0, 0.0); } }")
+        .expect("float3 constructor with three scalar numeric arguments should validate");
+    ValidateSource("shader S { fn F() -> float4 { return float4(1.0, 0.0, 1.0, 1.0); } }")
+        .expect("float4 constructor with four scalar numeric arguments should validate");
+}
+
+#[test]
+fn ValidateVectorConstructorRejectsWrongArityM62() {
+    let diagnostics = ValidateSource("shader S { fn F() -> float3 { return float3(1.0, 2.0); } }")
+        .expect_err("float3 constructor wrong arity should fail");
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("float3 constructor expects 3 scalar numeric arguments; found 2")),
+        "expected constructor arity diagnostic"
+    );
+}
+
+#[test]
+fn ValidateVectorConstructorRejectsNonNumericScalarArgumentM62() {
+    let diagnostics =
+        ValidateSource("shader S { fn F() -> float3 { return float3(true, 0.0, 1.0); } }")
+            .expect_err("float3 constructor bool argument should fail");
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("float3 constructor argument 0 must be numeric scalar; found bool")),
+        "expected constructor numeric scalar diagnostic"
+    );
+}
+
+#[test]
+fn ValidateMatrixConstructorArityM62() {
+    ValidateSource("shader S { fn F() -> float4x4 { return float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0); } }")
+        .expect("float4x4 constructor with sixteen scalar numeric arguments should validate");
+    let diagnostics = ValidateSource("shader S { fn F() -> float4x4 { return float4x4(1.0); } }")
+        .expect_err("float4x4 constructor wrong arity should fail");
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("float4x4 constructor expects 16 scalar numeric arguments; found 1")),
+        "expected matrix constructor arity diagnostic"
+    );
+}
+
+#[test]
+fn ValidateArrayLiteralRejectsFloat3TargetWithConstructorGuidanceM62() {
+    let diagnostics = ValidateSource(
+        "shader S { fn F() -> float3 { let v: float3 = [1.0, 2.0, 3.0]; return v; } }",
+    )
+    .expect_err("array literal should not initialize float3");
+    assert!(
+        diagnostics.iter().any(|d| d.Message.contains("array literal cannot initialize non-array type float3; use floatN(...) or float4x4(...) constructors for vector/matrix values")),
+        "expected array-vs-vector constructor guidance diagnostic"
+    );
+}
+
+#[test]
+fn ValidateArrayOfFloat4InitializerM62() {
+    ValidateSource("shader S { fn F() -> float4 { let colors: array<float4, 2> = [float4(1.0, 0.0, 1.0, 1.0), float4(0.0, 1.0, 0.0, 1.0)]; return colors[1]; } }")
+        .expect("array<float4,2> with float4 constructors should validate");
+}
+
+#[test]
+fn EmitVectorConstructorCallsRemainUnchangedM62() {
+    let hlsl =
+        CompileSourceToHlsl("shader S { fn F() -> float4 { return float4(1.0, 0.0, 1.0, 1.0); } }")
+            .expect("float4 constructor should lower");
+    assert!(
+        hlsl.contains("return float4(1.0, 0.0, 1.0, 1.0);"),
+        "expected constructor call emission to remain unchanged"
+    );
+}

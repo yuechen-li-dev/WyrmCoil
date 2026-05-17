@@ -1203,6 +1203,9 @@ impl<'a> Validator<'a> {
                     }
                     return;
                 }
+                if let SdslvExpression::Identifier(name) = &**Callee {
+                    self.ValidateBuiltinConstructorCall(shader, locals, name, Arguments);
+                }
                 if let SdslvExpression::Identifier(name) = &**Callee
                     && let Some(signature) = self.FunctionSignatures.get(name).cloned()
                 {
@@ -1560,6 +1563,97 @@ impl<'a> Validator<'a> {
         signature.ReturnType.clone()
     }
 
+    fn ValidateBuiltinConstructorCall(
+        &mut self,
+        shader: &SdslvShaderDecl,
+        locals: &HashMap<String, TypeRef>,
+        callee_name: &str,
+        arguments: &[SdslvExpression],
+    ) {
+        let Some(expected_arg_count) = Self::BuiltinConstructorArity(callee_name) else {
+            return;
+        };
+        if callee_name == "float4x4" {
+            if arguments.len() != expected_arg_count {
+                self.Err(&format!(
+                    "{} constructor expects {} scalar numeric arguments; found {}",
+                    callee_name,
+                    expected_arg_count,
+                    arguments.len()
+                ));
+                return;
+            }
+            for (index, argument) in arguments.iter().enumerate() {
+                let argument_type = self.ResolveExpressionType(shader, locals, argument);
+                if !self.IsNumericScalarType(&argument_type) && argument_type != TypeRef::Unknown {
+                    self.Err(&format!(
+                        "{} constructor argument {} must be numeric scalar; found {}",
+                        callee_name,
+                        index,
+                        self.TypeName(&argument_type)
+                    ));
+                }
+            }
+            return;
+        }
+
+        let mut component_count = 0usize;
+        for (index, argument) in arguments.iter().enumerate() {
+            let argument_type = self.ResolveExpressionType(shader, locals, argument);
+            let Some(width) = self.NumericVectorOrScalarWidth(&argument_type) else {
+                if argument_type != TypeRef::Unknown {
+                    self.Err(&format!(
+                        "{} constructor argument {} must be numeric scalar; found {}",
+                        callee_name,
+                        index,
+                        self.TypeName(&argument_type)
+                    ));
+                }
+                continue;
+            };
+            component_count += width;
+        }
+        if component_count != expected_arg_count {
+            self.Err(&format!(
+                "{} constructor expects {} scalar numeric arguments; found {}",
+                callee_name, expected_arg_count, component_count
+            ));
+        }
+    }
+
+    fn BuiltinConstructorArity(name: &str) -> Option<usize> {
+        match name {
+            "float2" => Some(2),
+            "float3" => Some(3),
+            "float4" => Some(4),
+            "float4x4" => Some(16),
+            _ => None,
+        }
+    }
+
+    fn NumericVectorOrScalarWidth(&self, ty: &TypeRef) -> Option<usize> {
+        let Some(name) = ty.Name() else {
+            return None;
+        };
+        match self.ResolveUnderlyingName(name).as_str() {
+            "float" | "i32" | "u32" => Some(1),
+            "float2" => Some(2),
+            "float3" => Some(3),
+            "float4" => Some(4),
+            _ => None,
+        }
+    }
+
+    fn IsNumericScalarType(&self, ty: &TypeRef) -> bool {
+        let Some(name) = ty.Name() else {
+            return false;
+        };
+        matches!(
+            self.ResolveUnderlyingName(name).as_str(),
+            "float" | "i32" | "u32"
+        )
+    }
+
     fn IsFallibleExpression(
         &self,
         shader: &SdslvShaderDecl,
@@ -1623,7 +1717,7 @@ impl<'a> Validator<'a> {
         };
         let TypeRef::Array { Element, Length } = expected_type else {
             self.Err(&format!(
-                "array literal cannot initialize non-array type {}; use float4(...) for vector values",
+                "array literal cannot initialize non-array type {}; use floatN(...) or float4x4(...) constructors for vector/matrix values",
                 self.TypeName(expected_type)
             ));
             return;

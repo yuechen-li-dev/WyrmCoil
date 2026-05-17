@@ -668,3 +668,32 @@ M58b completes bounded validation for Oct-style fallibility in SDSL-V.
 - `error(...)` is only valid in fallible return position (`return error("...");`).
 - Fallible `match` is still future work.
 - HLSL emission remains explicitly unsupported for modules that contain fallible functions/expressions (`fallible function emission is not implemented in SDSL-V M58`).
+
+
+## M62 array vs vector/matrix constructor distinction
+
+M62 tightens the authoring distinction between fixed arrays and shader numeric vectors/matrices:
+
+- `array<T, N>` is fixed-size indexed storage (`arr[i]`, `arr[i] = value`).
+- `float2`, `float3`, `float4`, and `float4x4` are shader numeric value types.
+- Bracket literals (`[ ... ]`) are array literals only and require explicit array-typed context.
+- Bracket literals do not initialize vector/matrix targets (`float3`, `float4`, `float4x4`).
+- Use numeric constructors for vector/matrix values (`float2(...)`, `float3(...)`, `float4(...)`, `float4x4(...)`).
+
+Current constructor validation in M62:
+
+- `float2`, `float3`, `float4` validate numeric component counts and numeric argument types.
+- `float4x4` validates exact 16 numeric scalar arguments.
+- Constructor diagnostics call out wrong arity and non-numeric argument kinds.
+
+Current indexing stance in M62:
+
+- Indexing is array-only (`arr[i]`).
+- Vector/matrix indexing is not part of M62; `color[0]` where `color: float4` is rejected.
+
+Out of scope in M62:
+
+- Einstein/tensor notation.
+- Oct `vector[...]` / `matrix[[...]]` literal syntax.
+- Dynamic arrays/slices.
+- Broad overload resolution for constructor signatures.
