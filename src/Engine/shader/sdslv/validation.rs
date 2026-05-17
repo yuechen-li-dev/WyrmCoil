@@ -952,7 +952,92 @@ impl<'a> Validator<'a> {
                         );
                     }
                 }
+                SdslvStatement::For {
+                    Iterator,
+                    Start,
+                    End,
+                    Step,
+                    Body,
+                    ..
+                } => {
+                    self.CheckExpressionCalls(shader, locals, Start);
+                    self.CheckExpressionCalls(shader, locals, End);
+                    let start_type = self.ResolveExpressionType(shader, locals, Start);
+                    let end_type = self.ResolveExpressionType(shader, locals, End);
+                    if !self.IsIntegerType(&start_type) && start_type != TypeRef::Unknown {
+                        self.Err(&format!(
+                            "for loop start bound must be integer; found {}",
+                            self.TypeName(&start_type)
+                        ));
+                    }
+                    if !self.IsIntegerType(&end_type) && end_type != TypeRef::Unknown {
+                        self.Err(&format!(
+                            "for loop end bound must be integer; found {}",
+                            self.TypeName(&end_type)
+                        ));
+                    }
+                    if let Some(step_expr) = Step {
+                        self.CheckExpressionCalls(shader, locals, step_expr);
+                        let step_type = self.ResolveExpressionType(shader, locals, step_expr);
+                        if !self.IsIntegerType(&step_type) && step_type != TypeRef::Unknown {
+                            self.Err(&format!(
+                                "for loop step must be integer; found {}",
+                                self.TypeName(&step_type)
+                            ));
+                        }
+                        if self.IsKnownNonPositiveInteger(step_expr) {
+                            self.Err("for loop step must be greater than zero");
+                        }
+                    }
+                    let mut nested_locals = locals.clone();
+                    nested_locals.insert(
+                        Iterator.clone(),
+                        self.InferLoopIteratorType(&start_type, &end_type),
+                    );
+                    self.ValidateStatements(
+                        shader,
+                        function,
+                        Body,
+                        &mut nested_locals,
+                        parameter_types,
+                        return_type,
+                    );
+                }
             }
+        }
+    }
+
+    fn IsIntegerType(&self, ty: &TypeRef) -> bool {
+        let Some(name) = ty.Name() else { return false };
+        matches!(self.ResolveUnderlyingName(name).as_str(), "i32" | "u32")
+    }
+
+    fn InferLoopIteratorType(&self, start: &TypeRef, end: &TypeRef) -> TypeRef {
+        let Some(start_name) = start.Name() else {
+            return TypeRef::Named("i32".to_string());
+        };
+        let Some(end_name) = end.Name() else {
+            return TypeRef::Named("i32".to_string());
+        };
+        let start_under = self.ResolveUnderlyingName(start_name);
+        let end_under = self.ResolveUnderlyingName(end_name);
+        if start_under == "u32" && end_under == "u32" {
+            TypeRef::Named("u32".to_string())
+        } else {
+            TypeRef::Named("i32".to_string())
+        }
+    }
+
+    fn IsKnownNonPositiveInteger(&self, expr: &SdslvExpression) -> bool {
+        match expr {
+            SdslvExpression::IntegerLiteral(raw) => {
+                raw.parse::<i64>().map(|v| v <= 0).unwrap_or(false)
+            }
+            SdslvExpression::Unary {
+                Operator: SdslvUnaryOperator::Negate,
+                Operand,
+            } => matches!(Operand.as_ref(), SdslvExpression::IntegerLiteral(_)),
+            _ => false,
         }
     }
 

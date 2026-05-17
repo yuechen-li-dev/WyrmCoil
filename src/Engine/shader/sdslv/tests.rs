@@ -293,6 +293,126 @@ fn ParserInvalidCases() {
 }
 
 #[test]
+fn LexerForRangeAndDotTokens() {
+    let tokens = LexSource("for i in 0..4 { let x: i32; } input.Color;").unwrap();
+    assert!(
+        tokens
+            .iter()
+            .any(|x| matches!(x.Kind, SdslvTokenKind::KeywordFor)),
+        "for should tokenize as keyword"
+    );
+    assert!(
+        tokens
+            .iter()
+            .any(|x| matches!(x.Kind, SdslvTokenKind::KeywordIn)),
+        "in should tokenize as keyword"
+    );
+    assert!(
+        tokens
+            .iter()
+            .any(|x| matches!(x.Kind, SdslvTokenKind::Range)),
+        ".. should tokenize as range"
+    );
+    assert!(
+        tokens.iter().any(|x| matches!(x.Kind, SdslvTokenKind::Dot)),
+        ". should still tokenize as dot for member access"
+    );
+}
+
+#[test]
+fn ParserForStatementParsesWithAndWithoutStep() {
+    let src = "shader S { fn Sum(limit: i32) -> i32 { let sum: i32 = 0; for i in 0..limit { sum = sum + i; } for j in 0..limit step 2 { sum = sum + j; } return sum; } }";
+    let module = ParseSource(src).expect("for loops should parse");
+    let shader = module
+        .Declarations
+        .iter()
+        .find_map(|d| match d {
+            SdslvDecl::Shader(s) => Some(s),
+            _ => None,
+        })
+        .expect("shader expected");
+    let body = shader.Methods[0].Body.as_ref().expect("body expected");
+    assert!(matches!(
+        &body.Statements[1],
+        SdslvStatement::For { Step: None, .. }
+    ));
+    assert!(matches!(
+        &body.Statements[2],
+        SdslvStatement::For { Step: Some(_), .. }
+    ));
+}
+
+#[test]
+fn ParserForMalformedFormsReportErrors() {
+    assert!(
+        ParseSource("shader S { fn F() -> i32 { for i 0..4 { return 0; } return 0; } }").is_err(),
+        "missing in should fail"
+    );
+    assert!(
+        ParseSource("shader S { fn F() -> i32 { for i in 0 4 { return 0; } return 0; } }").is_err(),
+        "missing range operator should fail"
+    );
+    assert!(
+        ParseSource("shader S { fn F() -> i32 { for i in 0..4 return 0; } }").is_err(),
+        "missing loop body braces should fail"
+    );
+}
+
+#[test]
+fn ParserWhileReportsExplicitUnsupportedDiagnostic() {
+    let diagnostics =
+        ParseSource("shader S { fn F(a: i32) -> i32 { while a < 4 { return a; } return a; } }")
+            .expect_err("while should be explicitly unsupported");
+    assert!(
+        diagnostics.iter().any(|d| d.Message.contains(
+            "while loops are not supported in SDSL-V yet; use bounded for loops instead"
+        )),
+        "while should report explicit unsupported diagnostic"
+    );
+}
+
+#[test]
+fn ParserRejectsReservedKeywordsAsIdentifiers() {
+    for (source, keyword) in [
+        (
+            "shader S { fn F() -> i32 { let step: i32 = 1; return step; } }",
+            "step",
+        ),
+        (
+            "shader S { fn F() -> i32 { let flow: i32 = 1; return flow; } }",
+            "flow",
+        ),
+        (
+            "shader S { fn F() -> i32 { let state: i32 = 1; return state; } }",
+            "state",
+        ),
+        (
+            "shader S { fn F() -> i32 { let sum: i32 = 0; for step in 0..4 { sum = sum + 1; } return sum; } }",
+            "step",
+        ),
+    ] {
+        let diagnostics =
+            ParseSource(source).expect_err("reserved keyword identifier should be rejected");
+        assert!(
+            diagnostics.iter().any(|d| d.Message.contains(&format!(
+                "'{}' is a reserved keyword in SDSL-V and cannot be used as an identifier",
+                keyword
+            ))),
+            "expected reserved-keyword diagnostic for '{}'",
+            keyword
+        );
+    }
+}
+
+#[test]
+fn ParserStillAcceptsNormalIdentifiersAndFlowStateSyntax() {
+    ParseSource("shader S { fn F(limit: i32) -> i32 { let count: i32 = 1; for i in 0..limit step 2 { count = count + i; } return count; } }")
+        .expect("normal identifiers and for-step syntax should parse");
+    ParseSource("flow Router(x: i32) -> i32 { state Start { when { case x > 0 -> return x else -> return 0 } } }")
+        .expect("flow state syntax should still parse");
+}
+
+#[test]
 fn ValidationValidFixture() {
     let src = include_str!("../../../../examples/sdslv/flat_color.sdslv");
     assert!(ValidateSource(src).is_ok());
@@ -2171,4 +2291,54 @@ shader S {
         !hlsl.contains("if (code) {"),
         "subject-switch lowering should not treat case values as boolean conditions"
     );
+}
+
+#[test]
+fn ValidationForLoopsEnforceIntegerBoundsAndStepRules() {
+    ValidateSource("shader S { fn F(limit: i32) -> i32 { let sum: i32 = 0; for i in 0..limit { sum = sum + i; } return sum; } }")
+        .expect("integer-bounded for loop should validate");
+    let float_start = ValidateSource("shader S { fn F(limit: i32) -> i32 { let sum: i32 = 0; for i in 1.5..limit { sum = sum + i; } return sum; } }").expect_err("float start bound should fail");
+    assert!(
+        float_start.iter().any(|d| d
+            .Message
+            .contains("for loop start bound must be integer; found float")),
+        "float start should report integer-bound diagnostic"
+    );
+    let bool_end = ValidateSource("shader S { fn F(flag: bool) -> i32 { let sum: i32 = 0; for i in 0..flag { sum = sum + i; } return sum; } }").expect_err("bool end bound should fail");
+    assert!(
+        bool_end.iter().any(|d| d
+            .Message
+            .contains("for loop end bound must be integer; found bool")),
+        "bool end should report integer-bound diagnostic"
+    );
+    let float_step = ValidateSource("shader S { fn F(limit: i32) -> i32 { let sum: i32 = 0; for i in 0..limit step 1.5 { sum = sum + i; } return sum; } }").expect_err("float step should fail");
+    assert!(
+        float_step.iter().any(|d| d
+            .Message
+            .contains("for loop step must be integer; found float")),
+        "float step should report integer diagnostic"
+    );
+    let zero_step = ValidateSource("shader S { fn F(limit: i32) -> i32 { let sum: i32 = 0; for i in 0..limit step 0 { sum = sum + i; } return sum; } }").expect_err("zero step should fail");
+    assert!(
+        zero_step.iter().any(|d| d
+            .Message
+            .contains("for loop step must be greater than zero")),
+        "non-positive step should report positivity diagnostic"
+    );
+}
+
+#[test]
+fn ForLoopEmissionIsDeterministicAndStructured() {
+    let src = "shader S { fn F(limit: i32) -> i32 { let sum: i32 = 0; for i in 0..limit step 2 { sum = sum + i; } return sum; } }";
+    let hlsl_a = CompileSourceToHlsl(src).expect("for loop should lower to hlsl");
+    let hlsl_b = CompileSourceToHlsl(src).expect("for loop emission should be deterministic");
+    assert!(
+        hlsl_a.contains("for (int i = 0; i < limit; i = i + 2) {"),
+        "expected explicit bounded for-loop lowering"
+    );
+    assert!(
+        hlsl_a.contains("sum = sum + i;"),
+        "loop body should be emitted"
+    );
+    assert_eq!(hlsl_a, hlsl_b, "repeated emissions must match exactly");
 }

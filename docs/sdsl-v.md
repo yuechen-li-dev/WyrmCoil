@@ -898,7 +898,7 @@ M20 remains intentionally scaffold-only:
 - no conversion from runtime `RenderSnapshot` into draw buffers yet
 
 
-## M56 control-flow status
+## M57 control-flow status
 
 Implemented in M56 (building on M55c):
 - `if` statement validation and deterministic HLSL lowering.
@@ -924,7 +924,23 @@ M56 validation/lowering rules:
 - no switch fallthrough (expression arms only).
 - unsupported switch expression contexts are diagnosed rather than lowered with placeholders.
 
+Implemented in M57 (building on M56):
+- bounded numeric `for` loops:
+  - `for i in start..end { ... }`
+  - `for i in start..end step k { ... }`
+- range semantics are inclusive start, exclusive end.
+- `step` defaults to `1`.
+- start/end bounds must be integer-typed when known.
+- `step` must be integer-typed when known and must be greater than zero for statically known integer literals.
+- loop variable is scoped to the loop body and validated as an integer local.
+- HLSL lowering is deterministic bounded `for`:
+  - `for (int i = start; i < end; i = i + step) { ... }`
+- `while` is reserved for a future bounded condition-loop design and is currently rejected with an explicit diagnostic.
+- bounded `for` is the supported loop form for predictable GPU execution.
+- `flow`, `state`, and `step` are reserved SDSL-V keywords and cannot be used as identifiers.
+
 Still future work:
-- loops (`for`/`while`)
+- `while` loops
+- `break` / `continue`
 - `match` and enum-payload pattern matching
 - generalized statement-expression lowering beyond bounded M55c contexts

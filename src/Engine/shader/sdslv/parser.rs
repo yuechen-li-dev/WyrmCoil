@@ -739,6 +739,15 @@ impl<'a> Parser<'a> {
         if self.MatchKw(SdslvTokenKind::KeywordIf) {
             return self.ParseIfStatement();
         }
+        if self.MatchKw(SdslvTokenKind::KeywordFor) {
+            return self.ParseForStatement();
+        }
+        if self.MatchKw(SdslvTokenKind::KeywordWhile) {
+            self.ErrHere(
+                "while loops are not supported in SDSL-V yet; use bounded for loops instead",
+            );
+            return None;
+        }
         if self.Check(SdslvTokenKind::KeywordStage) || self.Check(SdslvTokenKind::KeywordFn) {
             self.ErrHere("statement form not supported in SDSL-V M4 body subset");
             return None;
@@ -747,7 +756,7 @@ impl<'a> Parser<'a> {
             Kind: SdslvTokenKind::Identifier(name),
             ..
         }) = self.Tokens.get(self.I)
-            && (name == "for" || name == "while" || name == "match")
+            && name == "match"
         {
             self.ErrHere("unsupported statement in SDSL-V M4 body subset");
             return None;
@@ -812,6 +821,53 @@ impl<'a> Parser<'a> {
                 End: end.End,
                 Line: start.Line,
                 Column: start.Column,
+            },
+        })
+    }
+    fn ParseForStatement(&mut self) -> Option<SdslvStatement> {
+        let start_span = self.PrevSpan();
+        let iterator = self.IdentReq("for statement missing iterator identifier")?;
+        if !self.MatchKw(SdslvTokenKind::KeywordIn) {
+            self.ErrHere("for statement missing 'in' after iterator");
+            return None;
+        }
+        let start = self.ParseExpression().or_else(|| {
+            self.ErrHere("for statement missing range start expression");
+            None
+        })?;
+        if !self.MatchKw(SdslvTokenKind::Range) {
+            self.ErrHere("for statement missing '..' range operator");
+            return None;
+        }
+        let end = self.ParseExpression().or_else(|| {
+            self.ErrHere("for statement missing range end expression");
+            None
+        })?;
+        let step = if self.MatchKw(SdslvTokenKind::KeywordStep) {
+            Some(self.ParseExpression().or_else(|| {
+                self.ErrHere("for statement missing step expression");
+                None
+            })?)
+        } else {
+            None
+        };
+        if !self.MatchKw(SdslvTokenKind::LeftBrace) {
+            self.ErrHere("for statement missing '{' loop body");
+            return None;
+        }
+        let body = self.ParseBody()?.Statements;
+        let end_span = self.PrevSpan();
+        Some(SdslvStatement::For {
+            Iterator: iterator,
+            Start: start,
+            End: end,
+            Step: step,
+            Body: body,
+            Span: SdslvSpan {
+                Start: start_span.Start,
+                End: end_span.End,
+                Line: start_span.Line,
+                Column: start_span.Column,
             },
         })
     }
@@ -1115,6 +1171,13 @@ impl<'a> Parser<'a> {
         Some(SdslvPath { Segments: seg })
     }
     fn IdentReq(&mut self, m: &str) -> Option<String> {
+        if let Some(keyword_name) = self.CurrentReservedKeywordName() {
+            self.ErrHere(&format!(
+                "'{}' is a reserved keyword in SDSL-V and cannot be used as an identifier",
+                keyword_name
+            ));
+            return None;
+        }
         let r = self.Ident();
         if r.is_none() {
             self.ErrHere(m);
@@ -1163,6 +1226,28 @@ impl<'a> Parser<'a> {
                 Column: 1,
             });
         self.Diagnostics.push(SdslvDiagnostic::New(m, s));
+    }
+    fn CurrentReservedKeywordName(&self) -> Option<&'static str> {
+        let token = self.Tokens.get(self.I)?;
+        match token.Kind {
+            SdslvTokenKind::KeywordFlow => Some("flow"),
+            SdslvTokenKind::KeywordState => Some("state"),
+            SdslvTokenKind::KeywordStep => Some("step"),
+            SdslvTokenKind::KeywordWhile => Some("while"),
+            SdslvTokenKind::KeywordFor => Some("for"),
+            SdslvTokenKind::KeywordSwitch => Some("switch"),
+            SdslvTokenKind::KeywordCase => Some("case"),
+            SdslvTokenKind::KeywordElse => Some("else"),
+            SdslvTokenKind::KeywordIf => Some("if"),
+            SdslvTokenKind::KeywordRecord => Some("record"),
+            SdslvTokenKind::KeywordStream => Some("stream"),
+            SdslvTokenKind::KeywordShader => Some("shader"),
+            SdslvTokenKind::KeywordInterface => Some("interface"),
+            SdslvTokenKind::KeywordFn => Some("fn"),
+            SdslvTokenKind::KeywordLet => Some("let"),
+            SdslvTokenKind::KeywordReturn => Some("return"),
+            _ => None,
+        }
     }
     fn PrevSpan(&self) -> SdslvSpan {
         self.Tokens[self.I - 1].Span

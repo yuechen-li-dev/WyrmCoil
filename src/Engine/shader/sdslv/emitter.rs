@@ -467,6 +467,36 @@ impl<'a> HlslEmitter<'a> {
                 }
                 lines
             }
+            SdslvStatement::For {
+                Iterator,
+                Start,
+                End,
+                Step,
+                Body,
+                ..
+            } => {
+                let step_text = Step
+                    .as_ref()
+                    .map(|value| self.EmitExpression(value, 0))
+                    .unwrap_or("1".to_string());
+                let mut lines = vec![format!(
+                    "for (int {} = {}; {} < {}; {} = {} + {}) {{",
+                    Iterator,
+                    self.EmitExpression(Start, 0),
+                    Iterator,
+                    self.EmitExpression(End, 0),
+                    Iterator,
+                    Iterator,
+                    step_text
+                )];
+                for nested in Body {
+                    for nested_line in self.EmitStatementLines(nested, with_counter) {
+                        lines.push(format!("    {}", nested_line));
+                    }
+                }
+                lines.push("}".to_string());
+                lines
+            }
         }
     }
 
