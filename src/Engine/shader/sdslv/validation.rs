@@ -847,7 +847,26 @@ impl<'a> Validator<'a> {
         }
         let return_type = self.PathToType(&function.ReturnType);
 
-        for statement in &body.Statements {
+        self.ValidateStatements(
+            shader,
+            function,
+            &body.Statements,
+            &mut locals,
+            &parameter_types,
+            &return_type,
+        );
+    }
+
+    fn ValidateStatements(
+        &mut self,
+        shader: &SdslvShaderDecl,
+        function: &SdslvFunctionDecl,
+        statements: &[SdslvStatement],
+        locals: &mut HashMap<String, TypeRef>,
+        parameter_types: &HashMap<String, TypeRef>,
+        return_type: &TypeRef,
+    ) {
+        for statement in statements {
             match statement {
                 SdslvStatement::Let {
                     Name,
@@ -856,42 +875,82 @@ impl<'a> Validator<'a> {
                 } => {
                     let expected = self.PathToType(TypeName);
                     if let Some(init) = Initializer {
-                        self.CheckExpressionCalls(shader, &locals, init);
-                        let actual = self.ResolveExpressionType(shader, &locals, init);
+                        self.CheckExpressionCalls(shader, locals, init);
+                        let actual = self.ResolveExpressionType(shader, locals, init);
                         if let Some(msg) = self.TypeMismatch("type mismatch", &expected, &actual) {
                             self.Err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                         }
+                        self.ValidateSwitchExpression(shader, locals, init);
                     }
                     locals.insert(Name.clone(), expected);
                 }
                 SdslvStatement::Assign { Target, Value } => {
-                    self.CheckExpressionCalls(shader, &locals, Value);
-                    self.ValidateImmutableAggregateParameterAssignment(&parameter_types, Target);
-                    let expected = self.ResolveAssignmentTargetType(shader, &locals, Target);
-                    let actual = self.ResolveExpressionType(shader, &locals, Value);
+                    self.CheckExpressionCalls(shader, locals, Value);
+                    self.ValidateImmutableAggregateParameterAssignment(parameter_types, Target);
+                    let expected = self.ResolveAssignmentTargetType(shader, locals, Target);
+                    let actual = self.ResolveExpressionType(shader, locals, Value);
                     if let Some(msg) =
                         self.TypeMismatch("assignment type mismatch", &expected, &actual)
                     {
                         self.Err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                     }
+                    self.ValidateSwitchExpression(shader, locals, Value);
                 }
                 SdslvStatement::Return { Value } => {
-                    self.CheckExpressionCalls(shader, &locals, Value);
-                    let actual = self.ResolveExpressionType(shader, &locals, Value);
+                    self.CheckExpressionCalls(shader, locals, Value);
+                    let actual = self.ResolveExpressionType(shader, locals, Value);
                     if let Some(msg) = self.TypeMismatch(
                         &format!("return type mismatch in {}", function.Name),
-                        &return_type,
+                        return_type,
                         &actual,
                     ) {
                         self.Err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                     }
+                    self.ValidateSwitchExpression(shader, locals, Value);
                 }
                 SdslvStatement::Expression { Value } => {
-                    self.CheckExpressionCalls(shader, &locals, Value);
+                    self.CheckExpressionCalls(shader, locals, Value);
+                    self.ValidateSwitchExpression(shader, locals, Value);
                 }
                 SdslvStatement::Empty => {}
-                SdslvStatement::If { .. } => {
-                    self.Err("if statement validation not implemented");
+                SdslvStatement::If {
+                    Condition,
+                    ThenBody,
+                    ElseBody,
+                    ..
+                } => {
+                    self.CheckExpressionCalls(shader, locals, Condition);
+                    let condition_type = self.ResolveExpressionType(shader, locals, Condition);
+                    if condition_type != TypeRef::Unknown
+                        && condition_type != TypeRef::Named("bool".to_string())
+                    {
+                        self.Err(&format!(
+                            "if condition must be bool; found {}",
+                            self.TypeName(&condition_type)
+                        ));
+                    }
+                    self.ValidateStatements(
+                        shader,
+                        function,
+                        ThenBody,
+                        locals,
+                        parameter_types,
+                        return_type,
+                    );
+                    if let Some(else_body) = ElseBody {
+                        if else_body.len() == 1 && matches!(else_body[0], SdslvStatement::If { .. })
+                        {
+                            self.Err("nested decision ladder is not allowed; use switch { case ... else ... }");
+                        }
+                        self.ValidateStatements(
+                            shader,
+                            function,
+                            else_body,
+                            locals,
+                            parameter_types,
+                            return_type,
+                        );
+                    }
                 }
             }
         }
@@ -1001,6 +1060,15 @@ impl<'a> Validator<'a> {
                     self.CheckExpressionCalls(shader, locals, &update.Value);
                 }
             }
+            SdslvExpression::Switch {
+                Cases, ElseValue, ..
+            } => {
+                for case in Cases {
+                    self.CheckExpressionCalls(shader, locals, &case.Condition);
+                    self.CheckExpressionCalls(shader, locals, &case.Value);
+                }
+                self.CheckExpressionCalls(shader, locals, ElseValue);
+            }
             _ => {}
         }
     }
@@ -1034,20 +1102,100 @@ impl<'a> Validator<'a> {
             SdslvExpression::Call { Callee, Arguments } => {
                 self.ResolveCallType(shader, locals, Callee, Arguments)
             }
-            SdslvExpression::Binary { Left, Right, .. } => {
+            SdslvExpression::Binary {
+                Left,
+                Operator,
+                Right,
+            } => {
                 let l = self.ResolveExpressionType(shader, locals, Left);
                 let r = self.ResolveExpressionType(shader, locals, Right);
-                if self.AreCompatible(&l, &r) {
-                    l
-                } else {
-                    TypeRef::Unknown
+                match Operator {
+                    SdslvBinaryOperator::Equal
+                    | SdslvBinaryOperator::NotEqual
+                    | SdslvBinaryOperator::Less
+                    | SdslvBinaryOperator::LessEqual
+                    | SdslvBinaryOperator::Greater
+                    | SdslvBinaryOperator::GreaterEqual => {
+                        if self.AreCompatible(&l, &r) {
+                            TypeRef::Named("bool".to_string())
+                        } else {
+                            TypeRef::Unknown
+                        }
+                    }
+                    _ => {
+                        if self.AreCompatible(&l, &r) {
+                            l
+                        } else {
+                            TypeRef::Unknown
+                        }
+                    }
                 }
             }
             SdslvExpression::Unary { Operand, .. } => {
                 self.ResolveExpressionType(shader, locals, Operand)
             }
             SdslvExpression::With { Base, .. } => self.ResolveExpressionType(shader, locals, Base),
-            SdslvExpression::Switch { .. } => TypeRef::Unknown,
+            SdslvExpression::Switch {
+                Cases, ElseValue, ..
+            } => {
+                let mut current = self.ResolveExpressionType(shader, locals, ElseValue);
+                for case in Cases {
+                    let case_type = self.ResolveExpressionType(shader, locals, &case.Value);
+                    if self.AreCompatible(&current, &case_type) {
+                        if current == TypeRef::Unknown {
+                            current = case_type;
+                        }
+                    } else if current == TypeRef::Unknown {
+                        current = case_type;
+                    } else if case_type != TypeRef::Unknown {
+                        return TypeRef::Unknown;
+                    }
+                }
+                current
+            }
+        }
+    }
+
+    fn ValidateSwitchExpression(
+        &mut self,
+        shader: &SdslvShaderDecl,
+        locals: &HashMap<String, TypeRef>,
+        expression: &SdslvExpression,
+    ) {
+        let SdslvExpression::Switch {
+            Cases, ElseValue, ..
+        } = expression
+        else {
+            return;
+        };
+        if Cases.is_empty() {
+            self.Err("switch must contain at least one case");
+            return;
+        }
+        let mut expected_type = self.ResolveExpressionType(shader, locals, ElseValue);
+        for case in Cases {
+            let condition_type = self.ResolveExpressionType(shader, locals, &case.Condition);
+            if condition_type != TypeRef::Unknown
+                && condition_type != TypeRef::Named("bool".to_string())
+            {
+                self.Err(&format!(
+                    "switch case condition must be bool; found {}",
+                    self.TypeName(&condition_type)
+                ));
+            }
+            let value_type = self.ResolveExpressionType(shader, locals, &case.Value);
+            if expected_type == TypeRef::Unknown {
+                expected_type = value_type;
+                continue;
+            }
+            if let Some((_, expected_name, actual_name)) =
+                self.TypeMismatch("", &expected_type, &value_type)
+            {
+                self.Err(&format!(
+                    "switch arm type mismatch: expected {}, found {}",
+                    expected_name, actual_name
+                ));
+            }
         }
     }
 
