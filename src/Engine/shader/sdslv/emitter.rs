@@ -315,6 +315,19 @@ impl<'a> HlslEmitter<'a> {
                 let type_name = TypeName.Segments.join(".");
                 let rendered = self.MapBuiltinType(&type_name).unwrap_or(&type_name);
                 if let Some(init) = Initializer {
+                    if let SdslvExpression::Switch {
+                        Cases, ElseValue, ..
+                    } = init
+                    {
+                        let mut lines = vec![format!("{} {};", rendered, Name)];
+                        lines.extend(self.EmitSwitchChainLines(
+                            Cases,
+                            ElseValue,
+                            &format!("{Name} = {{value}};"),
+                            "if",
+                        ));
+                        return lines;
+                    }
                     if let SdslvExpression::With { Base, Updates } = init {
                         let mut lines = vec![format!(
                             "{} {} = {};",
@@ -344,6 +357,18 @@ impl<'a> HlslEmitter<'a> {
                 }
             }
             SdslvStatement::Assign { Target, Value } => {
+                if let SdslvExpression::Switch {
+                    Cases, ElseValue, ..
+                } = Value
+                {
+                    let target_text = self.EmitExpression(Target, 0);
+                    return self.EmitSwitchChainLines(
+                        Cases,
+                        ElseValue,
+                        &format!("{target_text} = {{value}};"),
+                        "if",
+                    );
+                }
                 if let SdslvExpression::With { Base, Updates } = Value {
                     let target_text = self.EmitExpression(Target, 0);
                     let mut lines = vec![format!(
@@ -369,6 +394,12 @@ impl<'a> HlslEmitter<'a> {
                 }
             }
             SdslvStatement::Return { Value } => {
+                if let SdslvExpression::Switch {
+                    Cases, ElseValue, ..
+                } = Value
+                {
+                    return self.EmitSwitchChainLines(Cases, ElseValue, "return {value};", "if");
+                }
                 if let SdslvExpression::With { Base, Updates } = Value {
                     let temp_name = format!("__with{}", *with_counter);
                     *with_counter += 1;
@@ -395,11 +426,68 @@ impl<'a> HlslEmitter<'a> {
                 vec![format!("{};", self.EmitExpression(Value, 0))]
             }
             SdslvStatement::Empty => vec![";".to_string()],
-            SdslvStatement::If { .. } => {
-                self.Err("if statement emission not implemented");
-                vec!["/* if statement emission not implemented */".to_string()]
+            SdslvStatement::If {
+                Condition,
+                ThenBody,
+                ElseBody,
+                ..
+            } => {
+                let mut lines = vec![format!("if ({}) {{", self.EmitExpression(Condition, 0))];
+                for nested in ThenBody {
+                    for nested_line in self.EmitStatementLines(nested, with_counter) {
+                        lines.push(format!("    {}", nested_line));
+                    }
+                }
+                lines.push("}".to_string());
+                if let Some(else_body) = ElseBody {
+                    lines.push("else {".to_string());
+                    for nested in else_body {
+                        for nested_line in self.EmitStatementLines(nested, with_counter) {
+                            lines.push(format!("    {}", nested_line));
+                        }
+                    }
+                    lines.push("}".to_string());
+                }
+                lines
             }
         }
+    }
+
+    fn EmitSwitchChainLines(
+        &mut self,
+        cases: &[SdslvSwitchCase],
+        else_value: &SdslvExpression,
+        template: &str,
+        first_keyword: &str,
+    ) -> Vec<String> {
+        let mut lines = vec![];
+        if cases.is_empty() {
+            self.Err("switch expression is not supported in this expression context in M55c");
+            return vec![
+                "/* switch expression is not supported in this expression context in M55c */"
+                    .to_string(),
+            ];
+        }
+        for (index, case) in cases.iter().enumerate() {
+            let keyword = if index == 0 { first_keyword } else { "else if" };
+            lines.push(format!(
+                "{} ({}) {{",
+                keyword,
+                self.EmitExpression(&case.Condition, 0)
+            ));
+            lines.push(format!(
+                "    {}",
+                template.replace("{value}", &self.EmitExpression(&case.Value, 0))
+            ));
+            lines.push("}".to_string());
+        }
+        lines.push("else {".to_string());
+        lines.push(format!(
+            "    {}",
+            template.replace("{value}", &self.EmitExpression(else_value, 0))
+        ));
+        lines.push("}".to_string());
+        lines
     }
 
     fn EmitExpression(&self, expression: &SdslvExpression, parent_prec: u8) -> String {
@@ -463,7 +551,8 @@ impl<'a> HlslEmitter<'a> {
             }
             SdslvExpression::With { .. } => "/*with-unsupported*/".to_string(),
             SdslvExpression::Switch { .. } => {
-                "/* switch expression emission not implemented */".to_string()
+                "/* switch expression is not supported in this expression context in M55c */"
+                    .to_string()
             }
         }
     }

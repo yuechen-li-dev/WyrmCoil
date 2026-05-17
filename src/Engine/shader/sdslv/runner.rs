@@ -136,7 +136,7 @@ fn execute_statement(
             Span: None,
         }),
         SdslvStatement::If { .. } => Err(SdslvAssertFailure {
-            Message: "if statement is not supported in SDSL-V M55b test execution".to_string(),
+            Message: "if statement is not supported in SDSL-V M55c test execution".to_string(),
             Span: None,
         }),
     }
@@ -296,7 +296,7 @@ fn EvalExpression(
             Span: None,
         }),
         SdslvExpression::Switch { .. } => Err(SdslvAssertFailure {
-            Message: "switch expression is not supported in SDSL-V M55b test execution".to_string(),
+            Message: "switch expression is not supported in SDSL-V M55c test execution".to_string(),
             Span: None,
         }),
     }

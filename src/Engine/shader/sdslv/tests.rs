@@ -1965,3 +1965,111 @@ fn CompileHlslWithDxcIntegrationWhenEnabled() {
         "DXC should produce output bytes"
     );
 }
+
+#[test]
+fn ValidationIfAndSwitchRulesM55c() {
+    let valid_if = r#"
+shader S {
+    fn F(weight: i32, outer: bool, inner: bool) -> i32 {
+        if outer { if inner { return 1; } }
+        if weight < 5 { return 2; } else { return 3; }
+    }
+}
+"#;
+    ValidateSource(valid_if).expect("bool if conditions and non-ladder nested if should validate");
+
+    let invalid_if = ValidateSource(
+        "shader S { fn F(weight: i32) -> i32 { if weight { return 1; } return 0; } }",
+    )
+    .expect_err("non-bool if condition should fail");
+    assert!(
+        invalid_if
+            .iter()
+            .any(|d| d.Message.contains("if condition must be bool; found i32")),
+        "expected non-bool if condition diagnostic"
+    );
+
+    let ladder = ValidateSource("shader S { fn F(weight: i32) -> i32 { if weight < 1 { return 1; } else { if weight < 5 { return 2; } else { return 3; } } } }").expect_err("else-if ladder shape should fail");
+    assert!(
+        ladder.iter().any(|d| d
+            .Message
+            .contains("nested decision ladder is not allowed; use switch { case ... else ... }")),
+        "expected nested ladder diagnostic"
+    );
+
+    let switch_ok = ValidateSource("shader S { fn F(weight: i32) -> i32 { return switch { case weight < 1 => 1 case weight < 5 => 2 else => 3 }; } }").expect("switch with bool cases and matching arm types should validate");
+    let _ = switch_ok;
+
+    let switch_bad_condition = ValidateSource(
+        "shader S { fn F(weight: i32) -> i32 { return switch { case weight => 1 else => 2 }; } }",
+    )
+    .expect_err("non-bool switch case condition should fail");
+    assert!(
+        switch_bad_condition.iter().any(|d| d
+            .Message
+            .contains("switch case condition must be bool; found i32")),
+        "expected switch bool-condition diagnostic"
+    );
+
+    let switch_bad_type = ValidateSource("shader S { fn F(weight: i32) -> i32 { return switch { case weight < 1 => 1 else => float4(1.0, 0.0, 0.0, 1.0) }; } }").expect_err("switch arm type mismatch should fail");
+    assert!(
+        switch_bad_type
+            .iter()
+            .any(|d| d.Message.contains("switch arm type mismatch:")
+                || d.Message.contains("return type mismatch in F")),
+        "expected switch arm mismatch diagnostic"
+    );
+}
+
+#[test]
+fn EmitHlslIfAndSwitchLoweringM55c() {
+    let src = r#"
+shader S {
+    fn F(weight: i32, alpha: float, inner: bool) -> i32 {
+        let tier: i32 = switch { case weight < 1 => 1 case weight < 5 => 2 else => 3 };
+        tier = switch { case weight < 2 => 4 case weight < 4 => 5 else => 6 };
+        if alpha < 0.5 {
+            return switch { case inner => 7 else => 8 };
+        } else {
+            return tier;
+        }
+    }
+}
+"#;
+    let hlsl = CompileSourceToHlsl(src).expect("if + switch lowering should compile to HLSL");
+    assert!(
+        hlsl.contains("int tier;"),
+        "local switch init should lower to declaration"
+    );
+    assert!(
+        hlsl.contains("if (weight < 1) {"),
+        "switch lowering should start with if"
+    );
+    assert!(
+        hlsl.contains("else if (weight < 5) {"),
+        "switch lowering should include else-if"
+    );
+    assert!(
+        hlsl.contains("tier = 1;"),
+        "switch init should assign arm values"
+    );
+    assert!(
+        hlsl.contains("tier = 4;"),
+        "switch assignment RHS should lower to assignments"
+    );
+    assert!(
+        hlsl.contains("if (alpha < 0.5) {"),
+        "if statement should lower"
+    );
+    assert!(
+        hlsl.contains("return 7;"),
+        "return switch arm should lower to return"
+    );
+    assert!(
+        !hlsl.contains("not implemented"),
+        "supported control flow must not emit placeholders"
+    );
+
+    let again = CompileSourceToHlsl(src).expect("second compile should also succeed");
+    assert_eq!(hlsl, again, "emission should be deterministic");
+}

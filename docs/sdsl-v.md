@@ -896,3 +896,25 @@ M20 remains intentionally scaffold-only:
 - no `wgpu` pipeline-layout/render-pipeline creation
 - no material, bind-group, or asset-pipeline expansion
 - no conversion from runtime `RenderSnapshot` into draw buffers yet
+
+
+## M55c control-flow status
+
+Implemented in M55c:
+- `if` statement validation and deterministic HLSL lowering.
+- condition-switch expression validation and bounded HLSL lowering in:
+  - local initializer (`let x: T = switch { ... };`)
+  - assignment RHS (`x = switch { ... };`)
+  - return expression (`return switch { ... };`)
+
+M55c validation rules:
+- `if` condition must be `bool` when known (`if condition must be bool; found ...`).
+- nested decision ladders are rejected for `else { if ... }` single-statement shape.
+- switch case conditions must be `bool` when known.
+- switch arms must be type-compatible where known.
+- unsupported switch expression contexts are diagnosed rather than lowered with placeholders.
+
+Still future work:
+- loops (`for`/`while`)
+- `match` and enum-payload pattern matching
+- generalized statement-expression lowering beyond bounded M55c contexts

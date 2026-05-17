@@ -202,9 +202,19 @@ Current supported expressions:
   - `switch { case cond => expr ... else => expr }`
   - `switch { case cond -> expr ... else -> expr }`
 
+Implemented in M55c:
+- `if` statements validate and lower to HLSL `if`/`else` blocks.
+- condition-switch expressions (`switch { case cond => expr ... else => expr }`) validate and lower in bounded statement contexts (local initializer, assignment RHS, return expression).
+
+Validation/lowering rules (M55c):
+- `if` condition must be `bool` when known; known non-bool is rejected.
+- nested decision ladders in `else { if ... }` shape are rejected; use `switch { case ... else ... }`.
+- switch requires at least one `case` and an `else`.
+- each switch `case` condition must be `bool` when known.
+- switch arm values must be type-compatible where known.
+- switch expression use outside supported statement contexts emits a clear M55c diagnostic.
+
 Not currently fully supported in shader function bodies:
-- `if` validation/emission (parsed in M55b; later phases still report explicit unsupported diagnostics)
-- `switch` validation/emission (parsed in M55b; later phases still report explicit unsupported diagnostics)
 - loops (`for`, `while`)
 - `match`
 - nested block-control syntax beyond the bounded parser subset
