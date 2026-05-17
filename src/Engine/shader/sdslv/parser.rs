@@ -824,6 +824,14 @@ impl<'a> Parser<'a> {
     }
     fn ParseSwitchExpression(&mut self) -> Option<SdslvExpression> {
         let start = self.PrevSpan();
+        let subject = if self.Check(SdslvTokenKind::LeftBrace) {
+            None
+        } else {
+            Some(Box::new(self.ParseExpression().or_else(|| {
+                self.ErrHere("switch expression missing subject expression");
+                None
+            })?))
+        };
         if !self.MatchKw(SdslvTokenKind::LeftBrace) {
             self.ErrHere("switch expression missing '{'");
             return None;
@@ -875,7 +883,7 @@ impl<'a> Parser<'a> {
         };
         let end = self.PrevSpan();
         Some(SdslvExpression::Switch {
-            Subject: None,
+            Subject: subject,
             Cases: cases,
             ElseValue: Box::new(else_expr),
             Span: SdslvSpan {

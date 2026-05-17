@@ -201,17 +201,23 @@ Current supported expressions:
 - condition-switch expressions parse into AST (M55b):
   - `switch { case cond => expr ... else => expr }`
   - `switch { case cond -> expr ... else -> expr }`
+- subject-switch expressions parse into AST (M56):
+  - `switch subject { case value => expr ... else => expr }`
+  - `switch subject { case value -> expr ... else -> expr }`
 
-Implemented in M55c:
+Implemented in M56 (with M55c preserved):
 - `if` statements validate and lower to HLSL `if`/`else` blocks.
 - condition-switch expressions (`switch { case cond => expr ... else => expr }`) validate and lower in bounded statement contexts (local initializer, assignment RHS, return expression).
+- subject-switch expressions (`switch subject { case value => expr ... else => expr }`) validate and lower in the same bounded statement contexts.
 
-Validation/lowering rules (M55c):
+Validation/lowering rules (M56):
 - `if` condition must be `bool` when known; known non-bool is rejected.
 - nested decision ladders in `else { if ... }` shape are rejected; use `switch { case ... else ... }`.
 - switch requires at least one `case` and an `else`.
-- each switch `case` condition must be `bool` when known.
+- condition-switch: each `case` condition must be `bool` when known.
+- subject-switch: each `case` value must match the subject type when known.
 - switch arm values must be type-compatible where known.
+- subject-switch lowers deterministically to `if (subject == case)` / `else if` / `else` chains (not HLSL `switch`).
 - switch expression use outside supported statement contexts emits a clear M55c diagnostic.
 
 Not currently fully supported in shader function bodies:

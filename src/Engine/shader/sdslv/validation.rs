@@ -1163,7 +1163,10 @@ impl<'a> Validator<'a> {
         expression: &SdslvExpression,
     ) {
         let SdslvExpression::Switch {
-            Cases, ElseValue, ..
+            Subject,
+            Cases,
+            ElseValue,
+            ..
         } = expression
         else {
             return;
@@ -1173,9 +1176,23 @@ impl<'a> Validator<'a> {
             return;
         }
         let mut expected_type = self.ResolveExpressionType(shader, locals, ElseValue);
+        let subject_type = Subject
+            .as_ref()
+            .map(|s| self.ResolveExpressionType(shader, locals, s));
         for case in Cases {
             let condition_type = self.ResolveExpressionType(shader, locals, &case.Condition);
-            if condition_type != TypeRef::Unknown
+            if let Some(subject_type) = &subject_type {
+                if *subject_type != TypeRef::Unknown {
+                    if let Some((_, expected_name, actual_name)) =
+                        self.TypeMismatch("", subject_type, &condition_type)
+                    {
+                        self.Err(&format!(
+                            "switch case type mismatch: expected {}, found {}",
+                            expected_name, actual_name
+                        ));
+                    }
+                }
+            } else if condition_type != TypeRef::Unknown
                 && condition_type != TypeRef::Named("bool".to_string())
             {
                 self.Err(&format!(

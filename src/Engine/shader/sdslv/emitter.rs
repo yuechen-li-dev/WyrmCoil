@@ -316,11 +316,15 @@ impl<'a> HlslEmitter<'a> {
                 let rendered = self.MapBuiltinType(&type_name).unwrap_or(&type_name);
                 if let Some(init) = Initializer {
                     if let SdslvExpression::Switch {
-                        Cases, ElseValue, ..
+                        Subject,
+                        Cases,
+                        ElseValue,
+                        ..
                     } = init
                     {
                         let mut lines = vec![format!("{} {};", rendered, Name)];
                         lines.extend(self.EmitSwitchChainLines(
+                            Subject.as_deref(),
                             Cases,
                             ElseValue,
                             &format!("{Name} = {{value}};"),
@@ -358,11 +362,15 @@ impl<'a> HlslEmitter<'a> {
             }
             SdslvStatement::Assign { Target, Value } => {
                 if let SdslvExpression::Switch {
-                    Cases, ElseValue, ..
+                    Subject,
+                    Cases,
+                    ElseValue,
+                    ..
                 } = Value
                 {
                     let target_text = self.EmitExpression(Target, 0);
                     return self.EmitSwitchChainLines(
+                        Subject.as_deref(),
                         Cases,
                         ElseValue,
                         &format!("{target_text} = {{value}};"),
@@ -395,10 +403,19 @@ impl<'a> HlslEmitter<'a> {
             }
             SdslvStatement::Return { Value } => {
                 if let SdslvExpression::Switch {
-                    Cases, ElseValue, ..
+                    Subject,
+                    Cases,
+                    ElseValue,
+                    ..
                 } = Value
                 {
-                    return self.EmitSwitchChainLines(Cases, ElseValue, "return {value};", "if");
+                    return self.EmitSwitchChainLines(
+                        Subject.as_deref(),
+                        Cases,
+                        ElseValue,
+                        "return {value};",
+                        "if",
+                    );
                 }
                 if let SdslvExpression::With { Base, Updates } = Value {
                     let temp_name = format!("__with{}", *with_counter);
@@ -455,6 +472,7 @@ impl<'a> HlslEmitter<'a> {
 
     fn EmitSwitchChainLines(
         &mut self,
+        subject: Option<&SdslvExpression>,
         cases: &[SdslvSwitchCase],
         else_value: &SdslvExpression,
         template: &str,
@@ -470,11 +488,16 @@ impl<'a> HlslEmitter<'a> {
         }
         for (index, case) in cases.iter().enumerate() {
             let keyword = if index == 0 { first_keyword } else { "else if" };
-            lines.push(format!(
-                "{} ({}) {{",
-                keyword,
+            let condition = if let Some(subject) = subject {
+                format!(
+                    "{} == {}",
+                    self.EmitExpression(subject, 0),
+                    self.EmitExpression(&case.Condition, 0)
+                )
+            } else {
                 self.EmitExpression(&case.Condition, 0)
-            ));
+            };
+            lines.push(format!("{} ({}) {{", keyword, condition));
             lines.push(format!(
                 "    {}",
                 template.replace("{value}", &self.EmitExpression(&case.Value, 0))

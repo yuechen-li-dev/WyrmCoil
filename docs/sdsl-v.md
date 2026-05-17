@@ -898,20 +898,30 @@ M20 remains intentionally scaffold-only:
 - no conversion from runtime `RenderSnapshot` into draw buffers yet
 
 
-## M55c control-flow status
+## M56 control-flow status
 
-Implemented in M55c:
+Implemented in M56 (building on M55c):
 - `if` statement validation and deterministic HLSL lowering.
 - condition-switch expression validation and bounded HLSL lowering in:
   - local initializer (`let x: T = switch { ... };`)
   - assignment RHS (`x = switch { ... };`)
   - return expression (`return switch { ... };`)
+- subject-switch expression validation and bounded HLSL lowering in the same contexts:
+  - `switch subject { case value => result ... else => fallback }`
+  - `switch subject { case value -> result ... else -> fallback }`
 
-M55c validation rules:
+M56 switch split:
+- condition-switch: `switch { case condition => value ... else => fallback }`
+- subject-switch: `switch subject { case value => result ... else => fallback }`
+
+M56 validation/lowering rules:
 - `if` condition must be `bool` when known (`if condition must be bool; found ...`).
 - nested decision ladders are rejected for `else { if ... }` single-statement shape.
-- switch case conditions must be `bool` when known.
+- condition-switch case conditions must be `bool` when known.
+- subject-switch case values must type-match the subject when known.
 - switch arms must be type-compatible where known.
+- subject-switch lowers to deterministic `if (subject == case_value) ... else if ... else ...` chains.
+- no switch fallthrough (expression arms only).
 - unsupported switch expression contexts are diagnosed rather than lowered with placeholders.
 
 Still future work:
