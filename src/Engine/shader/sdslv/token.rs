@@ -14,6 +14,7 @@ pub enum SdslvTokenKind {
     KeywordUse,
     KeywordType,
     KeywordStream,
+    KeywordArray,
     KeywordRecord,
     KeywordInterface,
     KeywordShader,

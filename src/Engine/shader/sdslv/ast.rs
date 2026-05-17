@@ -10,6 +10,11 @@ pub struct SdslvPath {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SdslvTypeRef {
     Named(SdslvPath),
+    Array {
+        Element: Box<SdslvTypeRef>,
+        Length: usize,
+        Span: SdslvSpan,
+    },
 }
 
 impl SdslvTypeRef {
@@ -19,11 +24,17 @@ impl SdslvTypeRef {
     pub fn AsNamedPath(&self) -> Option<&SdslvPath> {
         match self {
             Self::Named(path) => Some(path),
+            Self::Array { .. } => None,
         }
     }
     pub fn ToDisplayString(&self) -> String {
         match self {
             Self::Named(path) => path.Segments.join("."),
+            Self::Array {
+                Element, Length, ..
+            } => {
+                format!("array<{}, {}>", Element.ToDisplayString(), Length)
+            }
         }
     }
 }
@@ -247,6 +258,11 @@ pub enum SdslvExpression {
     FieldAccess {
         Base: Box<SdslvExpression>,
         Field: String,
+    },
+    Index {
+        Base: Box<SdslvExpression>,
+        Index: Box<SdslvExpression>,
+        Span: SdslvSpan,
     },
     Call {
         Callee: Box<SdslvExpression>,

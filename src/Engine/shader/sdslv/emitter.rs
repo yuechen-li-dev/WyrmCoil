@@ -665,6 +665,13 @@ impl<'a> HlslEmitter<'a> {
             SdslvExpression::FieldAccess { Base, Field } => {
                 format!("{}.{}", self.EmitExpression(Base, 3), Field)
             }
+            SdslvExpression::Index { Base, Index, .. } => {
+                format!(
+                    "{}[{}]",
+                    self.EmitExpression(Base, 3),
+                    self.EmitExpression(Index, 0)
+                )
+            }
             SdslvExpression::Call { Callee, Arguments } => {
                 let mut rendered = vec![];
                 for arg in Arguments {
@@ -731,11 +738,15 @@ impl<'a> HlslEmitter<'a> {
     }
 
     fn MapTypeFromPath(&mut self, type_ref: &SdslvTypeRef) -> Option<String> {
-        let Some(path) = type_ref.AsNamedPath() else {
-            self.Err("generic type references are not supported in SDSL-V M59a");
-            return None;
-        };
-        self.ResolveTypeName(&path.Segments.join("."), 0)
+        match type_ref {
+            SdslvTypeRef::Named(path) => self.ResolveTypeName(&path.Segments.join("."), 0),
+            SdslvTypeRef::Array {
+                Element, Length, ..
+            } => {
+                let element = self.MapTypeFromPath(Element)?;
+                Some(format!("{}[{}]", element, Length))
+            }
+        }
     }
 
     fn ResolveTypeName(&mut self, type_name: &str, depth: usize) -> Option<String> {
