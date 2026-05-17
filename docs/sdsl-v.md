@@ -951,3 +951,18 @@ Still future work:
 SDSL-V M58 adds fallible signatures in the form `fn F() -> T ! Error` and postfix fallible operators `expr?` (propagate) and `expr!` (explicit unwrap). Only `Error` is supported as the fallible error type in M58. Fallible `match` is deferred.
 
 In M58, stage functions cannot be fallible. HLSL lowering for fallible syntax is not implemented and should be treated as unsupported for emission/runtime paths.
+
+
+## M58b fallibility validation completion
+
+M58b completes bounded validation for Oct-style fallibility in SDSL-V.
+
+- Fallible signatures are `-> T ! Error`; non-`Error` fallible error types are rejected.
+- Stage entry points cannot be fallible in M58/M58b.
+- A call to a fallible function is a fallible expression until handled.
+- `?` is valid only on fallible expressions and only inside fallible functions.
+- `!` is valid only on fallible expressions.
+- Unhandled fallible expressions are rejected in expression statements, local initializers, assignment RHS, return expressions, and compound-expression trees.
+- `error(...)` is only valid in fallible return position (`return error("...");`).
+- Fallible `match` is still future work.
+- HLSL emission remains explicitly unsupported for modules that contain fallible functions/expressions (`fallible function emission is not implemented in SDSL-V M58`).
