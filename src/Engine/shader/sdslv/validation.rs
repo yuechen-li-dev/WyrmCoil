@@ -210,6 +210,7 @@ struct Validator<'a> {
     AliasUnderlyingByName: HashMap<String, String>,
     SemanticAliasNames: HashSet<String>,
     FunctionSignatures: HashMap<String, FunctionSignature>,
+    EnumByName: HashMap<String, &'a SdslvEnumDecl>,
 }
 
 impl<'a> Validator<'a> {
@@ -227,6 +228,7 @@ impl<'a> Validator<'a> {
             AliasUnderlyingByName: HashMap::new(),
             SemanticAliasNames: HashSet::new(),
             FunctionSignatures: HashMap::new(),
+            EnumByName: HashMap::new(),
         }
     }
 
@@ -265,6 +267,9 @@ impl<'a> Validator<'a> {
             }
             if let SdslvDecl::Record(record) = decl {
                 self.RecordByName.insert(record.Name.clone(), record);
+            }
+            if let SdslvDecl::Enum(enum_decl) = decl {
+                self.EnumByName.insert(enum_decl.Name.clone(), enum_decl);
             }
             if let SdslvDecl::Shader(shader) = decl {
                 let mut fields = HashMap::new();
@@ -426,13 +431,19 @@ impl<'a> Validator<'a> {
 
     fn ValidateEnum(&mut self, enum_decl: &SdslvEnumDecl) {
         if enum_decl.Variants.is_empty() {
-            self.Diagnostics.push(SdslvDiagnostic::New("enum must have at least one variant", enum_decl.Span));
+            self.Diagnostics.push(SdslvDiagnostic::New(
+                "enum must have at least one variant",
+                enum_decl.Span,
+            ));
             return;
         }
         let mut seen = HashSet::new();
         for variant in &enum_decl.Variants {
             if !seen.insert(variant.Name.clone()) {
-                self.Diagnostics.push(SdslvDiagnostic::New(&format!("duplicate enum variant '{}'", variant.Name), variant.Span));
+                self.Diagnostics.push(SdslvDiagnostic::New(
+                    &format!("duplicate enum variant '{}'", variant.Name),
+                    variant.Span,
+                ));
             }
         }
     }
@@ -871,9 +882,28 @@ impl<'a> Validator<'a> {
         let Some(body) = &function.Body else {
             return;
         };
+        self.ValidateTypeRefKnown(
+            &function.ReturnType,
+            &format!(
+                "unknown return type '{}' in {}",
+                function.ReturnType.ToDisplayString(),
+                function.Name
+            ),
+            &shader.GenericParameters,
+        );
         let mut locals = HashMap::new();
         let mut parameter_types = HashMap::new();
         for parameter in &function.Parameters {
+            self.ValidateTypeRefKnown(
+                &parameter.TypeName,
+                &format!(
+                    "unknown type '{}' in parameter '{}' of {}",
+                    parameter.TypeName.ToDisplayString(),
+                    parameter.Name,
+                    function.Name
+                ),
+                &shader.GenericParameters,
+            );
             let parameter_type = self.TypeRefToType(&parameter.TypeName);
             locals.insert(parameter.Name.clone(), parameter_type.clone());
             parameter_types.insert(parameter.Name.clone(), parameter_type);
@@ -931,8 +961,18 @@ impl<'a> Validator<'a> {
                             shader, locals, init, &expected,
                         );
                         self.ValidateSwitchExpression(shader, locals, init);
+                        self.ValidateMatchExpression(shader, locals, init);
                         locals.insert(Name.clone(), expected);
                     } else {
+                        self.ValidateTypeRefKnown(
+                            TypeName,
+                            &format!(
+                                "unknown type '{}' in local '{}'",
+                                TypeName.ToDisplayString(),
+                                Name
+                            ),
+                            &shader.GenericParameters,
+                        );
                         locals.insert(Name.clone(), self.TypeRefToType(TypeName));
                     }
                 }
@@ -958,6 +998,7 @@ impl<'a> Validator<'a> {
                     }
                     self.ValidateArrayLiteralAgainstExpectedType(shader, locals, Value, &expected);
                     self.ValidateSwitchExpression(shader, locals, Value);
+                    self.ValidateMatchExpression(shader, locals, Value);
                 }
                 SdslvStatement::Return { Value } => {
                     self.CheckExpressionCalls(shader, locals, Value, is_fallible_fn, true);
@@ -982,6 +1023,7 @@ impl<'a> Validator<'a> {
                         self.Err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                     }
                     self.ValidateSwitchExpression(shader, locals, Value);
+                    self.ValidateMatchExpression(shader, locals, Value);
                 }
                 SdslvStatement::Expression { Value } => {
                     self.CheckExpressionCalls(shader, locals, Value, is_fallible_fn, false);
@@ -989,6 +1031,7 @@ impl<'a> Validator<'a> {
                         self.Err("fallible expression must be handled with ? or !");
                     }
                     self.ValidateSwitchExpression(shader, locals, Value);
+                    self.ValidateMatchExpression(shader, locals, Value);
                 }
                 SdslvStatement::Empty => {}
                 SdslvStatement::If {
@@ -1267,8 +1310,23 @@ impl<'a> Validator<'a> {
                     self.CheckExpressionCalls(shader, locals, element, is_fallible_fn, false);
                 }
             }
-            SdslvExpression::FieldAccess { Base, .. } => {
-                self.CheckExpressionCalls(shader, locals, Base, is_fallible_fn, false)
+            SdslvExpression::FieldAccess { Base, Field } => {
+                self.CheckExpressionCalls(shader, locals, Base, is_fallible_fn, false);
+                if let SdslvExpression::Identifier(name) = Base.as_ref() {
+                    if let Some(enum_decl) = self.EnumByName.get(name) {
+                        if !enum_decl.Variants.iter().any(|x| x.Name == *Field) {
+                            self.Err(&format!("unknown variant '{}' for enum '{}'", Field, name));
+                        }
+                    } else if !locals.contains_key(name)
+                        && name
+                            .chars()
+                            .next()
+                            .map(|c| c.is_uppercase())
+                            .unwrap_or(false)
+                    {
+                        self.Err(&format!("unknown enum '{}'", name));
+                    }
+                }
             }
             SdslvExpression::Index { Base, Index, .. } => {
                 self.CheckExpressionCalls(shader, locals, Base, is_fallible_fn, false);
@@ -1332,6 +1390,12 @@ impl<'a> Validator<'a> {
                 }
                 self.CheckExpressionCalls(shader, locals, ElseValue, is_fallible_fn, false);
             }
+            SdslvExpression::Match { Subject, Arms, .. } => {
+                self.CheckExpressionCalls(shader, locals, Subject, is_fallible_fn, false);
+                for arm in Arms {
+                    self.CheckExpressionCalls(shader, locals, &arm.Value, is_fallible_fn, false);
+                }
+            }
             _ => {}
         }
     }
@@ -1360,6 +1424,13 @@ impl<'a> Validator<'a> {
             SdslvExpression::BoolLiteral(_) => TypeRef::Named("bool".to_string()),
             SdslvExpression::ArrayLiteral { .. } => TypeRef::Unknown,
             SdslvExpression::FieldAccess { Base, Field } => {
+                if let SdslvExpression::Identifier(enum_name) = Base.as_ref() {
+                    if let Some(enum_decl) = self.EnumByName.get(enum_name) {
+                        if enum_decl.Variants.iter().any(|x| x.Name == *Field) {
+                            return TypeRef::Named(enum_name.clone());
+                        }
+                    }
+                }
                 let base_type = self.ResolveExpressionType(shader, locals, Base);
                 self.ResolveFieldType(&base_type, Field)
             }
@@ -1432,7 +1503,25 @@ impl<'a> Validator<'a> {
                 }
                 current
             }
-            SdslvExpression::Match { .. } => TypeRef::Unknown,
+            SdslvExpression::Match { Arms, .. } => {
+                let Some(first) = Arms.first() else {
+                    return TypeRef::Unknown;
+                };
+                let mut current = self.ResolveExpressionType(shader, locals, &first.Value);
+                for arm in Arms.iter().skip(1) {
+                    let arm_type = self.ResolveExpressionType(shader, locals, &arm.Value);
+                    if self.AreCompatible(&current, &arm_type) {
+                        if current == TypeRef::Unknown {
+                            current = arm_type;
+                        }
+                    } else if current == TypeRef::Unknown {
+                        current = arm_type;
+                    } else if arm_type != TypeRef::Unknown {
+                        return TypeRef::Unknown;
+                    }
+                }
+                current
+            }
         }
     }
 
@@ -1492,6 +1581,87 @@ impl<'a> Validator<'a> {
                     "switch arm type mismatch: expected {}, found {}",
                     expected_name, actual_name
                 ));
+            }
+        }
+    }
+
+    fn ValidateMatchExpression(
+        &mut self,
+        shader: &SdslvShaderDecl,
+        locals: &HashMap<String, TypeRef>,
+        expression: &SdslvExpression,
+    ) {
+        let SdslvExpression::Match { Subject, Arms, .. } = expression else {
+            return;
+        };
+        let subject_type = self.ResolveExpressionType(shader, locals, Subject);
+        let Some(subject_name) = subject_type.Name() else {
+            return;
+        };
+        let Some(subject_enum) = self.EnumByName.get(subject_name) else {
+            if subject_type != TypeRef::Unknown {
+                self.Err(&format!(
+                    "match subject must be enum type; found {}",
+                    self.TypeName(&subject_type)
+                ));
+            }
+            return;
+        };
+        let subject_variants: Vec<String> = subject_enum
+            .Variants
+            .iter()
+            .map(|x| x.Name.clone())
+            .collect();
+        let mut seen = HashSet::new();
+        let mut expected_arm_type: Option<TypeRef> = None;
+        for arm in Arms {
+            if arm.VariantPath.Segments.len() != 2 {
+                self.Err("enum variant reference must be qualified as Enum.Variant");
+                continue;
+            }
+            let enum_name = &arm.VariantPath.Segments[0];
+            let variant_name = &arm.VariantPath.Segments[1];
+            if enum_name != subject_name {
+                self.Err(&format!(
+                    "match arm variant '{}.{}' does not belong to enum '{}'",
+                    enum_name, variant_name, subject_name
+                ));
+                continue;
+            }
+            if !subject_variants.iter().any(|x| x == variant_name) {
+                self.Err(&format!(
+                    "unknown variant '{}' for enum '{}'",
+                    variant_name, subject_name
+                ));
+                continue;
+            }
+            if !seen.insert(variant_name.clone()) {
+                self.Err(&format!(
+                    "duplicate match arm for variant {}.{}",
+                    subject_name, variant_name
+                ));
+            }
+            let arm_type = self.ResolveExpressionType(shader, locals, &arm.Value);
+            if let Some(expected) = &expected_arm_type {
+                if let Some((_, expected_name, found_name)) =
+                    self.TypeMismatch("", expected, &arm_type)
+                {
+                    self.Err(&format!(
+                        "match arm type mismatch: expected {}, found {}",
+                        expected_name, found_name
+                    ));
+                }
+            } else {
+                expected_arm_type = Some(arm_type);
+            }
+        }
+        for variant_name in &subject_variants {
+            if !seen.contains(variant_name) {
+                self.Err(&format!(
+                    "match over enum {} is missing variant {}",
+                    subject_name, variant_name
+                ));
+                break;
             }
         }
     }
@@ -1739,6 +1909,12 @@ impl<'a> Validator<'a> {
                         || self.IsFallibleExpression(shader, locals, &c.Value)
                 }) || self.IsFallibleExpression(shader, locals, ElseValue)
             }
+            SdslvExpression::Match { Subject, Arms, .. } => {
+                self.IsFallibleExpression(shader, locals, Subject)
+                    || Arms
+                        .iter()
+                        .any(|arm| self.IsFallibleExpression(shader, locals, &arm.Value))
+            }
             _ => false,
         }
     }
@@ -1840,6 +2016,37 @@ impl<'a> Validator<'a> {
                 Element: Box::new(self.TypeRefToType(Element)),
                 Length: *Length,
             },
+        }
+    }
+
+    fn IsKnownTypeRef(&self, type_ref: &SdslvTypeRef, shader_generics: &[String]) -> bool {
+        match type_ref {
+            SdslvTypeRef::Named(path) => {
+                let name = path.Segments.join(".");
+                shader_generics.contains(&name) || self.IsKnownTypeName(&name)
+            }
+            SdslvTypeRef::Array { Element, .. } => self.IsKnownTypeRef(Element, shader_generics),
+        }
+    }
+
+    fn IsKnownTypeName(&self, name: &str) -> bool {
+        Self::IsBuiltinFlowBoardType(name)
+            || name == "string"
+            || name == "Error"
+            || self.AliasUnderlyingByName.contains_key(name)
+            || self.StreamByName.contains_key(name)
+            || self.RecordByName.contains_key(name)
+            || self.EnumByName.contains_key(name)
+    }
+
+    fn ValidateTypeRefKnown(
+        &mut self,
+        type_ref: &SdslvTypeRef,
+        message: &str,
+        shader_generics: &[String],
+    ) {
+        if !self.IsKnownTypeRef(type_ref, shader_generics) {
+            self.Err(message);
         }
     }
     fn TypeName(&self, t: &TypeRef) -> String {

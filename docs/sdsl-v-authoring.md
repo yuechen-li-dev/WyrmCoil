@@ -713,3 +713,21 @@ M63 extends M58/M58b fallibility validation across newer expression/statement su
 - Fallible `match` remains future work.
 - HLSL fallible lowering remains unsupported; modules using fallible functions/expressions continue producing the explicit unsupported-emission diagnostic.
 - `.sdslvtest` runner behavior remains unsupported for fallible execution, but nested fallible forms in these expression shapes must produce explicit unsupported diagnostics rather than panicking.
+
+
+## Enum/match authoring status (M64b)
+
+M64b supports semantic validation/type-resolution for tag-only enum + match authoring:
+
+- Enum variants must be qualified as `Enum.Variant`.
+- Match subject must be enum-typed.
+- Match arms must use the same enum as the subject.
+- Match arms must be exhaustive over declared variants.
+- Wildcard/default match arms are not available in M64b.
+- Match arm values must resolve to compatible result types.
+
+Still not available in M64b:
+
+- Payload-carrying enum variants.
+- Fallible `match ok/err` forms.
+- HLSL lowering of enum/match (M64c/future).

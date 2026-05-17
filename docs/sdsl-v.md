@@ -1020,3 +1020,23 @@ Still out of scope in M63:
 - fallible `match`
 - tuple syntax/types/returns/destructuring
 - HLSL fallibility lowering or error ABI generation
+
+
+## M64b enum/match semantic validation + type resolution
+
+M64b completes semantic validation for tag-only enums and enum `match` expressions:
+
+- Enum names are recognized as valid named types in function signatures and local annotations.
+- Qualified enum variant expressions (`Enum.Variant`) validate and resolve as enum-typed values.
+- `match` subject must be enum-typed.
+- `match` arms must reference variants from the subject enum.
+- Duplicate and unknown arms are rejected.
+- Enum `match` must be exhaustive across all declared variants (no wildcard/default arm in M64b).
+- Match arm value types must be compatible, and match expression type resolves from arm result type compatibility.
+- Fallibility traversal includes match subject and arm value expressions.
+
+Still out of scope in M64b:
+
+- Enum payload variants.
+- Fallible `match ok/err` forms.
+- HLSL lowering for enum/match (M64c/future).

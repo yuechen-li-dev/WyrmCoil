@@ -2811,3 +2811,98 @@ fn ValidationM63FallibilityIntegrationAcrossArraysConstructorsWithAndControlFlow
     ValidateSource("shader S { fn IsLow() -> bool ! Error { return true; } fn LoadCode() -> i32 ! Error { return 408; } fn Step() -> i32 ! Error { return 1; } fn F() -> i32 ! Error { let code: i32 = LoadCode()?; let a: i32 = switch { case IsLow()? => 1 else => 2 }; let b: i32 = switch LoadCode()? { case 408 => 1 else => 0 }; let c: i32 = switch code { case 1 => LoadCode()? else => 0 }; let sum: i32 = 0; for i in 0..LoadCode()? { sum = sum + i; } for j in 0..10 step Step()? { sum = sum + j; } return a + b + c + sum; } }")
         .expect("handled fallible switch/for expressions should validate");
 }
+
+#[test]
+fn ValidationM64bEnumTypeAndVariantResolution() {
+    ValidateSource("enum ShadowMode { None; Hard; Soft; } shader S { fn Quality(mode: ShadowMode) -> ShadowMode { let local: ShadowMode = ShadowMode.Hard; return local; } }")
+        .expect("enum type should validate in parameter/local/return");
+
+    let unknown_type =
+        ValidateSource("shader S { fn Quality(mode: MissingMode) -> i32 { return 1; } }")
+            .expect_err("unknown enum type should be rejected");
+    assert!(
+        unknown_type.iter().any(|d| d
+            .Message
+            .contains("unknown type 'MissingMode' in parameter 'mode' of Quality")),
+        "expected unknown parameter type diagnostic"
+    );
+
+    let unknown_enum = ValidateSource(
+        "enum ShadowMode { None; Hard; Soft; } shader S { fn Quality() -> ShadowMode { return MissingMode.Hard; } }",
+    )
+    .expect_err("unknown enum in variant expression should be rejected");
+    assert!(
+        unknown_enum
+            .iter()
+            .any(|d| d.Message.contains("unknown enum 'MissingMode'")),
+        "expected unknown enum diagnostic"
+    );
+
+    let unknown_variant = ValidateSource(
+        "enum ShadowMode { None; Hard; Soft; } shader S { fn Quality() -> ShadowMode { return ShadowMode.Ultra; } }",
+    )
+    .expect_err("unknown variant should be rejected");
+    assert!(
+        unknown_variant.iter().any(|d| d
+            .Message
+            .contains("unknown variant 'Ultra' for enum 'ShadowMode'")),
+        "expected unknown variant diagnostic"
+    );
+}
+
+#[test]
+fn ValidationM64bMatchSemanticsAndFallibility() {
+    ValidateSource("enum ShadowMode { None; Hard; Soft; } shader S { fn Quality(mode: ShadowMode) -> i32 { let q: i32 = match mode { ShadowMode.None => 0 ShadowMode.Hard => 1 ShadowMode.Soft => 8 }; return match mode { ShadowMode.None => q ShadowMode.Hard => 1 ShadowMode.Soft => 8 }; } }")
+        .expect("exhaustive enum match should validate and resolve i32 type");
+
+    let non_enum_subject = ValidateSource("enum ShadowMode { None; Hard; Soft; } shader S { fn Quality(code: i32) -> i32 { return match code { ShadowMode.None => 0 ShadowMode.Hard => 1 ShadowMode.Soft => 8 }; } }")
+        .expect_err("match subject must be enum");
+    assert!(
+        non_enum_subject.iter().any(|d| d
+            .Message
+            .contains("match subject must be enum type; found i32")),
+        "expected non-enum subject diagnostic"
+    );
+
+    let wrong_enum_duplicate_missing = ValidateSource("enum ShadowMode { None; Hard; Soft; } enum QualityMode { Low; High; } shader S { fn Quality(mode: ShadowMode) -> i32 { return match mode { QualityMode.Low => 0 ShadowMode.Hard => 1 ShadowMode.Hard => 2 }; } }")
+        .expect_err("wrong enum arm + duplicate + missing should fail");
+    assert!(
+        wrong_enum_duplicate_missing
+            .iter()
+            .any(|d| d.Message.contains("does not belong to enum 'ShadowMode'")),
+        "expected wrong-enum arm diagnostic"
+    );
+    assert!(
+        wrong_enum_duplicate_missing.iter().any(|d| d
+            .Message
+            .contains("duplicate match arm for variant ShadowMode.Hard")),
+        "expected duplicate match arm diagnostic"
+    );
+    assert!(
+        wrong_enum_duplicate_missing.iter().any(|d| d
+            .Message
+            .contains("match over enum ShadowMode is missing variant")),
+        "expected missing variant diagnostic"
+    );
+
+    let type_mismatch = ValidateSource("enum ShadowMode { None; Hard; Soft; } shader S { fn Quality(mode: ShadowMode) -> i32 { return match mode { ShadowMode.None => 0 ShadowMode.Hard => float4(1.0, 0.0, 0.0, 1.0) ShadowMode.Soft => 8 }; } }")
+        .expect_err("match arm type mismatch should fail");
+    assert!(
+        type_mismatch.iter().any(|d| d
+            .Message
+            .contains("match arm type mismatch: expected i32, found float4")),
+        "expected match arm type mismatch diagnostic"
+    );
+
+    let unhandled_fallible = ValidateSource("enum ShadowMode { None; Hard; Soft; } shader S { fn LoadMode() -> ShadowMode ! Error { return ShadowMode.None; } fn FallibleInt() -> i32 ! Error { return 1; } fn Quality(mode: ShadowMode) -> i32 ! Error { let a: i32 = match LoadMode() { ShadowMode.None => 0 ShadowMode.Hard => 1 ShadowMode.Soft => 8 }; return match mode { ShadowMode.None => 0 ShadowMode.Hard => FallibleInt() ShadowMode.Soft => a }; } }")
+        .expect_err("unhandled fallible subject/arm should fail");
+    assert!(
+        unhandled_fallible.iter().any(|d| d
+            .Message
+            .contains("fallible expression must be handled with ? or !")),
+        "expected unhandled fallible diagnostic in match traversal"
+    );
+
+    ValidateSource("enum ShadowMode { None; Hard; Soft; } shader S { fn LoadMode() -> ShadowMode ! Error { return ShadowMode.None; } fn FallibleInt() -> i32 ! Error { return 1; } fn Quality(mode: ShadowMode) -> i32 ! Error { let a: i32 = match LoadMode()? { ShadowMode.None => 0 ShadowMode.Hard => 1 ShadowMode.Soft => 8 }; return match mode { ShadowMode.None => 0 ShadowMode.Hard => FallibleInt()? ShadowMode.Soft => a }; } }")
+        .expect("handled fallible match subject/arms should validate");
+}
