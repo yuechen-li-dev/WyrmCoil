@@ -83,7 +83,22 @@ pub enum SdslvDecl {
     Shader(SdslvShaderDecl),
     Flow(SdslvFlowDecl),
     Compile(SdslvCompileDecl),
+    Enum(SdslvEnumDecl),
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvEnumDecl {
+    pub Name: String,
+    pub Variants: Vec<SdslvEnumVariant>,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvEnumVariant {
+    pub Name: String,
+    pub Span: SdslvSpan,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvFlowDecl {
     pub Name: String,
@@ -291,6 +306,11 @@ pub enum SdslvExpression {
         ElseValue: Box<SdslvExpression>,
         Span: SdslvSpan,
     },
+    Match {
+        Subject: Box<SdslvExpression>,
+        Arms: Vec<SdslvMatchArm>,
+        Span: SdslvSpan,
+    },
     TryPropagate {
         Expression: Box<SdslvExpression>,
         Span: SdslvSpan,
@@ -331,4 +351,11 @@ pub enum SdslvBinaryOperator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SdslvUnaryOperator {
     Negate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvMatchArm {
+    pub VariantPath: SdslvPath,
+    pub Value: SdslvExpression,
+    pub Span: SdslvSpan,
 }

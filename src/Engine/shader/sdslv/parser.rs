@@ -74,6 +74,10 @@ impl<'a> Parser<'a> {
                 if let Some(d) = self.ParseCompile() {
                     m.Declarations.push(SdslvDecl::Compile(d));
                 }
+            } else if self.MatchKw(SdslvTokenKind::KeywordEnum) {
+                if let Some(d) = self.ParseEnum() {
+                    m.Declarations.push(SdslvDecl::Enum(d));
+                }
             } else {
                 self.ErrHere("unexpected token at top level");
                 self.I += 1;
@@ -198,6 +202,23 @@ impl<'a> Parser<'a> {
             Body: body,
         })
     }
+
+    fn ParseEnum(&mut self) -> Option<SdslvEnumDecl> {
+        let start = self.PrevSpan();
+        let name = self.IdentReq("expected enum name")?;
+        self.Expect(SdslvTokenKind::LeftBrace, "expected '{' after enum name");
+        let mut variants = vec![];
+        while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            let span = self.CurrentSpan();
+            let variant_name = self.IdentReq("expected enum variant name")?;
+            self.Expect(SdslvTokenKind::Semicolon, "expected ';' after enum variant");
+            variants.push(SdslvEnumVariant { Name: variant_name, Span: span });
+        }
+        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after enum variants");
+        let end = self.PrevSpan();
+        Some(SdslvEnumDecl { Name: name, Variants: variants, Span: SdslvSpan { Start: start.Start, End: end.End, Line: start.Line, Column: start.Column } })
+    }
+
     fn ParseCompile(&mut self) -> Option<SdslvCompileDecl> {
         let generic_shader = self.ParsePathReq("expected shader path after compile")?;
         self.Expect(
@@ -1127,9 +1148,36 @@ impl<'a> Parser<'a> {
         }
         Some(expr)
     }
+
+    fn ParseMatchExpression(&mut self) -> Option<SdslvExpression> {
+        let start = self.PrevSpan();
+        let subject = Box::new(self.ParseExpression().or_else(|| {
+            self.ErrHere("match expression missing subject expression");
+            None
+        })?);
+        self.Expect(SdslvTokenKind::LeftBrace, "expected '{' after match subject");
+        let mut arms = vec![];
+        while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            let span = self.CurrentSpan();
+            let variant_path = self.ParsePathReq("expected Enum.Variant in match arm")?;
+            if !self.MatchSwitchArmArrow("expected '=>' or '->' in match arm") { return None; }
+            let value = self.ParseExpression().or_else(|| {
+                self.ErrHere("expected match arm expression after arrow");
+                None
+            })?;
+            arms.push(SdslvMatchArm { VariantPath: variant_path, Value: value, Span: span });
+        }
+        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after match arms");
+        let end = self.PrevSpan();
+        Some(SdslvExpression::Match { Subject: subject, Arms: arms, Span: SdslvSpan { Start: start.Start, End: end.End, Line: start.Line, Column: start.Column } })
+    }
+
     fn ParsePrimary(&mut self) -> Option<SdslvExpression> {
         if self.MatchKw(SdslvTokenKind::KeywordSwitch) {
             return self.ParseSwitchExpression();
+        }
+        if self.MatchKw(SdslvTokenKind::KeywordMatch) {
+            return self.ParseMatchExpression();
         }
         if self.MatchKw(SdslvTokenKind::LeftBracket) {
             let span = self.PrevSpan();

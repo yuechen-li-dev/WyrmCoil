@@ -68,6 +68,7 @@ impl<'a> HlslEmitter<'a> {
                 SdslvDecl::Shader(shader) => self.EmitShader(shader),
                 SdslvDecl::Flow(flow) => self.EmitFlow(flow),
                 SdslvDecl::Compile(compile) => self.EmitCompile(compile),
+                SdslvDecl::Enum(_) => {}
                 SdslvDecl::Interface(interface) => {
                     self.Lines.push(format!(
                         "// interface {} omitted in HLSL M3",
@@ -746,6 +747,10 @@ impl<'a> HlslEmitter<'a> {
             SdslvExpression::With { .. } => "/*with-unsupported*/".to_string(),
             SdslvExpression::Switch { .. } => {
                 "/* switch expression is not supported in this expression context in M55c */"
+                    .to_string()
+            }
+            SdslvExpression::Match { .. } => {
+                "/* match expression is not supported in this expression context in M64 */"
                     .to_string()
             }
             SdslvExpression::TryPropagate { .. } | SdslvExpression::Unwrap { .. } => {

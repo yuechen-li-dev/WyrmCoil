@@ -37,6 +37,8 @@ pub enum SdslvTokenKind {
     KeywordWith,
     KeywordIf,
     KeywordSwitch,
+    KeywordEnum,
+    KeywordMatch,
     KeywordFor,
     KeywordWhile,
     KeywordIn,

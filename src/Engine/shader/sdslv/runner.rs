@@ -313,6 +313,10 @@ fn EvalExpression(
             Message: "switch expression is not supported in SDSL-V M55c test execution".to_string(),
             Span: None,
         }),
+        SdslvExpression::Match { .. } => Err(SdslvAssertFailure {
+            Message: "match expression is not supported in SDSL-V M64 test execution".to_string(),
+            Span: None,
+        }),
         SdslvExpression::TryPropagate { .. } | SdslvExpression::Unwrap { .. } => {
             Err(SdslvAssertFailure {
                 Message: "fallible expressions are not supported in SDSL-V M58 test execution"

@@ -220,6 +220,8 @@ impl<'a> Lexer<'a> {
             "with" => SdslvTokenKind::KeywordWith,
             "if" => SdslvTokenKind::KeywordIf,
             "switch" => SdslvTokenKind::KeywordSwitch,
+            "enum" => SdslvTokenKind::KeywordEnum,
+            "match" => SdslvTokenKind::KeywordMatch,
             "for" => SdslvTokenKind::KeywordFor,
             "while" => SdslvTokenKind::KeywordWhile,
             "in" => SdslvTokenKind::KeywordIn,
