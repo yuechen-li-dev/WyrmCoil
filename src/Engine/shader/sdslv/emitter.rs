@@ -607,6 +607,9 @@ impl<'a> HlslEmitter<'a> {
                 "/* switch expression is not supported in this expression context in M55c */"
                     .to_string()
             }
+            SdslvExpression::TryPropagate { .. } | SdslvExpression::Unwrap { .. } => {
+                "/* fallible function emission is not implemented in SDSL-V M58 */".to_string()
+            }
         }
     }
     fn IsPositionField(&self, field: &SdslvFieldDecl) -> bool {

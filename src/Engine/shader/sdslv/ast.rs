@@ -168,6 +168,7 @@ pub struct SdslvFunctionDecl {
     pub Name: String,
     pub Parameters: Vec<SdslvFunctionParameter>,
     pub ReturnType: SdslvPath,
+    pub ErrorType: Option<SdslvPath>,
     pub Body: Option<SdslvBody>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -247,6 +248,14 @@ pub enum SdslvExpression {
         Subject: Option<Box<SdslvExpression>>,
         Cases: Vec<SdslvSwitchCase>,
         ElseValue: Box<SdslvExpression>,
+        Span: SdslvSpan,
+    },
+    TryPropagate {
+        Expression: Box<SdslvExpression>,
+        Span: SdslvSpan,
+    },
+    Unwrap {
+        Expression: Box<SdslvExpression>,
         Span: SdslvSpan,
     },
 }

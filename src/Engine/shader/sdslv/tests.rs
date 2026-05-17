@@ -359,6 +359,24 @@ fn ParserForMalformedFormsReportErrors() {
 }
 
 #[test]
+fn ParserFallibleSignatureAndPostfixOperators() {
+    let src = r#"shader S { fn F() -> i32 ! Error { return 1; } fn G() -> i32 { let a: i32 = F()?; let b: i32 = F()!; return a + b; } }"#;
+    let module = ParseSource(src).expect("fallible signature and postfix operators should parse");
+    let shader = module
+        .Declarations
+        .iter()
+        .find_map(|d| match d {
+            SdslvDecl::Shader(s) => Some(s),
+            _ => None,
+        })
+        .expect("shader expected");
+    assert!(
+        shader.Methods[0].ErrorType.is_some(),
+        "fallible signature should include error type"
+    );
+}
+
+#[test]
 fn ParserWhileReportsExplicitUnsupportedDiagnostic() {
     let diagnostics =
         ParseSource("shader S { fn F(a: i32) -> i32 { while a < 4 { return a; } return a; } }")

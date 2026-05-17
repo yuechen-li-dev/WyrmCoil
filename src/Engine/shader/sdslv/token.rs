@@ -56,6 +56,8 @@ pub enum SdslvTokenKind {
     RightAngleEquals,
     DoubleEquals,
     BangEquals,
+    Bang,
+    Question,
     Colon,
     Semicolon,
     Comma,

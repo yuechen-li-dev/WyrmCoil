@@ -944,3 +944,10 @@ Still future work:
 - `break` / `continue`
 - `match` and enum-payload pattern matching
 - generalized statement-expression lowering beyond bounded M55c contexts
+
+
+## M58 fallibility seed
+
+SDSL-V M58 adds fallible signatures in the form `fn F() -> T ! Error` and postfix fallible operators `expr?` (propagate) and `expr!` (explicit unwrap). Only `Error` is supported as the fallible error type in M58. Fallible `match` is deferred.
+
+In M58, stage functions cannot be fallible. HLSL lowering for fallible syntax is not implemented and should be treated as unsupported for emission/runtime paths.

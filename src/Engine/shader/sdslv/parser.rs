@@ -194,6 +194,7 @@ impl<'a> Parser<'a> {
             ReturnType: SdslvPath {
                 Segments: vec!["void".to_string()],
             },
+            ErrorType: None,
             Body: body,
         })
     }
@@ -435,6 +436,11 @@ impl<'a> Parser<'a> {
         self.Expect(SdslvTokenKind::RightParen, "expected ')' after parameters");
         self.Expect(SdslvTokenKind::Arrow, "expected '->' in function signature");
         let rt = self.ParsePathReq("expected return type")?;
+        let error_type = if self.MatchKw(SdslvTokenKind::Bang) {
+            Some(self.ParsePathReq("expected error type after '!' in function signature")?)
+        } else {
+            None
+        };
         let body = if self.MatchKw(SdslvTokenKind::Semicolon) {
             None
         } else if self.MatchKw(SdslvTokenKind::LeftBrace) {
@@ -449,6 +455,7 @@ impl<'a> Parser<'a> {
             Name: name,
             Parameters: ps,
             ReturnType: rt,
+            ErrorType: error_type,
             Body: body,
         })
     }
@@ -1085,6 +1092,18 @@ impl<'a> Parser<'a> {
                 expr = SdslvExpression::With {
                     Base: Box::new(expr),
                     Updates: updates,
+                };
+            } else if self.MatchKw(SdslvTokenKind::Question) {
+                let span = self.PrevSpan();
+                expr = SdslvExpression::TryPropagate {
+                    Expression: Box::new(expr),
+                    Span: span,
+                };
+            } else if self.MatchKw(SdslvTokenKind::Bang) {
+                let span = self.PrevSpan();
+                expr = SdslvExpression::Unwrap {
+                    Expression: Box::new(expr),
+                    Span: span,
                 };
             } else {
                 break;
