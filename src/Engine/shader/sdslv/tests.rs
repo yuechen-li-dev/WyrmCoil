@@ -2906,3 +2906,71 @@ fn ValidationM64bMatchSemanticsAndFallibility() {
     ValidateSource("enum ShadowMode { None; Hard; Soft; } shader S { fn LoadMode() -> ShadowMode ! Error { return ShadowMode.None; } fn FallibleInt() -> i32 ! Error { return 1; } fn Quality(mode: ShadowMode) -> i32 ! Error { let a: i32 = match LoadMode()? { ShadowMode.None => 0 ShadowMode.Hard => 1 ShadowMode.Soft => 8 }; return match mode { ShadowMode.None => 0 ShadowMode.Hard => FallibleInt()? ShadowMode.Soft => a }; } }")
         .expect("handled fallible match subject/arms should validate");
 }
+
+#[test]
+fn EmitHlslM64cEnumAndMatchLowering() {
+    let src = r#"
+enum ShadowMode { None; Hard; Soft; }
+record Settings { Mode: ShadowMode; }
+shader S {
+    fn Quality(mode: ShadowMode) -> i32 {
+        let local: ShadowMode = ShadowMode.Hard;
+        let quality: i32 = match mode { ShadowMode.None => 0 ShadowMode.Hard => 1 ShadowMode.Soft => 8 };
+        let copy: i32 = quality;
+        copy = match local { ShadowMode.None => 2 ShadowMode.Hard => 3 ShadowMode.Soft => 4 };
+        return match mode { ShadowMode.None => copy ShadowMode.Hard => 5 ShadowMode.Soft => 6 };
+    }
+}
+"#;
+    let hlsl_a = CompileSourceToHlsl(src).expect("enum + match source should emit HLSL");
+    let hlsl_b = CompileSourceToHlsl(src).expect("repeated enum + match emission should succeed");
+    assert_eq!(hlsl_a, hlsl_b, "enum/match emission must be deterministic");
+    assert!(
+        hlsl_a.contains("static const int ShadowMode_None = 0;")
+            && hlsl_a.contains("static const int ShadowMode_Hard = 1;")
+            && hlsl_a.contains("static const int ShadowMode_Soft = 2;"),
+        "enum constants should emit in declaration order with deterministic names"
+    );
+    assert!(
+        hlsl_a.contains("int S_Quality(int mode)"),
+        "enum parameters should lower to int"
+    );
+    assert!(
+        hlsl_a.contains("int Mode;"),
+        "enum record fields should lower to int"
+    );
+    assert!(
+        hlsl_a.contains("int local = ShadowMode_Hard;"),
+        "qualified variant references should lower to Enum_Variant constants"
+    );
+    assert!(
+        !hlsl_a.contains("ShadowMode.Hard"),
+        "HLSL must not preserve Enum.Variant dot syntax"
+    );
+    assert!(
+        hlsl_a.contains("if (mode == ShadowMode_None) {")
+            && hlsl_a.contains("else if (mode == ShadowMode_Hard) {")
+            && hlsl_a.contains("else {"),
+        "match lowering should produce if/else-if/else chain with final else arm"
+    );
+    assert!(
+        hlsl_a.contains("quality = 0;")
+            && hlsl_a.contains("copy = 3;")
+            && hlsl_a.contains("return 6;"),
+        "match lowering should support local initializer, assignment RHS, and return contexts"
+    );
+}
+
+#[test]
+fn EmitHlslM64cRejectsMatchInNestedExpressionContext() {
+    let diagnostics = CompileSourceToHlsl(
+        "enum ShadowMode { None; Hard; Soft; } shader S { fn F(mode: ShadowMode) -> i32 { let value: i32 = 1 + match mode { ShadowMode.None => 0 ShadowMode.Hard => 1 ShadowMode.Soft => 2 }; return value; } }",
+    )
+    .expect_err("nested match expressions should not be lowered in M64c");
+    assert!(
+        diagnostics.iter().any(|d| d.Message.contains(
+            "match expression is not supported in this expression context in SDSL-V M64c"
+        )),
+        "nested expression match should produce clear M64c bounded-context diagnostic"
+    );
+}

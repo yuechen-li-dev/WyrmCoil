@@ -715,19 +715,23 @@ M63 extends M58/M58b fallibility validation across newer expression/statement su
 - `.sdslvtest` runner behavior remains unsupported for fallible execution, but nested fallible forms in these expression shapes must produce explicit unsupported diagnostics rather than panicking.
 
 
-## Enum/match authoring status (M64b)
+## Enum/match authoring status (M64c)
 
-M64b supports semantic validation/type-resolution for tag-only enum + match authoring:
+M64b/M64c support semantic validation/type-resolution and deterministic HLSL lowering for tag-only enum + match authoring:
 
 - Enum variants must be qualified as `Enum.Variant`.
 - Match subject must be enum-typed.
 - Match arms must use the same enum as the subject.
 - Match arms must be exhaustive over declared variants.
-- Wildcard/default match arms are not available in M64b.
+- Wildcard/default match arms are not available.
 - Match arm values must resolve to compatible result types.
+- Tag enum declarations lower to deterministic `static const int Enum_Variant = N;` constants in declaration order.
+- Enum type refs lower to HLSL `int`.
+- Qualified variant refs lower from `Enum.Variant` to `Enum_Variant`.
+- Match expressions lower in bounded contexts (local initializer, assignment RHS, return expression) as `if` / `else if` / `else` chains, with final arm as `else` due to validated exhaustiveness.
 
-Still not available in M64b:
+Still not available in M64c:
 
 - Payload-carrying enum variants.
 - Fallible `match ok/err` forms.
-- HLSL lowering of enum/match (M64c/future).
+- fallible match lowering
