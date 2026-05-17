@@ -170,7 +170,7 @@ impl<'a> Parser<'a> {
         while !self.Check(SdslvTokenKind::RightParen) && self.I < self.Tokens.len() {
             let n = self.Ident()?;
             self.Expect(SdslvTokenKind::Colon, "expected ':' in parameter");
-            let t = self.ParsePathReq("expected parameter type")?;
+            let t = self.ParseTypeRefReq("expected parameter type")?;
             ps.push(SdslvFunctionParameter {
                 Name: n,
                 TypeName: t,
@@ -191,9 +191,9 @@ impl<'a> Parser<'a> {
             Stage: None,
             Name: name,
             Parameters: ps,
-            ReturnType: SdslvPath {
+            ReturnType: SdslvTypeRef::Named(SdslvPath {
                 Segments: vec!["void".to_string()],
-            },
+            }),
             ErrorType: None,
             Body: body,
         })
@@ -206,7 +206,7 @@ impl<'a> Parser<'a> {
         );
         let mut type_arguments = vec![];
         while !self.Check(SdslvTokenKind::RightAngle) && self.I < self.Tokens.len() {
-            let arg = self.ParsePathReq("expected type argument path")?;
+            let arg = self.ParseTypeRefReq("expected type argument path")?;
             type_arguments.push(arg);
             if !self.MatchKw(SdslvTokenKind::Comma) {
                 break;
@@ -235,7 +235,7 @@ impl<'a> Parser<'a> {
     fn ParseType(&mut self) -> Option<SdslvTypeAliasDecl> {
         let n = self.Ident()?;
         self.Expect(SdslvTokenKind::Equals, "expected '=' in type alias");
-        let t = self.ParsePathReq("expected type name in type alias")?;
+        let t = self.ParseTypeRefReq("expected type name in type alias")?;
         let mut s = None;
         if self.MatchKw(SdslvTokenKind::At) {
             let _ = self.Ident();
@@ -284,7 +284,7 @@ impl<'a> Parser<'a> {
         while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
             let fname = self.IdentReq(&format!("expected {}", field_context))?;
             self.Expect(SdslvTokenKind::Colon, "expected ':' after field name");
-            let t = self.ParsePathReq("expected field type")?;
+            let t = self.ParseTypeRefReq("expected field type")?;
             self.Expect(SdslvTokenKind::Semicolon, "expected ';' after field");
             fs.push(SdslvFieldDecl {
                 Name: fname,
@@ -376,7 +376,7 @@ impl<'a> Parser<'a> {
                 while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
                     let n = self.Ident()?;
                     self.Expect(SdslvTokenKind::Colon, "expected ':' after material field");
-                    let t = self.ParsePathReq("expected material type")?;
+                    let t = self.ParseTypeRefReq("expected material type")?;
                     self.Expect(SdslvTokenKind::Semicolon, "expected ';'");
                     mat.push(SdslvFieldDecl {
                         Name: n,
@@ -424,7 +424,7 @@ impl<'a> Parser<'a> {
         while !self.Check(SdslvTokenKind::RightParen) && self.I < self.Tokens.len() {
             let n = self.Ident()?;
             self.Expect(SdslvTokenKind::Colon, "expected ':' in parameter");
-            let t = self.ParsePathReq("expected parameter type")?;
+            let t = self.ParseTypeRefReq("expected parameter type")?;
             ps.push(SdslvFunctionParameter {
                 Name: n,
                 TypeName: t,
@@ -435,9 +435,9 @@ impl<'a> Parser<'a> {
         }
         self.Expect(SdslvTokenKind::RightParen, "expected ')' after parameters");
         self.Expect(SdslvTokenKind::Arrow, "expected '->' in function signature");
-        let rt = self.ParsePathReq("expected return type")?;
+        let rt = self.ParseTypeRefReq("expected return type")?;
         let error_type = if self.MatchKw(SdslvTokenKind::Bang) {
-            Some(self.ParsePathReq("expected error type after '!' in function signature")?)
+            Some(self.ParseTypeRefReq("expected error type after '!' in function signature")?)
         } else {
             None
         };
@@ -467,7 +467,7 @@ impl<'a> Parser<'a> {
         while !self.Check(SdslvTokenKind::RightParen) && self.I < self.Tokens.len() {
             let n = self.Ident()?;
             self.Expect(SdslvTokenKind::Colon, "expected ':' in parameter");
-            let t = self.ParsePathReq("expected parameter type")?;
+            let t = self.ParseTypeRefReq("expected parameter type")?;
             parameters.push(SdslvFunctionParameter {
                 Name: n,
                 TypeName: t,
@@ -478,7 +478,7 @@ impl<'a> Parser<'a> {
         }
         self.Expect(SdslvTokenKind::RightParen, "expected ')' after parameters");
         self.Expect(SdslvTokenKind::Arrow, "expected '->' in flow signature");
-        let return_type = self.ParsePathReq("expected return type in flow declaration")?;
+        let return_type = self.ParseTypeRefReq("expected return type in flow declaration")?;
         self.Expect(
             SdslvTokenKind::LeftBrace,
             "expected '{' after flow signature",
@@ -536,7 +536,7 @@ impl<'a> Parser<'a> {
             let field_start = self.CurrentSpan();
             let name = self.IdentReq("expected board field name")?;
             self.Expect(SdslvTokenKind::Colon, "expected ':' after board field name");
-            let type_name = self.ParsePathReq("expected board field type")?;
+            let type_name = self.ParseTypeRefReq("expected board field type")?;
             if self.MatchKw(SdslvTokenKind::Equals) {
                 self.ErrHere("unsupported board initializer in SDSL-V M9");
                 let _ = self.ParseExpression();
@@ -718,7 +718,7 @@ impl<'a> Parser<'a> {
         if self.MatchKw(SdslvTokenKind::KeywordLet) {
             let name = self.IdentReq("expected identifier after let")?;
             self.Expect(SdslvTokenKind::Colon, "expected ':' in let declaration");
-            let t = self.ParsePathReq("expected type in let declaration")?;
+            let t = self.ParseTypeRefReq("expected type in let declaration")?;
             let init = if self.MatchKw(SdslvTokenKind::Equals) {
                 Some(self.ParseExpression()?)
             } else {
@@ -1188,6 +1188,15 @@ impl<'a> Parser<'a> {
             seg.push(self.IdentReq("expected identifier after '.'")?);
         }
         Some(SdslvPath { Segments: seg })
+    }
+
+    fn ParseTypeRefReq(&mut self, msg: &str) -> Option<SdslvTypeRef> {
+        let path = self.ParsePathReq(msg)?;
+        if self.MatchKw(SdslvTokenKind::LeftAngle) {
+            self.ErrHere("generic type references are not supported in SDSL-V M59a");
+            return None;
+        }
+        Some(SdslvTypeRef::Named(path))
     }
     fn IdentReq(&mut self, m: &str) -> Option<String> {
         if let Some(keyword_name) = self.CurrentReservedKeywordName() {

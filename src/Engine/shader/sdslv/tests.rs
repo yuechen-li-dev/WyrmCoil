@@ -99,7 +99,7 @@ fn ParserRecordDeclarationShape() {
         "field names should parse"
     );
     assert_eq!(
-        record.Fields[3].TypeName.Segments.join("."),
+        record.Fields[3].TypeName.ToDisplayString(),
         "f32",
         "field types should parse"
     );
@@ -1653,7 +1653,7 @@ flow ShadowVariant(useSoft: bool, quality: i32) -> i32 {
     assert_eq!(board.Fields.len(), 3, "expected 3 board fields");
     assert_eq!(board.Fields[0].Name, "HasSelection", "expected field name");
     assert_eq!(
-        board.Fields[0].TypeName.Segments.join("."),
+        board.Fields[0].TypeName.ToDisplayString(),
         "bool",
         "expected field type"
     );
@@ -2455,4 +2455,17 @@ fn ForLoopEmissionIsDeterministicAndStructured() {
         "loop body should be emitted"
     );
     assert_eq!(hlsl_a, hlsl_b, "repeated emissions must match exactly");
+}
+
+#[test]
+fn ParseArrayTypeRefStillUnsupportedInM59a() {
+    let diagnostics =
+        ParseSource("shader S { fn F() -> i32 { let weights: array<f32, 4>; return 0; } }")
+            .expect_err("array type refs should remain unsupported in M59a");
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("generic type references are not supported in SDSL-V M59a")),
+        "expected explicit M59a generic-type diagnostic for array-style type syntax"
+    );
 }
