@@ -891,19 +891,27 @@ impl<'a> Validator<'a> {
                     TypeName,
                     Initializer,
                 } => {
-                    let expected = self.PathToType(TypeName);
                     if let Some(init) = Initializer {
-                        self.CheckExpressionCalls(shader, locals, init);
+                        self.CheckExpressionCalls(shader, locals, init, is_fallible_fn, false);
+                        if self.IsFallibleExpression(shader, locals, init) {
+                            self.Err("fallible expression must be handled with ? or !");
+                        }
                         let actual = self.ResolveExpressionType(shader, locals, init);
+                        let expected = self.PathToType(TypeName);
                         if let Some(msg) = self.TypeMismatch("type mismatch", &expected, &actual) {
                             self.Err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                         }
                         self.ValidateSwitchExpression(shader, locals, init);
+                        locals.insert(Name.clone(), expected);
+                    } else {
+                        locals.insert(Name.clone(), self.PathToType(TypeName));
                     }
-                    locals.insert(Name.clone(), expected);
                 }
                 SdslvStatement::Assign { Target, Value } => {
-                    self.CheckExpressionCalls(shader, locals, Value);
+                    self.CheckExpressionCalls(shader, locals, Value, is_fallible_fn, false);
+                    if self.IsFallibleExpression(shader, locals, Value) {
+                        self.Err("fallible expression must be handled with ? or !");
+                    }
                     self.ValidateImmutableAggregateParameterAssignment(parameter_types, Target);
                     let expected = self.ResolveAssignmentTargetType(shader, locals, Target);
                     let actual = self.ResolveExpressionType(shader, locals, Value);
@@ -915,11 +923,18 @@ impl<'a> Validator<'a> {
                     self.ValidateSwitchExpression(shader, locals, Value);
                 }
                 SdslvStatement::Return { Value } => {
-                    self.CheckExpressionCalls(shader, locals, Value);
-                    if matches!(Value, SdslvExpression::Call { .. })
-                        && self.IsFallibleExpression(shader, locals, Value)
-                    {
+                    self.CheckExpressionCalls(shader, locals, Value, is_fallible_fn, true);
+                    if self.IsFallibleExpression(shader, locals, Value) {
                         self.Err("fallible expression must be handled with ? or !");
+                    }
+                    if is_fallible_fn
+                        && matches!(
+                            Value,
+                            SdslvExpression::Call { Callee, .. }
+                                if matches!(Callee.as_ref(), SdslvExpression::Identifier(name) if name == "error")
+                        )
+                    {
+                        continue;
                     }
                     let actual = self.ResolveExpressionType(shader, locals, Value);
                     if let Some(msg) = self.TypeMismatch(
@@ -932,7 +947,10 @@ impl<'a> Validator<'a> {
                     self.ValidateSwitchExpression(shader, locals, Value);
                 }
                 SdslvStatement::Expression { Value } => {
-                    self.CheckExpressionCalls(shader, locals, Value);
+                    self.CheckExpressionCalls(shader, locals, Value, is_fallible_fn, false);
+                    if self.IsFallibleExpression(shader, locals, Value) {
+                        self.Err("fallible expression must be handled with ? or !");
+                    }
                     self.ValidateSwitchExpression(shader, locals, Value);
                 }
                 SdslvStatement::Empty => {}
@@ -942,7 +960,7 @@ impl<'a> Validator<'a> {
                     ElseBody,
                     ..
                 } => {
-                    self.CheckExpressionCalls(shader, locals, Condition);
+                    self.CheckExpressionCalls(shader, locals, Condition, is_fallible_fn, false);
                     let condition_type = self.ResolveExpressionType(shader, locals, Condition);
                     if condition_type != TypeRef::Unknown
                         && condition_type != TypeRef::Named("bool".to_string())
@@ -985,8 +1003,8 @@ impl<'a> Validator<'a> {
                     Body,
                     ..
                 } => {
-                    self.CheckExpressionCalls(shader, locals, Start);
-                    self.CheckExpressionCalls(shader, locals, End);
+                    self.CheckExpressionCalls(shader, locals, Start, is_fallible_fn, false);
+                    self.CheckExpressionCalls(shader, locals, End, is_fallible_fn, false);
                     let start_type = self.ResolveExpressionType(shader, locals, Start);
                     let end_type = self.ResolveExpressionType(shader, locals, End);
                     if !self.IsIntegerType(&start_type) && start_type != TypeRef::Unknown {
@@ -1002,7 +1020,7 @@ impl<'a> Validator<'a> {
                         ));
                     }
                     if let Some(step_expr) = Step {
-                        self.CheckExpressionCalls(shader, locals, step_expr);
+                        self.CheckExpressionCalls(shader, locals, step_expr, is_fallible_fn, false);
                         let step_type = self.ResolveExpressionType(shader, locals, step_expr);
                         if !self.IsIntegerType(&step_type) && step_type != TypeRef::Unknown {
                             self.Err(&format!(
@@ -1126,13 +1144,22 @@ impl<'a> Validator<'a> {
         shader: &SdslvShaderDecl,
         locals: &HashMap<String, TypeRef>,
         expression: &SdslvExpression,
+        is_fallible_fn: bool,
+        allow_error_return: bool,
     ) {
         match expression {
             SdslvExpression::Call { Callee, Arguments } => {
                 if let SdslvExpression::Identifier(name) = &**Callee
                     && name == "error"
                 {
-                    // validated in contextual statements
+                    if !allow_error_return {
+                        self.Err(
+                            "error(...) is only valid in fallible return position in SDSL-V M58",
+                        );
+                    } else if !is_fallible_fn {
+                        self.Err("error(...) can only be returned from a fallible function in SDSL-V M58");
+                    }
+                    return;
                 }
                 if let SdslvExpression::Identifier(name) = &**Callee
                     && let Some(signature) = self.FunctionSignatures.get(name).cloned()
@@ -1156,40 +1183,55 @@ impl<'a> Validator<'a> {
                     }
                 }
                 for argument in Arguments {
-                    self.CheckExpressionCalls(shader, locals, argument);
+                    self.CheckExpressionCalls(shader, locals, argument, is_fallible_fn, false);
                 }
             }
             SdslvExpression::FieldAccess { Base, .. } => {
-                self.CheckExpressionCalls(shader, locals, Base)
+                self.CheckExpressionCalls(shader, locals, Base, is_fallible_fn, false)
             }
             SdslvExpression::Binary { Left, Right, .. } => {
-                self.CheckExpressionCalls(shader, locals, Left);
-                self.CheckExpressionCalls(shader, locals, Right);
+                self.CheckExpressionCalls(shader, locals, Left, is_fallible_fn, false);
+                self.CheckExpressionCalls(shader, locals, Right, is_fallible_fn, false);
             }
             SdslvExpression::Unary { Operand, .. } => {
-                self.CheckExpressionCalls(shader, locals, Operand)
+                self.CheckExpressionCalls(shader, locals, Operand, is_fallible_fn, false)
             }
             SdslvExpression::TryPropagate { Expression, .. } => {
-                self.CheckExpressionCalls(shader, locals, Expression)
+                self.CheckExpressionCalls(shader, locals, Expression, is_fallible_fn, false);
+                if !is_fallible_fn {
+                    self.Err("? can only be used inside a fallible function");
+                }
+                if !self.IsFallibleExpression(shader, locals, Expression) {
+                    self.Err("? requires a fallible expression");
+                }
             }
             SdslvExpression::Unwrap { Expression, .. } => {
-                self.CheckExpressionCalls(shader, locals, Expression)
+                self.CheckExpressionCalls(shader, locals, Expression, is_fallible_fn, false);
+                if !self.IsFallibleExpression(shader, locals, Expression) {
+                    self.Err("! unwrap requires a fallible expression");
+                }
             }
             SdslvExpression::With { Base, Updates } => {
-                self.CheckExpressionCalls(shader, locals, Base);
+                self.CheckExpressionCalls(shader, locals, Base, is_fallible_fn, false);
                 self.ValidateWithExpression(shader, locals, Base, Updates);
                 for update in Updates {
-                    self.CheckExpressionCalls(shader, locals, &update.Value);
+                    self.CheckExpressionCalls(shader, locals, &update.Value, is_fallible_fn, false);
                 }
             }
             SdslvExpression::Switch {
                 Cases, ElseValue, ..
             } => {
                 for case in Cases {
-                    self.CheckExpressionCalls(shader, locals, &case.Condition);
-                    self.CheckExpressionCalls(shader, locals, &case.Value);
+                    self.CheckExpressionCalls(
+                        shader,
+                        locals,
+                        &case.Condition,
+                        is_fallible_fn,
+                        false,
+                    );
+                    self.CheckExpressionCalls(shader, locals, &case.Value, is_fallible_fn, false);
                 }
-                self.CheckExpressionCalls(shader, locals, ElseValue);
+                self.CheckExpressionCalls(shader, locals, ElseValue, is_fallible_fn, false);
             }
             _ => {}
         }
@@ -1257,10 +1299,8 @@ impl<'a> Validator<'a> {
                 self.ResolveExpressionType(shader, locals, Operand)
             }
             SdslvExpression::With { Base, .. } => self.ResolveExpressionType(shader, locals, Base),
-            SdslvExpression::TryPropagate { Expression, .. } => {
-                self.ResolveExpressionType(shader, locals, Expression)
-            }
-            SdslvExpression::Unwrap { Expression, .. } => {
+            SdslvExpression::TryPropagate { Expression, .. }
+            | SdslvExpression::Unwrap { Expression, .. } => {
                 self.ResolveExpressionType(shader, locals, Expression)
             }
             SdslvExpression::Switch {
@@ -1445,8 +1485,8 @@ impl<'a> Validator<'a> {
 
     fn IsFallibleExpression(
         &self,
-        _shader: &SdslvShaderDecl,
-        _locals: &HashMap<String, TypeRef>,
+        shader: &SdslvShaderDecl,
+        locals: &HashMap<String, TypeRef>,
         expression: &SdslvExpression,
     ) -> bool {
         match expression {
@@ -1457,6 +1497,31 @@ impl<'a> Validator<'a> {
                     return signature.IsFallible;
                 }
                 false
+            }
+            SdslvExpression::TryPropagate { .. } | SdslvExpression::Unwrap { .. } => false,
+            SdslvExpression::Binary { Left, Right, .. } => {
+                self.IsFallibleExpression(shader, locals, Left)
+                    || self.IsFallibleExpression(shader, locals, Right)
+            }
+            SdslvExpression::Unary { Operand, .. } => {
+                self.IsFallibleExpression(shader, locals, Operand)
+            }
+            SdslvExpression::FieldAccess { Base, .. } => {
+                self.IsFallibleExpression(shader, locals, Base)
+            }
+            SdslvExpression::With { Base, Updates } => {
+                self.IsFallibleExpression(shader, locals, Base)
+                    || Updates
+                        .iter()
+                        .any(|u| self.IsFallibleExpression(shader, locals, &u.Value))
+            }
+            SdslvExpression::Switch {
+                Cases, ElseValue, ..
+            } => {
+                Cases.iter().any(|c| {
+                    self.IsFallibleExpression(shader, locals, &c.Condition)
+                        || self.IsFallibleExpression(shader, locals, &c.Value)
+                }) || self.IsFallibleExpression(shader, locals, ElseValue)
             }
             _ => false,
         }

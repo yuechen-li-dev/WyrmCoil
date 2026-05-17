@@ -1985,6 +1985,102 @@ flow SelectShadow() -> MissingType { state A { return 1; } }
 }
 
 #[test]
+fn ValidationFallibilityHandlingRules() {
+    let ok = r#"shader S { fn F() -> i32 ! Error { return 1; } fn G() -> i32 ! Error { let x: i32 = F()?; return x; } fn H() -> i32 { let y: i32 = F()!; return y; } }"#;
+    assert!(
+        ValidateSource(ok).is_ok(),
+        "handled fallible expressions should validate"
+    );
+
+    let bad_q_infallible =
+        ValidateSource(r#"shader S { fn F() -> i32 ! Error { return 1; } fn G() -> i32 { let x: i32 = F()?; return x; } }"#)
+            .expect_err("? inside infallible function should fail");
+    assert!(
+        bad_q_infallible.iter().any(|d| d
+            .Message
+            .contains("? can only be used inside a fallible function")),
+        "expected infallible-context ? diagnostic"
+    );
+
+    let bad_q_non_fallible =
+        ValidateSource(r#"shader S { fn F() -> i32 { return 1; } fn G() -> i32 ! Error { let x: i32 = F()?; return x; } }"#)
+            .expect_err("? on infallible expression should fail");
+    assert!(
+        bad_q_non_fallible
+            .iter()
+            .any(|d| d.Message.contains("? requires a fallible expression")),
+        "expected ? requires fallible expression diagnostic"
+    );
+
+    let bad_unwrap =
+        ValidateSource(r#"shader S { fn F() -> i32 { return 1; } fn G() -> i32 { let x: i32 = F()!; return x; } }"#)
+            .expect_err("! on infallible expression should fail");
+    assert!(
+        bad_unwrap.iter().any(|d| d
+            .Message
+            .contains("! unwrap requires a fallible expression")),
+        "expected unwrap diagnostic"
+    );
+}
+
+#[test]
+fn ValidationRejectsUnhandledFallibleExpressions() {
+    let src = r#"shader S { fn F() -> i32 ! Error { return 1; } fn G() -> i32 ! Error { F(); let x: i32 = F(); return F(); } }"#;
+    let diagnostics = ValidateSource(src).expect_err("unhandled fallible usages should fail");
+    let count = diagnostics
+        .iter()
+        .filter(|d| {
+            d.Message
+                .contains("fallible expression must be handled with ? or !")
+        })
+        .count();
+    assert!(
+        count >= 3,
+        "expected unhandled fallible diagnostics for expression statement, let initializer, and return expression"
+    );
+}
+
+#[test]
+fn ValidationErrorCallPositionRules() {
+    assert!(
+        ValidateSource(r#"shader S { fn F() -> i32 ! Error { return error("bad"); } }"#).is_ok(),
+        "error(...) return should pass in fallible function"
+    );
+    let infallible = ValidateSource(r#"shader S { fn F() -> i32 { return error("bad"); } }"#)
+        .expect_err("infallible return error(...) should fail");
+    assert!(
+        infallible.iter().any(|d| d
+            .Message
+            .contains("error(...) can only be returned from a fallible function in SDSL-V M58")),
+        "expected fallible return-position diagnostic"
+    );
+
+    let non_return = ValidateSource(
+        r#"shader S { fn F() -> i32 ! Error { let e: Error = error("bad"); return 0; } }"#,
+    )
+    .expect_err("non-return error(...) should fail");
+    assert!(
+        non_return.iter().any(|d| d
+            .Message
+            .contains("error(...) is only valid in fallible return position in SDSL-V M58")),
+        "expected return-position-only diagnostic"
+    );
+}
+
+#[test]
+fn EmitHlslRejectsFallibleModulesWithClearDiagnostic() {
+    let fallible_src = r#"shader S { fn F() -> i32 ! Error { return 1; } stage pixel fn PS() -> float4 { return float4(1.0, 0.0, 0.0, 1.0); } }"#;
+    let diagnostics = CompileSourceToHlsl(fallible_src)
+        .expect_err("fallible modules should be unsupported for HLSL emission");
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("fallible function emission is not implemented in SDSL-V M58")),
+        "expected clear unsupported fallible emission diagnostic"
+    );
+}
+
+#[test]
 fn DxcBuildCommandIncludesEntryProfileSpirvAndExtraArgs() {
     let request = DxcCompileRequest {
         SourceName: "flat_color.sdslv".to_string(),

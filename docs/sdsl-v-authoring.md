@@ -638,3 +638,18 @@ You can now write helper methods with fallible signatures (`-> T ! Error`) and u
 `?` is propagation-oriented and intended for fallible function contexts. `!` is explicit unwrap. Fallible `match` is not in M58 yet.
 
 Stage entry-point fallibility and HLSL fallible lowering are intentionally not implemented in M58.
+
+
+## M58b fallibility validation completion
+
+M58b completes bounded validation for Oct-style fallibility in SDSL-V.
+
+- Fallible signatures are `-> T ! Error`; non-`Error` fallible error types are rejected.
+- Stage entry points cannot be fallible in M58/M58b.
+- A call to a fallible function is a fallible expression until handled.
+- `?` is valid only on fallible expressions and only inside fallible functions.
+- `!` is valid only on fallible expressions.
+- Unhandled fallible expressions are rejected in expression statements, local initializers, assignment RHS, return expressions, and compound-expression trees.
+- `error(...)` is only valid in fallible return position (`return error("...");`).
+- Fallible `match` is still future work.
+- HLSL emission remains explicitly unsupported for modules that contain fallible functions/expressions (`fallible function emission is not implemented in SDSL-V M58`).

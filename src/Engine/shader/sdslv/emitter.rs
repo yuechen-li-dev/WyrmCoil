@@ -138,6 +138,15 @@ impl<'a> HlslEmitter<'a> {
     }
 
     fn EmitShader(&mut self, shader: &SdslvShaderDecl) {
+        if shader.Methods.iter().any(|m| m.ErrorType.is_some())
+            || shader
+                .StageMethods
+                .iter()
+                .any(|m| m.ErrorType.is_some() || Self::ExpressionTreeContainsFallibilityInBody(m))
+        {
+            self.Err("fallible function emission is not implemented in SDSL-V M58");
+            return;
+        }
         for method in &shader.Methods {
             self.EmitShaderMethodNamed(&shader.Name, method);
         }
@@ -158,8 +167,105 @@ impl<'a> HlslEmitter<'a> {
         let Some(shader) = generic_shader else {
             return;
         };
+        if shader.Methods.iter().any(|m| m.ErrorType.is_some())
+            || shader
+                .StageMethods
+                .iter()
+                .any(|m| m.ErrorType.is_some() || Self::ExpressionTreeContainsFallibilityInBody(m))
+        {
+            self.Err("fallible function emission is not implemented in SDSL-V M58");
+            return;
+        }
         for stage_method in &shader.StageMethods {
             self.EmitStageMethodAlias(shader, &compile.Alias, stage_method, compile);
+        }
+    }
+
+    fn ExpressionTreeContainsFallibilityInBody(method: &SdslvFunctionDecl) -> bool {
+        let Some(body) = &method.Body else {
+            return false;
+        };
+        body.Statements
+            .iter()
+            .any(Self::StatementContainsFallibility)
+    }
+
+    fn StatementContainsFallibility(statement: &SdslvStatement) -> bool {
+        match statement {
+            SdslvStatement::Let { Initializer, .. } => Initializer
+                .as_ref()
+                .is_some_and(Self::ExpressionContainsFallibility),
+            SdslvStatement::Assign { Value, .. } | SdslvStatement::Return { Value } => {
+                Self::ExpressionContainsFallibility(Value)
+            }
+            SdslvStatement::Expression { Value } => Self::ExpressionContainsFallibility(Value),
+            SdslvStatement::If {
+                Condition,
+                ThenBody,
+                ElseBody,
+                ..
+            } => {
+                Self::ExpressionContainsFallibility(Condition)
+                    || ThenBody.iter().any(Self::StatementContainsFallibility)
+                    || ElseBody
+                        .as_ref()
+                        .is_some_and(|body| body.iter().any(Self::StatementContainsFallibility))
+            }
+            SdslvStatement::For {
+                Start,
+                End,
+                Step,
+                Body,
+                ..
+            } => {
+                Self::ExpressionContainsFallibility(Start)
+                    || Self::ExpressionContainsFallibility(End)
+                    || Step
+                        .as_ref()
+                        .is_some_and(Self::ExpressionContainsFallibility)
+                    || Body.iter().any(Self::StatementContainsFallibility)
+            }
+            SdslvStatement::Empty => false,
+        }
+    }
+
+    fn ExpressionContainsFallibility(expression: &SdslvExpression) -> bool {
+        match expression {
+            SdslvExpression::TryPropagate { .. } | SdslvExpression::Unwrap { .. } => true,
+            SdslvExpression::Call { Callee, Arguments } => {
+                if matches!(Callee.as_ref(), SdslvExpression::Identifier(name) if name == "error") {
+                    return true;
+                }
+                Arguments.iter().any(Self::ExpressionContainsFallibility)
+            }
+            SdslvExpression::FieldAccess { Base, .. } => Self::ExpressionContainsFallibility(Base),
+            SdslvExpression::Unary { Operand, .. } => Self::ExpressionContainsFallibility(Operand),
+            SdslvExpression::Binary { Left, Right, .. } => {
+                Self::ExpressionContainsFallibility(Left)
+                    || Self::ExpressionContainsFallibility(Right)
+            }
+            SdslvExpression::With { Base, Updates } => {
+                Self::ExpressionContainsFallibility(Base)
+                    || Updates
+                        .iter()
+                        .any(|u| Self::ExpressionContainsFallibility(&u.Value))
+            }
+            SdslvExpression::Switch {
+                Subject,
+                Cases,
+                ElseValue,
+                ..
+            } => {
+                Subject
+                    .as_ref()
+                    .is_some_and(|s| Self::ExpressionContainsFallibility(s))
+                    || Cases.iter().any(|c| {
+                        Self::ExpressionContainsFallibility(&c.Condition)
+                            || Self::ExpressionContainsFallibility(&c.Value)
+                    })
+                    || Self::ExpressionContainsFallibility(ElseValue)
+            }
+            _ => false,
         }
     }
     fn EmitShaderMethodNamed(&mut self, shader_name: &str, method: &SdslvFunctionDecl) {
