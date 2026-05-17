@@ -629,3 +629,12 @@ Still out of scope in M21:
 - no `wgpu::ShaderModule` creation helper
 - no `wgpu::RenderPipeline` creation
 - no reflection-driven bind-layout/material pipeline
+
+
+## M58 authoring notes: fallible seed
+
+You can now write helper methods with fallible signatures (`-> T ! Error`) and use postfix `?` and `!` on fallible expressions. Only `Error` is allowed after `!` in signatures.
+
+`?` is propagation-oriented and intended for fallible function contexts. `!` is explicit unwrap. Fallible `match` is not in M58 yet.
+
+Stage entry-point fallibility and HLSL fallible lowering are intentionally not implemented in M58.

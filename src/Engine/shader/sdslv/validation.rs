@@ -189,6 +189,7 @@ struct FunctionSignature {
     Name: String,
     Parameters: Vec<TypeRef>,
     ReturnType: TypeRef,
+    IsFallible: bool,
 }
 
 struct Validator<'a> {
@@ -309,12 +310,14 @@ impl<'a> Validator<'a> {
             .map(|parameter| self.PathToType(&parameter.TypeName))
             .collect();
         let return_type = self.PathToType(&function.ReturnType);
+        let is_fallible = function.ErrorType.is_some();
         self.FunctionSignatures.insert(
             name.to_string(),
             FunctionSignature {
                 Name: name.to_string(),
                 Parameters: parameters,
                 ReturnType: return_type,
+                IsFallible: is_fallible,
             },
         );
     }
@@ -817,6 +820,10 @@ impl<'a> Validator<'a> {
             SdslvExpression::Call { .. } => TypeRef::Unknown,
             SdslvExpression::With { Base, .. } => self.ResolveFlowExpressionType(locals, Base),
             SdslvExpression::Switch { .. } => TypeRef::Unknown,
+            SdslvExpression::TryPropagate { Expression, .. }
+            | SdslvExpression::Unwrap { Expression, .. } => {
+                self.ResolveFlowExpressionType(locals, Expression)
+            }
         }
     }
     fn ValidateFlowGoto(
@@ -846,6 +853,15 @@ impl<'a> Validator<'a> {
             parameter_types.insert(parameter.Name.clone(), parameter_type);
         }
         let return_type = self.PathToType(&function.ReturnType);
+        let is_fallible_fn = function.ErrorType.is_some();
+        if let Some(error_type) = &function.ErrorType
+            && error_type.Segments.join(".") != "Error"
+        {
+            self.Err("only Error is supported as fallible error type in SDSL-V M58");
+        }
+        if function.Stage.is_some() && is_fallible_fn {
+            self.Err("stage functions cannot be fallible in SDSL-V M58");
+        }
 
         self.ValidateStatements(
             shader,
@@ -854,6 +870,7 @@ impl<'a> Validator<'a> {
             &mut locals,
             &parameter_types,
             &return_type,
+            is_fallible_fn,
         );
     }
 
@@ -865,6 +882,7 @@ impl<'a> Validator<'a> {
         locals: &mut HashMap<String, TypeRef>,
         parameter_types: &HashMap<String, TypeRef>,
         return_type: &TypeRef,
+        is_fallible_fn: bool,
     ) {
         for statement in statements {
             match statement {
@@ -898,6 +916,11 @@ impl<'a> Validator<'a> {
                 }
                 SdslvStatement::Return { Value } => {
                     self.CheckExpressionCalls(shader, locals, Value);
+                    if matches!(Value, SdslvExpression::Call { .. })
+                        && self.IsFallibleExpression(shader, locals, Value)
+                    {
+                        self.Err("fallible expression must be handled with ? or !");
+                    }
                     let actual = self.ResolveExpressionType(shader, locals, Value);
                     if let Some(msg) = self.TypeMismatch(
                         &format!("return type mismatch in {}", function.Name),
@@ -936,6 +959,7 @@ impl<'a> Validator<'a> {
                         locals,
                         parameter_types,
                         return_type,
+                        is_fallible_fn,
                     );
                     if let Some(else_body) = ElseBody {
                         if else_body.len() == 1 && matches!(else_body[0], SdslvStatement::If { .. })
@@ -949,6 +973,7 @@ impl<'a> Validator<'a> {
                             locals,
                             parameter_types,
                             return_type,
+                            is_fallible_fn,
                         );
                     }
                 }
@@ -1001,6 +1026,7 @@ impl<'a> Validator<'a> {
                         &mut nested_locals,
                         parameter_types,
                         return_type,
+                        is_fallible_fn,
                     );
                 }
             }
@@ -1104,6 +1130,11 @@ impl<'a> Validator<'a> {
         match expression {
             SdslvExpression::Call { Callee, Arguments } => {
                 if let SdslvExpression::Identifier(name) = &**Callee
+                    && name == "error"
+                {
+                    // validated in contextual statements
+                }
+                if let SdslvExpression::Identifier(name) = &**Callee
                     && let Some(signature) = self.FunctionSignatures.get(name).cloned()
                 {
                     for (index, argument) in Arguments.iter().enumerate() {
@@ -1137,6 +1168,12 @@ impl<'a> Validator<'a> {
             }
             SdslvExpression::Unary { Operand, .. } => {
                 self.CheckExpressionCalls(shader, locals, Operand)
+            }
+            SdslvExpression::TryPropagate { Expression, .. } => {
+                self.CheckExpressionCalls(shader, locals, Expression)
+            }
+            SdslvExpression::Unwrap { Expression, .. } => {
+                self.CheckExpressionCalls(shader, locals, Expression)
             }
             SdslvExpression::With { Base, Updates } => {
                 self.CheckExpressionCalls(shader, locals, Base);
@@ -1220,6 +1257,12 @@ impl<'a> Validator<'a> {
                 self.ResolveExpressionType(shader, locals, Operand)
             }
             SdslvExpression::With { Base, .. } => self.ResolveExpressionType(shader, locals, Base),
+            SdslvExpression::TryPropagate { Expression, .. } => {
+                self.ResolveExpressionType(shader, locals, Expression)
+            }
+            SdslvExpression::Unwrap { Expression, .. } => {
+                self.ResolveExpressionType(shader, locals, Expression)
+            }
             SdslvExpression::Switch {
                 Cases, ElseValue, ..
             } => {
@@ -1370,6 +1413,9 @@ impl<'a> Validator<'a> {
         let SdslvExpression::Identifier(callee_name) = callee else {
             return TypeRef::Unknown;
         };
+        if callee_name == "error" {
+            return TypeRef::Named("Error".to_string());
+        }
         if Self::IsBuiltinCtor(callee_name) {
             return TypeRef::Named(callee_name.clone());
         }
@@ -1395,6 +1441,25 @@ impl<'a> Validator<'a> {
             }
         }
         signature.ReturnType.clone()
+    }
+
+    fn IsFallibleExpression(
+        &self,
+        _shader: &SdslvShaderDecl,
+        _locals: &HashMap<String, TypeRef>,
+        expression: &SdslvExpression,
+    ) -> bool {
+        match expression {
+            SdslvExpression::Call { Callee, .. } => {
+                if let SdslvExpression::Identifier(name) = &**Callee
+                    && let Some(signature) = self.FunctionSignatures.get(name)
+                {
+                    return signature.IsFallible;
+                }
+                false
+            }
+            _ => false,
+        }
     }
 
     fn ResolveFieldType(&self, base_type: &TypeRef, field: &str) -> TypeRef {

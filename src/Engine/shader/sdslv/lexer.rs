@@ -118,6 +118,16 @@ impl<'a> Lexer<'a> {
                 self.Push(SdslvTokenKind::BangEquals, st);
                 continue;
             }
+            if c == '!' {
+                self.Bump('!');
+                self.Push(SdslvTokenKind::Bang, st);
+                continue;
+            }
+            if c == '?' {
+                self.Bump('?');
+                self.Push(SdslvTokenKind::Question, st);
+                continue;
+            }
             if c == '<' && self.Peek(1) == Some('=') {
                 self.Bump('<');
                 self.Bump('=');
