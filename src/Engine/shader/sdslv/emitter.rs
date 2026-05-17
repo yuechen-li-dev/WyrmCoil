@@ -421,6 +421,18 @@ impl<'a> HlslEmitter<'a> {
                 let type_name = TypeName.ToDisplayString();
                 let rendered = self.MapBuiltinType(&type_name).unwrap_or(&type_name);
                 if let Some(init) = Initializer {
+                    if let SdslvExpression::ArrayLiteral { Elements, .. } = init {
+                        let mut lines = vec![format!("{} {};", rendered, Name)];
+                        for (index, element) in Elements.iter().enumerate() {
+                            lines.push(format!(
+                                "{}[{}] = {};",
+                                Name,
+                                index,
+                                self.EmitExpression(element, 0)
+                            ));
+                        }
+                        return lines;
+                    }
                     if let SdslvExpression::Switch {
                         Subject,
                         Cases,
@@ -467,6 +479,19 @@ impl<'a> HlslEmitter<'a> {
                 }
             }
             SdslvStatement::Assign { Target, Value } => {
+                if let SdslvExpression::ArrayLiteral { Elements, .. } = Value {
+                    let target_text = self.EmitExpression(Target, 0);
+                    let mut lines = vec![];
+                    for (index, element) in Elements.iter().enumerate() {
+                        lines.push(format!(
+                            "{}[{}] = {};",
+                            target_text,
+                            index,
+                            self.EmitExpression(element, 0)
+                        ));
+                    }
+                    return lines;
+                }
                 if let SdslvExpression::Switch {
                     Subject,
                     Cases,
@@ -661,6 +686,9 @@ impl<'a> HlslEmitter<'a> {
                 } else {
                     "false".to_string()
                 }
+            }
+            SdslvExpression::ArrayLiteral { .. } => {
+                "/* array literal requires expected context */".to_string()
             }
             SdslvExpression::FieldAccess { Base, Field } => {
                 format!("{}.{}", self.EmitExpression(Base, 3), Field)

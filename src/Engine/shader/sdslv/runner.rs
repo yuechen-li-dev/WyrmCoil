@@ -299,6 +299,11 @@ fn EvalExpression(
                 .to_string(),
             Span: None,
         }),
+        SdslvExpression::ArrayLiteral { .. } => Err(SdslvAssertFailure {
+            Message: "array literals are not supported in SDSL-V test expression evaluation"
+                .to_string(),
+            Span: None,
+        }),
         SdslvExpression::With { .. } => Err(SdslvAssertFailure {
             Message: "with expression is not supported in SDSL-V M7b expression evaluation"
                 .to_string(),

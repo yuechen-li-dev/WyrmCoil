@@ -255,6 +255,10 @@ pub enum SdslvExpression {
     FloatLiteral(String),
     StringLiteral(String),
     BoolLiteral(bool),
+    ArrayLiteral {
+        Elements: Vec<SdslvExpression>,
+        Span: SdslvSpan,
+    },
     FieldAccess {
         Base: Box<SdslvExpression>,
         Field: String,

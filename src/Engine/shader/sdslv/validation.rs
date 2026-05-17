@@ -828,6 +828,7 @@ impl<'a> Validator<'a> {
             SdslvExpression::Call { .. } => TypeRef::Unknown,
             SdslvExpression::With { Base, .. } => self.ResolveFlowExpressionType(locals, Base),
             SdslvExpression::Index { Base, .. } => self.ResolveFlowExpressionType(locals, Base),
+            SdslvExpression::ArrayLiteral { .. } => TypeRef::Unknown,
             SdslvExpression::Switch { .. } => TypeRef::Unknown,
             SdslvExpression::TryPropagate { Expression, .. }
             | SdslvExpression::Unwrap { Expression, .. } => {
@@ -910,6 +911,9 @@ impl<'a> Validator<'a> {
                         if let Some(msg) = self.TypeMismatch("type mismatch", &expected, &actual) {
                             self.Err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                         }
+                        self.ValidateArrayLiteralAgainstExpectedType(
+                            shader, locals, init, &expected,
+                        );
                         self.ValidateSwitchExpression(shader, locals, init);
                         locals.insert(Name.clone(), expected);
                     } else {
@@ -933,6 +937,7 @@ impl<'a> Validator<'a> {
                     if let Some(msg) = self.TypeMismatch(mismatch_label, &expected, &actual) {
                         self.Err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                     }
+                    self.ValidateArrayLiteralAgainstExpectedType(shader, locals, Value, &expected);
                     self.ValidateSwitchExpression(shader, locals, Value);
                 }
                 SdslvStatement::Return { Value } => {
@@ -1223,6 +1228,11 @@ impl<'a> Validator<'a> {
                     self.CheckExpressionCalls(shader, locals, argument, is_fallible_fn, false);
                 }
             }
+            SdslvExpression::ArrayLiteral { Elements, .. } => {
+                for element in Elements {
+                    self.CheckExpressionCalls(shader, locals, element, is_fallible_fn, false);
+                }
+            }
             SdslvExpression::FieldAccess { Base, .. } => {
                 self.CheckExpressionCalls(shader, locals, Base, is_fallible_fn, false)
             }
@@ -1314,6 +1324,7 @@ impl<'a> Validator<'a> {
             SdslvExpression::FloatLiteral(_) => TypeRef::Named("float".to_string()),
             SdslvExpression::StringLiteral(_) => TypeRef::Named("string".to_string()),
             SdslvExpression::BoolLiteral(_) => TypeRef::Named("bool".to_string()),
+            SdslvExpression::ArrayLiteral { .. } => TypeRef::Unknown,
             SdslvExpression::FieldAccess { Base, Field } => {
                 let base_type = self.ResolveExpressionType(shader, locals, Base);
                 self.ResolveFieldType(&base_type, Field)
@@ -1565,6 +1576,9 @@ impl<'a> Validator<'a> {
                 false
             }
             SdslvExpression::TryPropagate { .. } | SdslvExpression::Unwrap { .. } => false,
+            SdslvExpression::ArrayLiteral { Elements, .. } => Elements
+                .iter()
+                .any(|element| self.IsFallibleExpression(shader, locals, element)),
             SdslvExpression::Binary { Left, Right, .. } => {
                 self.IsFallibleExpression(shader, locals, Left)
                     || self.IsFallibleExpression(shader, locals, Right)
@@ -1594,6 +1608,47 @@ impl<'a> Validator<'a> {
                 }) || self.IsFallibleExpression(shader, locals, ElseValue)
             }
             _ => false,
+        }
+    }
+
+    fn ValidateArrayLiteralAgainstExpectedType(
+        &mut self,
+        shader: &SdslvShaderDecl,
+        locals: &HashMap<String, TypeRef>,
+        expression: &SdslvExpression,
+        expected_type: &TypeRef,
+    ) {
+        let SdslvExpression::ArrayLiteral { Elements, .. } = expression else {
+            return;
+        };
+        let TypeRef::Array { Element, Length } = expected_type else {
+            self.Err(&format!(
+                "array literal cannot initialize non-array type {}; use float4(...) for vector values",
+                self.TypeName(expected_type)
+            ));
+            return;
+        };
+        if *Length == 0 {
+            self.Err("array literals require positive fixed array lengths in SDSL-V M61");
+            return;
+        }
+        if Elements.len() != *Length {
+            self.Err(&format!(
+                "array literal length mismatch: expected {} elements, found {}",
+                Length,
+                Elements.len()
+            ));
+        }
+        for element in Elements {
+            let actual = self.ResolveExpressionType(shader, locals, element);
+            if let Some((_, expected_name, actual_name)) =
+                self.TypeMismatch("", Element.as_ref(), &actual)
+            {
+                self.Err(&format!(
+                    "array literal element type mismatch: expected {}, found {}",
+                    expected_name, actual_name
+                ));
+            }
         }
     }
 
