@@ -154,6 +154,8 @@ Type model notes:
 - Swizzles are expected in the expression subset.
 - Vector/matrix operators follow conventional shader arithmetic.
 - Arrays are indexed storage collections (`arr[i]`) and are distinct from numeric vector/matrix value types.
+- Fixed-array element assignment is supported for assignable array storage (`arr[i] = value;`) with integer index and compatible element type checks.
+- Array parameters are immutable for element writes in M60; local arrays remain assignable.
 - Array literals are not implemented in M59b.
 
 ### Open design point: `float` vs `f32`

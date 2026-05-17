@@ -245,6 +245,9 @@ M59b fixed-array note:
 - `N` must be a positive integer literal in source (`array<f32, 4>` is valid; `array<f32, 0>` and non-literals are invalid).
 - array indexing is supported for array-typed expressions: `arr[i]`.
 - index expressions must be integer-typed where known.
+- fixed-array element assignment is supported in M60: `arr[i] = value;`.
+- array element assignment validates element-type compatibility (`array<f32, N>` expects `f32`, `array<float2, N>` expects `float2`, etc.).
+- array parameters are immutable for element writes in M60 (`param[i] = value` is rejected); local arrays remain assignable.
 - arrays are distinct from shader numeric vector/matrix value types (`float2`, `float3`, `float4`, `float4x4`).
 - array literals are still not implemented in M59b, and `[...]` remains reserved for future array-literal syntax.
 

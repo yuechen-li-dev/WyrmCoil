@@ -788,10 +788,12 @@ impl<'a> Parser<'a> {
         })
     }
     fn IsAssignmentTarget(&self, expr: &SdslvExpression) -> bool {
-        matches!(
-            expr,
-            SdslvExpression::Identifier(_) | SdslvExpression::FieldAccess { .. }
-        )
+        match expr {
+            SdslvExpression::Identifier(_) => true,
+            SdslvExpression::FieldAccess { Base, .. } => self.IsAssignmentTarget(Base),
+            SdslvExpression::Index { Base, .. } => self.IsAssignmentTarget(Base),
+            _ => false,
+        }
     }
     fn ParseExpression(&mut self) -> Option<SdslvExpression> {
         self.ParseComparison()
