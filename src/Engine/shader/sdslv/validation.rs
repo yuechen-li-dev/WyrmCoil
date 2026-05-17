@@ -172,6 +172,10 @@ pub fn ValidateModule(module: &SdslvModule) -> Result<(), Vec<SdslvDiagnostic>> 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeRef {
     Named(String),
+    Array {
+        Element: Box<TypeRef>,
+        Length: usize,
+    },
     Unknown,
 }
 
@@ -179,6 +183,7 @@ impl TypeRef {
     fn Name(&self) -> Option<&str> {
         match self {
             TypeRef::Named(name) => Some(name.as_str()),
+            TypeRef::Array { .. } => None,
             TypeRef::Unknown => None,
         }
     }
@@ -822,6 +827,7 @@ impl<'a> Validator<'a> {
             }
             SdslvExpression::Call { .. } => TypeRef::Unknown,
             SdslvExpression::With { Base, .. } => self.ResolveFlowExpressionType(locals, Base),
+            SdslvExpression::Index { Base, .. } => self.ResolveFlowExpressionType(locals, Base),
             SdslvExpression::Switch { .. } => TypeRef::Unknown,
             SdslvExpression::TryPropagate { Expression, .. }
             | SdslvExpression::Unwrap { Expression, .. } => {
@@ -1192,6 +1198,24 @@ impl<'a> Validator<'a> {
             SdslvExpression::FieldAccess { Base, .. } => {
                 self.CheckExpressionCalls(shader, locals, Base, is_fallible_fn, false)
             }
+            SdslvExpression::Index { Base, Index, .. } => {
+                self.CheckExpressionCalls(shader, locals, Base, is_fallible_fn, false);
+                self.CheckExpressionCalls(shader, locals, Index, is_fallible_fn, false);
+                let base_type = self.ResolveExpressionType(shader, locals, Base);
+                let index_type = self.ResolveExpressionType(shader, locals, Index);
+                if !matches!(base_type, TypeRef::Array { .. }) && base_type != TypeRef::Unknown {
+                    self.Err(&format!(
+                        "indexing requires array type; found {}",
+                        self.TypeName(&base_type)
+                    ));
+                }
+                if !self.IsIntegerType(&index_type) && index_type != TypeRef::Unknown {
+                    self.Err(&format!(
+                        "array index must be integer; found {}",
+                        self.TypeName(&index_type)
+                    ));
+                }
+            }
             SdslvExpression::Binary { Left, Right, .. } => {
                 self.CheckExpressionCalls(shader, locals, Left, is_fallible_fn, false);
                 self.CheckExpressionCalls(shader, locals, Right, is_fallible_fn, false);
@@ -1268,6 +1292,17 @@ impl<'a> Validator<'a> {
             }
             SdslvExpression::Call { Callee, Arguments } => {
                 self.ResolveCallType(shader, locals, Callee, Arguments)
+            }
+            SdslvExpression::Index { Base, Index, .. } => {
+                let base_type = self.ResolveExpressionType(shader, locals, Base);
+                let index_type = self.ResolveExpressionType(shader, locals, Index);
+                if !self.IsIntegerType(&index_type) && index_type != TypeRef::Unknown {
+                    return TypeRef::Unknown;
+                }
+                match base_type {
+                    TypeRef::Array { Element, .. } => *Element,
+                    _ => TypeRef::Unknown,
+                }
             }
             SdslvExpression::Binary {
                 Left,
@@ -1512,6 +1547,10 @@ impl<'a> Validator<'a> {
             SdslvExpression::FieldAccess { Base, .. } => {
                 self.IsFallibleExpression(shader, locals, Base)
             }
+            SdslvExpression::Index { Base, Index, .. } => {
+                self.IsFallibleExpression(shader, locals, Base)
+                    || self.IsFallibleExpression(shader, locals, Index)
+            }
             SdslvExpression::With { Base, Updates } => {
                 self.IsFallibleExpression(shader, locals, Base)
                     || Updates
@@ -1578,10 +1617,15 @@ impl<'a> Validator<'a> {
     }
 
     fn TypeRefToType(&self, type_ref: &SdslvTypeRef) -> TypeRef {
-        let Some(path) = type_ref.AsNamedPath() else {
-            return TypeRef::Unknown;
-        };
-        TypeRef::Named(path.Segments.join("."))
+        match type_ref {
+            SdslvTypeRef::Named(path) => TypeRef::Named(path.Segments.join(".")),
+            SdslvTypeRef::Array {
+                Element, Length, ..
+            } => TypeRef::Array {
+                Element: Box::new(self.TypeRefToType(Element)),
+                Length: *Length,
+            },
+        }
     }
     fn TypeName(&self, t: &TypeRef) -> String {
         t.Name().unwrap_or("<unknown>").to_string()

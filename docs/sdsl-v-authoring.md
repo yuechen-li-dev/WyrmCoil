@@ -238,11 +238,15 @@ Not currently fully supported in shader function bodies:
 - `match`
 - nested block-control syntax beyond the bounded parser subset
 - `discard`
-- array indexing
+- dynamic arrays/slices
 
-M59a note:
-- compiler internals now use a dedicated `SdslvTypeRef` representation for type positions as a prerequisite for future array support.
-- user-facing array syntax (`array<T, N>`) remains unsupported in M59a and is planned for a future milestone (M59b).
+M59b fixed-array note:
+- fixed-size array type references are supported: `array<T, N>`.
+- `N` must be a positive integer literal in source (`array<f32, 4>` is valid; `array<f32, 0>` and non-literals are invalid).
+- array indexing is supported for array-typed expressions: `arr[i]`.
+- index expressions must be integer-typed where known.
+- arrays are distinct from shader numeric vector/matrix value types (`float2`, `float3`, `float4`, `float4x4`).
+- array literals are still not implemented in M59b, and `[...]` remains reserved for future array-literal syntax.
 
 ## 7) Interfaces and generics
 

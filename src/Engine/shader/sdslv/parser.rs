@@ -1093,6 +1093,20 @@ impl<'a> Parser<'a> {
                     Base: Box::new(expr),
                     Updates: updates,
                 };
+            } else if self.MatchKw(SdslvTokenKind::LeftBracket) {
+                let index = self.ParseExpression().or_else(|| {
+                    self.ErrHere("expected array index expression");
+                    None
+                })?;
+                self.Expect(
+                    SdslvTokenKind::RightBracket,
+                    "expected ']' after array index expression",
+                );
+                expr = SdslvExpression::Index {
+                    Base: Box::new(expr),
+                    Index: Box::new(index),
+                    Span: self.PrevSpan(),
+                };
             } else if self.MatchKw(SdslvTokenKind::Question) {
                 let span = self.PrevSpan();
                 expr = SdslvExpression::TryPropagate {
@@ -1191,9 +1205,52 @@ impl<'a> Parser<'a> {
     }
 
     fn ParseTypeRefReq(&mut self, msg: &str) -> Option<SdslvTypeRef> {
+        if self.Check(SdslvTokenKind::KeywordArray) {
+            let start = self.Tokens[self.I].Span;
+            self.I += 1;
+            self.Expect(SdslvTokenKind::LeftAngle, "expected '<' after array");
+            let element = self.ParseTypeRefReq("expected element type in array type")?;
+            self.Expect(
+                SdslvTokenKind::Comma,
+                "expected ',' after array element type",
+            );
+            let length_text = if let Some(SdslvToken {
+                Kind: SdslvTokenKind::IntegerLiteral(value),
+                ..
+            }) = self.Tokens.get(self.I)
+            {
+                self.I += 1;
+                value.clone()
+            } else {
+                self.ErrHere("array length must be a positive integer literal");
+                return None;
+            };
+            self.Expect(
+                SdslvTokenKind::RightAngle,
+                "expected '>' after array length",
+            );
+            let Ok(length) = length_text.parse::<usize>() else {
+                self.ErrHere("array length must be a positive integer literal");
+                return None;
+            };
+            if length == 0 {
+                self.ErrHere("array length must be a positive integer literal");
+                return None;
+            }
+            return Some(SdslvTypeRef::Array {
+                Element: Box::new(element),
+                Length: length,
+                Span: SdslvSpan {
+                    Start: start.Start,
+                    End: self.PrevSpan().End,
+                    Line: start.Line,
+                    Column: start.Column,
+                },
+            });
+        }
         let path = self.ParsePathReq(msg)?;
         if self.MatchKw(SdslvTokenKind::LeftAngle) {
-            self.ErrHere("generic type references are not supported in SDSL-V M59a");
+            self.ErrHere("generic type references are not supported in SDSL-V M59b");
             return None;
         }
         Some(SdslvTypeRef::Named(path))
@@ -1269,6 +1326,7 @@ impl<'a> Parser<'a> {
             SdslvTokenKind::KeywordIf => Some("if"),
             SdslvTokenKind::KeywordRecord => Some("record"),
             SdslvTokenKind::KeywordStream => Some("stream"),
+            SdslvTokenKind::KeywordArray => Some("array"),
             SdslvTokenKind::KeywordShader => Some("shader"),
             SdslvTokenKind::KeywordInterface => Some("interface"),
             SdslvTokenKind::KeywordFn => Some("fn"),

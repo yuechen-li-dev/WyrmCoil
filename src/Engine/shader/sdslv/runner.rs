@@ -294,6 +294,11 @@ fn EvalExpression(
                 .to_string(),
             Span: None,
         }),
+        SdslvExpression::Index { .. } => Err(SdslvAssertFailure {
+            Message: "array indexing is not supported in SDSL-V test expression evaluation"
+                .to_string(),
+            Span: None,
+        }),
         SdslvExpression::With { .. } => Err(SdslvAssertFailure {
             Message: "with expression is not supported in SDSL-V M7b expression evaluation"
                 .to_string(),

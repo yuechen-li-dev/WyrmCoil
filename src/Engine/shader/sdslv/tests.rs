@@ -2458,14 +2458,27 @@ fn ForLoopEmissionIsDeterministicAndStructured() {
 }
 
 #[test]
-fn ParseArrayTypeRefStillUnsupportedInM59a() {
-    let diagnostics =
-        ParseSource("shader S { fn F() -> i32 { let weights: array<f32, 4>; return 0; } }")
-            .expect_err("array type refs should remain unsupported in M59a");
+fn ParseArrayTypeRefM59b() {
+    ParseSource("shader S { fn F() -> i32 { let weights: array<f32, 4>; return 0; } }")
+        .expect("array type refs should parse in M59b");
+}
+
+#[test]
+fn ValidateArrayIndexingM59b() {
+    ValidateSource("shader S { fn F(i: i32) -> f32 { let weights: array<f32, 4>; let x: f32 = weights[i]; return x; } }")
+        .expect("array indexing should validate");
+}
+
+#[test]
+fn ValidateArrayIndexRejectsNonArrayBase() {
+    let diagnostics = ValidateSource(
+        "shader S { fn F() -> f32 { let color: float4 = float4(1.0, 0.0, 1.0, 1.0); return color[0]; } }",
+    )
+    .expect_err("vector indexing should be rejected");
     assert!(
-        diagnostics.iter().any(|d| d
-            .Message
-            .contains("generic type references are not supported in SDSL-V M59a")),
-        "expected explicit M59a generic-type diagnostic for array-style type syntax"
+        diagnostics
+            .iter()
+            .any(|d| d.Message.contains("indexing requires array type")),
+        "expected non-array indexing diagnostic"
     );
 }

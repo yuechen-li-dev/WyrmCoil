@@ -145,6 +145,7 @@ Planned early scalar/vector/matrix type surface:
 - `float3`
 - `float4`
 - `float4x4`
+- `array<T, N>` (fixed-size array type; `N` must be a positive integer literal)
 
 Type model notes:
 
@@ -152,6 +153,8 @@ Type model notes:
 - Semantic aliases (for coordinate spaces) are first-class for pre-lowering type checking.
 - Swizzles are expected in the expression subset.
 - Vector/matrix operators follow conventional shader arithmetic.
+- Arrays are indexed storage collections (`arr[i]`) and are distinct from numeric vector/matrix value types.
+- Array literals are not implemented in M59b.
 
 ### Open design point: `float` vs `f32`
 
