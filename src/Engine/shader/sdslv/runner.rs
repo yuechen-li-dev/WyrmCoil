@@ -314,7 +314,8 @@ fn EvalExpression(
             Span: None,
         }),
         SdslvExpression::Match { .. } => Err(SdslvAssertFailure {
-            Message: "match expression is not supported in SDSL-V M64 test execution".to_string(),
+            Message: "match expression execution is not supported in SDSL-V M65 test runner"
+                .to_string(),
             Span: None,
         }),
         SdslvExpression::TryPropagate { .. } | SdslvExpression::Unwrap { .. } => {

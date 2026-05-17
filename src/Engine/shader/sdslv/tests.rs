@@ -2974,3 +2974,39 @@ fn EmitHlslM64cRejectsMatchInNestedExpressionContext() {
         "nested expression match should produce clear M64c bounded-context diagnostic"
     );
 }
+
+#[test]
+fn MatchM65FallibleOkErrValidation() {
+    ValidateSource("shader S { fn Parse(raw: i32) -> i32 ! Error { return raw; } fn Use(raw: i32) -> i32 { return match Parse(raw) { ok(v) => v err(_) => 30 }; } }")
+        .expect("fallible match over fallible subject should validate");
+    ValidateSource("shader S { fn Parse(raw: i32) -> i32 ! Error { return raw; } fn Use(raw: i32) -> i32 { return match Parse(raw) { err(_) -> 30 ok(v) -> v }; } }")
+        .expect("fallible match should accept err/ok order and -> arrow");
+}
+
+#[test]
+fn MatchM65FallibleDiagnostics() {
+    let non_fallible = ValidateSource("shader S { fn Value() -> i32 { return 1; } fn Use() -> i32 { return match Value() { ok(v) => v err(_) => 30 }; } }")
+        .expect_err("fallible match subject must be fallible");
+    assert!(
+        non_fallible.iter().any(|d| d
+            .Message
+            .contains("fallible match requires a fallible expression")),
+        "expected non-fallible subject diagnostic"
+    );
+    let missing_err = ValidateSource("shader S { fn Parse(raw: i32) -> i32 ! Error { return raw; } fn Use(raw: i32) -> i32 { return match Parse(raw) { ok(v) => v }; } }")
+        .expect_err("missing err arm should fail");
+    assert!(
+        missing_err.iter().any(|d| d
+            .Message
+            .contains("fallible match requires both ok and err arms")),
+        "expected missing err diagnostic"
+    );
+    let duplicate_ok = ValidateSource("shader S { fn Parse(raw: i32) -> i32 ! Error { return raw; } fn Use(raw: i32) -> i32 { return match Parse(raw) { ok(v) => v ok(w) => w err(_) => 0 }; } }")
+        .expect_err("duplicate ok arm should fail");
+    assert!(
+        duplicate_ok
+            .iter()
+            .any(|d| d.Message.contains("duplicate ok arm in fallible match")),
+        "expected duplicate ok diagnostic"
+    );
+}

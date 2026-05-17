@@ -730,6 +730,17 @@ impl<'a> HlslEmitter<'a> {
         template: &str,
     ) -> Vec<String> {
         let mut lines = vec![];
+        if arms.iter().any(|arm| {
+            matches!(
+                arm.Kind,
+                SdslvMatchArmKind::FallibleOk { .. } | SdslvMatchArmKind::FallibleErr { .. }
+            )
+        }) {
+            self.Err("fallible match emission is not implemented in SDSL-V M65");
+            return vec![
+                "/* fallible match emission is not implemented in SDSL-V M65 */".to_string(),
+            ];
+        }
         if arms.is_empty() {
             self.Err("match expression is not supported in this expression context in SDSL-V M64c");
             return vec![
@@ -749,7 +760,11 @@ impl<'a> HlslEmitter<'a> {
             if keyword == "else" {
                 lines.push("else {".to_string());
             } else {
-                let variant_text = self.EmitVariantPath(&arm.VariantPath);
+                let SdslvMatchArmKind::EnumVariant { VariantPath } = &arm.Kind else {
+                    self.Err("fallible match cannot mix ok/err arms with enum variant arms");
+                    continue;
+                };
+                let variant_text = self.EmitVariantPath(VariantPath);
                 lines.push(format!(
                     "{} ({} == {}) {{",
                     keyword, subject_text, variant_text

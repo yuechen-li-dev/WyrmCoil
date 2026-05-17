@@ -355,7 +355,14 @@ pub enum SdslvUnaryOperator {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvMatchArm {
-    pub VariantPath: SdslvPath,
+    pub Kind: SdslvMatchArmKind,
     pub Value: SdslvExpression,
     pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SdslvMatchArmKind {
+    EnumVariant { VariantPath: SdslvPath },
+    FallibleOk { Binding: String },
+    FallibleErr { Binding: String },
 }

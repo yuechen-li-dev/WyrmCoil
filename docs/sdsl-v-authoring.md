@@ -235,7 +235,14 @@ Not currently fully supported in shader function bodies:
   - `continue`
 - shader authors should prefer bounded `for` loops for predictable GPU execution.
 - `flow`, `state`, and `step` are reserved SDSL-V keywords and cannot be used as local/declaration identifiers.
-- `match`
+- `match` is supported in two forms:
+  - enum match: `match mode { ShadowMode.None => 0 ... }`
+  - fallible match (M65): `match Parse(raw) { ok(v) => v err(_) => 30 }`
+    - subject must be fallible
+    - both `ok(...)` and `err(...)` arms are required
+    - `?` is still preferred for pure propagation; `!` is explicit unwrap
+    - fallible match is local handling and returns an infallible result value
+    - fallible match HLSL lowering is not implemented in M65
 - nested block-control syntax beyond the bounded parser subset
 - `discard`
 - dynamic arrays/slices

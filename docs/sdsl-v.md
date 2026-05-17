@@ -1059,3 +1059,22 @@ Still out of scope in M64c:
 - payload-carrying enum variants
 - fallible match lowering
 - wildcard/default match arms
+### Fallible `match` (M65)
+
+SDSL-V supports a fallible branch form for Oct-style local handling:
+
+```sdslv
+match Parse(raw) {
+    ok(v) => v
+    err(_) => 30
+}
+```
+
+- Subject must be a fallible expression.
+- Exactly one `ok(binding)` arm and one `err(binding)` arm are required.
+- `=>` and `->` are both accepted as arm arrows.
+- `err(_)` is valid to ignore the error value.
+- Arm result types must be compatible.
+- Fallible `match` handles the subject and yields an infallible result expression.
+- Enum `match` remains a separate form (`Enum.Variant` arms) and enum payload matching is still future work.
+- HLSL lowering for fallible match is intentionally not implemented in M65.

@@ -1175,9 +1175,29 @@ impl<'a> Parser<'a> {
             "expected '{' after match subject",
         );
         let mut arms = vec![];
+        let mut has_fallible_arm = false;
+        let mut has_enum_arm = false;
         while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
             let span = self.CurrentSpan();
-            let variant_path = self.ParsePathReq("expected Enum.Variant in match arm")?;
+            let arm_kind = if self.MatchKw(SdslvTokenKind::KeywordOk) {
+                has_fallible_arm = true;
+                let binding = self.ParseFallibleMatchBinding("ok")?;
+                SdslvMatchArmKind::FallibleOk { Binding: binding }
+            } else if self.MatchKw(SdslvTokenKind::KeywordErr) {
+                has_fallible_arm = true;
+                let binding = self.ParseFallibleMatchBinding("err")?;
+                SdslvMatchArmKind::FallibleErr { Binding: binding }
+            } else {
+                has_enum_arm = true;
+                let variant_path = self.ParsePathReq("expected Enum.Variant in match arm")?;
+                SdslvMatchArmKind::EnumVariant {
+                    VariantPath: variant_path,
+                }
+            };
+            if has_fallible_arm && has_enum_arm {
+                self.ErrHere("fallible match cannot mix ok/err arms with enum variant arms");
+                return None;
+            }
             if !self.MatchSwitchArmArrow("expected '=>' or '->' in match arm") {
                 return None;
             }
@@ -1186,7 +1206,7 @@ impl<'a> Parser<'a> {
                 None
             })?;
             arms.push(SdslvMatchArm {
-                VariantPath: variant_path,
+                Kind: arm_kind,
                 Value: value,
                 Span: span,
             });
@@ -1203,6 +1223,19 @@ impl<'a> Parser<'a> {
                 Column: start.Column,
             },
         })
+    }
+
+    fn ParseFallibleMatchBinding(&mut self, arm_name: &str) -> Option<String> {
+        self.Expect(
+            SdslvTokenKind::LeftParen,
+            &format!("expected '(' after {} in match arm", arm_name),
+        );
+        let binding = self.IdentReq("expected binding name in fallible match arm")?;
+        self.Expect(
+            SdslvTokenKind::RightParen,
+            &format!("expected ')' after {} binding", arm_name),
+        );
+        Some(binding)
     }
 
     fn ParsePrimary(&mut self) -> Option<SdslvExpression> {
