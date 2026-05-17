@@ -1503,13 +1503,14 @@ impl<'a> Validator<'a> {
                 }
                 current
             }
-            SdslvExpression::Match { Arms, .. } => {
+            SdslvExpression::Match { Subject, Arms, .. } => {
                 let Some(first) = Arms.first() else {
                     return TypeRef::Unknown;
                 };
-                let mut current = self.ResolveExpressionType(shader, locals, &first.Value);
+                let subject_type = self.ResolveExpressionType(shader, locals, Subject);
+                let mut current = self.ResolveMatchArmType(shader, locals, &subject_type, first);
                 for arm in Arms.iter().skip(1) {
-                    let arm_type = self.ResolveExpressionType(shader, locals, &arm.Value);
+                    let arm_type = self.ResolveMatchArmType(shader, locals, &subject_type, arm);
                     if self.AreCompatible(&current, &arm_type) {
                         if current == TypeRef::Unknown {
                             current = arm_type;
@@ -1523,6 +1524,38 @@ impl<'a> Validator<'a> {
                 current
             }
         }
+    }
+
+    fn ResolveMatchArmType(
+        &self,
+        shader: &SdslvShaderDecl,
+        locals: &HashMap<String, TypeRef>,
+        subject_type: &TypeRef,
+        arm: &SdslvMatchArm,
+    ) -> TypeRef {
+        let mut arm_locals = locals.clone();
+        if self.IsFallibleTypeContext(subject_type, arm) {
+            let ok_type = subject_type.clone();
+            let err_type = TypeRef::Named("Error".to_string());
+            match &arm.Kind {
+                SdslvMatchArmKind::FallibleOk { Binding } if Binding != "_" => {
+                    arm_locals.insert(Binding.clone(), ok_type);
+                }
+                SdslvMatchArmKind::FallibleErr { Binding } if Binding != "_" => {
+                    arm_locals.insert(Binding.clone(), err_type);
+                }
+                _ => {}
+            }
+        }
+        self.ResolveExpressionType(shader, &arm_locals, &arm.Value)
+    }
+
+    fn IsFallibleTypeContext(&self, subject_type: &TypeRef, arm: &SdslvMatchArm) -> bool {
+        subject_type != &TypeRef::Unknown
+            && matches!(
+                arm.Kind,
+                SdslvMatchArmKind::FallibleOk { .. } | SdslvMatchArmKind::FallibleErr { .. }
+            )
     }
 
     fn ValidateSwitchExpression(
@@ -1595,6 +1628,15 @@ impl<'a> Validator<'a> {
             return;
         };
         let subject_type = self.ResolveExpressionType(shader, locals, Subject);
+        if Arms.iter().any(|arm| {
+            matches!(
+                arm.Kind,
+                SdslvMatchArmKind::FallibleOk { .. } | SdslvMatchArmKind::FallibleErr { .. }
+            )
+        }) {
+            self.ValidateFallibleMatchExpression(shader, locals, Subject, &subject_type, Arms);
+            return;
+        }
         let Some(subject_name) = subject_type.Name() else {
             return;
         };
@@ -1615,12 +1657,16 @@ impl<'a> Validator<'a> {
         let mut seen = HashSet::new();
         let mut expected_arm_type: Option<TypeRef> = None;
         for arm in Arms {
-            if arm.VariantPath.Segments.len() != 2 {
+            let SdslvMatchArmKind::EnumVariant { VariantPath } = &arm.Kind else {
+                self.Err("fallible match cannot mix ok/err arms with enum variant arms");
+                continue;
+            };
+            if VariantPath.Segments.len() != 2 {
                 self.Err("enum variant reference must be qualified as Enum.Variant");
                 continue;
             }
-            let enum_name = &arm.VariantPath.Segments[0];
-            let variant_name = &arm.VariantPath.Segments[1];
+            let enum_name = &VariantPath.Segments[0];
+            let variant_name = &VariantPath.Segments[1];
             if enum_name != subject_name {
                 self.Err(&format!(
                     "match arm variant '{}.{}' does not belong to enum '{}'",
@@ -1663,6 +1709,68 @@ impl<'a> Validator<'a> {
                 ));
                 break;
             }
+        }
+    }
+
+    fn ValidateFallibleMatchExpression(
+        &mut self,
+        shader: &SdslvShaderDecl,
+        locals: &HashMap<String, TypeRef>,
+        subject_expression: &SdslvExpression,
+        subject_type: &TypeRef,
+        arms: &[SdslvMatchArm],
+    ) {
+        if !self.IsFallibleExpression(shader, locals, subject_expression) {
+            self.Err("fallible match requires a fallible expression");
+            return;
+        }
+        let value_type = subject_type.clone();
+        let error_type = TypeRef::Named("Error".to_string());
+        let mut ok_seen = false;
+        let mut err_seen = false;
+        let mut expected_arm_type: Option<TypeRef> = None;
+        for arm in arms {
+            let mut arm_locals = locals.clone();
+            match &arm.Kind {
+                SdslvMatchArmKind::FallibleOk { Binding } => {
+                    if ok_seen {
+                        self.Err("duplicate ok arm in fallible match");
+                    }
+                    ok_seen = true;
+                    if Binding != "_" {
+                        arm_locals.insert(Binding.clone(), value_type.clone());
+                    }
+                }
+                SdslvMatchArmKind::FallibleErr { Binding } => {
+                    if err_seen {
+                        self.Err("duplicate err arm in fallible match");
+                    }
+                    err_seen = true;
+                    if Binding != "_" {
+                        arm_locals.insert(Binding.clone(), error_type.clone());
+                    }
+                }
+                SdslvMatchArmKind::EnumVariant { .. } => {
+                    self.Err("fallible match cannot mix ok/err arms with enum variant arms");
+                    continue;
+                }
+            }
+            let arm_type = self.ResolveExpressionType(shader, &arm_locals, &arm.Value);
+            if let Some(expected) = &expected_arm_type {
+                if let Some((_, expected_name, found_name)) =
+                    self.TypeMismatch("", expected, &arm_type)
+                {
+                    self.Err(&format!(
+                        "fallible match arm type mismatch: expected {}, found {}",
+                        expected_name, found_name
+                    ));
+                }
+            } else {
+                expected_arm_type = Some(arm_type);
+            }
+        }
+        if !ok_seen || !err_seen {
+            self.Err("fallible match requires both ok and err arms");
         }
     }
 
@@ -1910,7 +2018,19 @@ impl<'a> Validator<'a> {
                 }) || self.IsFallibleExpression(shader, locals, ElseValue)
             }
             SdslvExpression::Match { Subject, Arms, .. } => {
-                self.IsFallibleExpression(shader, locals, Subject)
+                let has_fallible_arms = Arms.iter().any(|arm| {
+                    matches!(
+                        arm.Kind,
+                        SdslvMatchArmKind::FallibleOk { .. }
+                            | SdslvMatchArmKind::FallibleErr { .. }
+                    )
+                });
+                let subject_fallible = if has_fallible_arms {
+                    false
+                } else {
+                    self.IsFallibleExpression(shader, locals, Subject)
+                };
+                subject_fallible
                     || Arms
                         .iter()
                         .any(|arm| self.IsFallibleExpression(shader, locals, &arm.Value))
