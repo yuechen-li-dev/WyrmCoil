@@ -240,7 +240,7 @@ Not currently fully supported in shader function bodies:
 - `discard`
 - dynamic arrays/slices
 
-M59b fixed-array note:
+M61 fixed-array note:
 - fixed-size array type references are supported: `array<T, N>`.
 - `N` must be a positive integer literal in source (`array<f32, 4>` is valid; `array<f32, 0>` and non-literals are invalid).
 - array indexing is supported for array-typed expressions: `arr[i]`.
@@ -249,7 +249,11 @@ M59b fixed-array note:
 - array element assignment validates element-type compatibility (`array<f32, N>` expects `f32`, `array<float2, N>` expects `float2`, etc.).
 - array parameters are immutable for element writes in M60 (`param[i] = value` is rejected); local arrays remain assignable.
 - arrays are distinct from shader numeric vector/matrix value types (`float2`, `float3`, `float4`, `float4x4`).
-- array literals are still not implemented in M59b, and `[...]` remains reserved for future array-literal syntax.
+- fixed-array literals are supported in explicit array contexts: `let weights: array<f32, 4> = [1.0, 2.0, 3.0, 4.0];`.
+- `[...]` is always an array literal and never a vector/matrix literal.
+- array literals require expected array type context in M61 and are validated for length and element type compatibility.
+- array literals cannot initialize non-array targets (for vectors/matrices, use constructors like `float3(...)` and `float4x4(...)`).
+- dynamic arrays/slices, nested array literals, and inference-only array literals remain future work.
 
 ## 7) Interfaces and generics
 

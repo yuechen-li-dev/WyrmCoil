@@ -1131,6 +1131,34 @@ impl<'a> Parser<'a> {
         if self.MatchKw(SdslvTokenKind::KeywordSwitch) {
             return self.ParseSwitchExpression();
         }
+        if self.MatchKw(SdslvTokenKind::LeftBracket) {
+            let span = self.PrevSpan();
+            let mut elements = vec![];
+            if !self.Check(SdslvTokenKind::RightBracket) {
+                loop {
+                    let element = self.ParseExpression().or_else(|| {
+                        self.ErrHere("expected expression in array literal");
+                        None
+                    })?;
+                    elements.push(element);
+                    if self.MatchKw(SdslvTokenKind::Comma) {
+                        if self.Check(SdslvTokenKind::RightBracket) {
+                            break;
+                        }
+                        continue;
+                    }
+                    break;
+                }
+            }
+            self.Expect(
+                SdslvTokenKind::RightBracket,
+                "expected ']' after array literal",
+            );
+            return Some(SdslvExpression::ArrayLiteral {
+                Elements: elements,
+                Span: span,
+            });
+        }
         if self.MatchKw(SdslvTokenKind::LeftParen) {
             let expr = self.ParseExpression()?;
             self.Expect(

@@ -2558,3 +2558,99 @@ fn EmitArrayElementAssignmentInForLoopM60Deterministic() {
     );
     assert_eq!(hlsl_a, hlsl_b, "repeated emission should match exactly");
 }
+
+#[test]
+fn ParseArrayLiteralM61() {
+    let module = ParseSource(
+        "shader S { fn F() -> i32 { let weights: array<f32, 3> = [1.0, 2.0, 3.0,]; return 0; } }",
+    )
+    .expect("array literal should parse");
+    let shader = module
+        .Declarations
+        .iter()
+        .find_map(|d| match d {
+            SdslvDecl::Shader(s) => Some(s),
+            _ => None,
+        })
+        .expect("shader expected");
+    let body = shader.Methods[0].Body.as_ref().expect("body expected");
+    let SdslvStatement::Let {
+        Initializer: Some(SdslvExpression::ArrayLiteral { Elements, .. }),
+        ..
+    } = &body.Statements[0]
+    else {
+        panic!("typed let initializer should parse as array literal");
+    };
+    assert_eq!(Elements.len(), 3, "array literal should keep all elements");
+}
+
+#[test]
+fn ValidateArrayLiteralTypedLocalM61() {
+    ValidateSource("shader S { fn F() -> f32 { let weights: array<f32, 4> = [1.0, 2.0, 3.0, 4.0]; return weights[0]; } }")
+        .expect("typed local array literal should validate");
+}
+
+#[test]
+fn ValidateArrayLiteralRejectsNonArrayTargetM61() {
+    let diagnostics = ValidateSource(
+        "shader S { fn F() -> float4 { let color: float4 = [1.0, 0.0, 1.0, 1.0]; return color; } }",
+    )
+    .expect_err("array literal to vector should fail");
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("array literal cannot initialize non-array type")),
+        "expected vector/matrix confusion diagnostic"
+    );
+}
+
+#[test]
+fn ValidateArrayLiteralLengthMismatchM61() {
+    let diagnostics = ValidateSource(
+        "shader S { fn F() -> f32 { let weights: array<f32, 4> = [1.0, 2.0]; return 0.0; } }",
+    )
+    .expect_err("array literal length mismatch should fail");
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("array literal length mismatch: expected 4 elements, found 2")),
+        "expected array literal length mismatch diagnostic"
+    );
+}
+
+#[test]
+fn ValidateArrayLiteralElementTypeMismatchM61() {
+    let diagnostics = ValidateSource(
+        "shader S { fn F() -> f32 { let weights: array<f32, 2> = [1.0, true]; return 0.0; } }",
+    )
+    .expect_err("array literal element mismatch should fail");
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("array literal element type mismatch: expected f32, found bool")),
+        "expected array literal element type mismatch diagnostic"
+    );
+}
+
+#[test]
+fn EmitArrayLiteralLocalInitializerM61() {
+    let src = "shader S { fn F() -> f32 { let weights: array<f32, 4> = [1.0, 2.0, 3.0, 4.0]; let sum: f32 = 0.0; for i in 0..4 { sum = sum + weights[i]; } return sum; } }";
+    let hlsl_a = CompileSourceToHlsl(src).expect("array literal should lower");
+    let hlsl_b = CompileSourceToHlsl(src).expect("array literal emission should be deterministic");
+    assert!(
+        hlsl_a.contains("weights[0] = 1.0;"),
+        "array local initializer should lower to element assignments"
+    );
+    assert!(
+        hlsl_a.contains("weights[0] = 1.0;"),
+        "array element 0 init should lower"
+    );
+    assert!(
+        hlsl_a.contains("weights[3] = 4.0;"),
+        "array element 3 init should lower"
+    );
+    assert_eq!(
+        hlsl_a, hlsl_b,
+        "array literal lowering should be deterministic"
+    );
+}

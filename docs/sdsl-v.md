@@ -156,7 +156,11 @@ Type model notes:
 - Arrays are indexed storage collections (`arr[i]`) and are distinct from numeric vector/matrix value types.
 - Fixed-array element assignment is supported for assignable array storage (`arr[i] = value;`) with integer index and compatible element type checks.
 - Array parameters are immutable for element writes in M60; local arrays remain assignable.
-- Array literals are not implemented in M59b.
+- M61 adds fixed array literals in explicit array-typed contexts: `[a, b, c]`.
+- Array literal length must match expected fixed-array length.
+- Array literal elements must match expected element type.
+- Array literals are never vector/matrix literals; use `float2(...)`, `float3(...)`, `float4(...)`, `float4x4(...)` constructors for numeric vector/matrix values.
+- Dynamic arrays/slices, nested array literals, and inference-only array literals remain future work.
 
 ### Open design point: `float` vs `f32`
 
