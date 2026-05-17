@@ -406,8 +406,9 @@ fn RuntimeEquals(left: &RuntimeValue, right: &RuntimeValue) -> bool {
     }
 }
 
-fn DefaultValueForType(type_name: &SdslvPath) -> Option<RuntimeValue> {
-    let name = type_name.Segments.last()?.as_str();
+fn DefaultValueForType(type_name: &SdslvTypeRef) -> Option<RuntimeValue> {
+    let path = type_name.AsNamedPath()?;
+    let name = path.Segments.last()?.as_str();
     match name {
         "bool" => Some(RuntimeValue::Bool(false)),
         "i32" => Some(RuntimeValue::I32(0)),

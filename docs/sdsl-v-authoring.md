@@ -240,6 +240,10 @@ Not currently fully supported in shader function bodies:
 - `discard`
 - array indexing
 
+M59a note:
+- compiler internals now use a dedicated `SdslvTypeRef` representation for type positions as a prerequisite for future array support.
+- user-facing array syntax (`array<T, N>`) remains unsupported in M59a and is planned for a future milestone (M59b).
+
 ## 7) Interfaces and generics
 
 Current implemented interface/generic model:

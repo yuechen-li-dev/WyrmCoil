@@ -8,6 +8,27 @@ pub struct SdslvPath {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SdslvTypeRef {
+    Named(SdslvPath),
+}
+
+impl SdslvTypeRef {
+    pub fn Named(path: SdslvPath) -> Self {
+        Self::Named(path)
+    }
+    pub fn AsNamedPath(&self) -> Option<&SdslvPath> {
+        match self {
+            Self::Named(path) => Some(path),
+        }
+    }
+    pub fn ToDisplayString(&self) -> String {
+        match self {
+            Self::Named(path) => path.Segments.join("."),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvModule {
     pub Namespace: Option<SdslvPath>,
     pub Uses: Vec<SdslvUseDecl>,
@@ -56,7 +77,7 @@ pub enum SdslvDecl {
 pub struct SdslvFlowDecl {
     pub Name: String,
     pub Parameters: Vec<SdslvFunctionParameter>,
-    pub ReturnType: SdslvPath,
+    pub ReturnType: SdslvTypeRef,
     pub Board: Option<SdslvFlowBoard>,
     pub States: Vec<SdslvFlowState>,
     pub Span: SdslvSpan,
@@ -71,7 +92,7 @@ pub struct SdslvFlowBoard {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvFlowBoardField {
     pub Name: String,
-    pub TypeName: SdslvPath,
+    pub TypeName: SdslvTypeRef,
     pub Span: SdslvSpan,
 }
 
@@ -116,20 +137,20 @@ pub enum SdslvFlowAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvCompileDecl {
     pub GenericShader: SdslvPath,
-    pub TypeArguments: Vec<SdslvPath>,
+    pub TypeArguments: Vec<SdslvTypeRef>,
     pub Alias: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvTypeAliasDecl {
     pub Name: String,
-    pub TargetType: SdslvPath,
+    pub TargetType: SdslvTypeRef,
     pub SpaceAnnotation: Option<SdslvPath>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvFieldDecl {
     pub Name: String,
-    pub TypeName: SdslvPath,
+    pub TypeName: SdslvTypeRef,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvStreamDecl {
@@ -167,14 +188,14 @@ pub struct SdslvFunctionDecl {
     pub Stage: Option<String>,
     pub Name: String,
     pub Parameters: Vec<SdslvFunctionParameter>,
-    pub ReturnType: SdslvPath,
-    pub ErrorType: Option<SdslvPath>,
+    pub ReturnType: SdslvTypeRef,
+    pub ErrorType: Option<SdslvTypeRef>,
     pub Body: Option<SdslvBody>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvFunctionParameter {
     pub Name: String,
-    pub TypeName: SdslvPath,
+    pub TypeName: SdslvTypeRef,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvBody {
@@ -186,7 +207,7 @@ pub struct SdslvBody {
 pub enum SdslvStatement {
     Let {
         Name: String,
-        TypeName: SdslvPath,
+        TypeName: SdslvTypeRef,
         Initializer: Option<SdslvExpression>,
     },
     Assign {

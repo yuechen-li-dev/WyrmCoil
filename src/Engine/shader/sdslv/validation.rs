@@ -247,7 +247,7 @@ impl<'a> Validator<'a> {
     fn BuildTypeEnvironment(&mut self) {
         for decl in &self.Module.Declarations {
             if let SdslvDecl::TypeAlias(alias) = decl {
-                let target_name = alias.TargetType.Segments.join(".");
+                let target_name = alias.TargetType.ToDisplayString();
                 self.AliasUnderlyingByName
                     .insert(alias.Name.clone(), target_name);
                 if alias.SpaceAnnotation.is_some() {
@@ -263,7 +263,7 @@ impl<'a> Validator<'a> {
             if let SdslvDecl::Shader(shader) = decl {
                 let mut fields = HashMap::new();
                 for field in &shader.MaterialFields {
-                    fields.insert(field.Name.clone(), field.TypeName.Segments.join("."));
+                    fields.insert(field.Name.clone(), field.TypeName.ToDisplayString());
                 }
                 self.MaterialFieldsByShader
                     .insert(shader.Name.clone(), fields);
@@ -307,9 +307,9 @@ impl<'a> Validator<'a> {
         let parameters = function
             .Parameters
             .iter()
-            .map(|parameter| self.PathToType(&parameter.TypeName))
+            .map(|parameter| self.TypeRefToType(&parameter.TypeName))
             .collect();
-        let return_type = self.PathToType(&function.ReturnType);
+        let return_type = self.TypeRefToType(&function.ReturnType);
         let is_fallible = function.ErrorType.is_some();
         self.FunctionSignatures.insert(
             name.to_string(),
@@ -454,7 +454,7 @@ impl<'a> Validator<'a> {
             return;
         }
         for arg in &compile.TypeArguments {
-            let arg_name = arg.Segments.join(".");
+            let arg_name = arg.ToDisplayString();
             if !self.ShaderByName.contains_key(&arg_name) {
                 self.Err(&format!(
                     "compile type argument '{}' is not a known shader",
@@ -472,7 +472,7 @@ impl<'a> Validator<'a> {
             if index >= compile.TypeArguments.len() {
                 continue;
             }
-            let concrete_name = compile.TypeArguments[index].Segments.join(".");
+            let concrete_name = compile.TypeArguments[index].ToDisplayString();
             let Some(concrete_shader) = self.ShaderByName.get(&concrete_name) else {
                 continue;
             };
@@ -541,7 +541,7 @@ impl<'a> Validator<'a> {
         let mut fields = HashMap::new();
         if let Some(board) = &flow.Board {
             for field in &board.Fields {
-                fields.insert(field.Name.clone(), self.PathToType(&field.TypeName));
+                fields.insert(field.Name.clone(), self.TypeRefToType(&field.TypeName));
             }
         }
         fields
@@ -562,7 +562,7 @@ impl<'a> Validator<'a> {
                     field.Name, flow.Name
                 ));
             }
-            let type_name = field.TypeName.Segments.join(".");
+            let type_name = field.TypeName.ToDisplayString();
             if !self.IsValidFlowBoardTypeName(&type_name) {
                 self.Err(&format!(
                     "unknown or unsupported board field type '{}' in flow '{}'",
@@ -580,7 +580,7 @@ impl<'a> Validator<'a> {
         board_fields: &HashMap<String, TypeRef>,
     ) {
         let locals = self.BuildFlowLocals(flow, board_fields);
-        let return_type = self.PathToType(&flow.ReturnType);
+        let return_type = self.TypeRefToType(&flow.ReturnType);
         match statement {
             SdslvFlowStatement::Goto(path) => self.ValidateFlowGoto(flow, path, state_names),
             SdslvFlowStatement::Return(value) => {
@@ -697,7 +697,10 @@ impl<'a> Validator<'a> {
     ) -> HashMap<String, TypeRef> {
         let mut locals = HashMap::new();
         for parameter in &flow.Parameters {
-            locals.insert(parameter.Name.clone(), self.PathToType(&parameter.TypeName));
+            locals.insert(
+                parameter.Name.clone(),
+                self.TypeRefToType(&parameter.TypeName),
+            );
         }
         locals.insert(
             "board".to_string(),
@@ -848,14 +851,14 @@ impl<'a> Validator<'a> {
         let mut locals = HashMap::new();
         let mut parameter_types = HashMap::new();
         for parameter in &function.Parameters {
-            let parameter_type = self.PathToType(&parameter.TypeName);
+            let parameter_type = self.TypeRefToType(&parameter.TypeName);
             locals.insert(parameter.Name.clone(), parameter_type.clone());
             parameter_types.insert(parameter.Name.clone(), parameter_type);
         }
-        let return_type = self.PathToType(&function.ReturnType);
+        let return_type = self.TypeRefToType(&function.ReturnType);
         let is_fallible_fn = function.ErrorType.is_some();
         if let Some(error_type) = &function.ErrorType
-            && error_type.Segments.join(".") != "Error"
+            && error_type.ToDisplayString() != "Error"
         {
             self.Err("only Error is supported as fallible error type in SDSL-V M58");
         }
@@ -897,14 +900,14 @@ impl<'a> Validator<'a> {
                             self.Err("fallible expression must be handled with ? or !");
                         }
                         let actual = self.ResolveExpressionType(shader, locals, init);
-                        let expected = self.PathToType(TypeName);
+                        let expected = self.TypeRefToType(TypeName);
                         if let Some(msg) = self.TypeMismatch("type mismatch", &expected, &actual) {
                             self.Err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                         }
                         self.ValidateSwitchExpression(shader, locals, init);
                         locals.insert(Name.clone(), expected);
                     } else {
-                        locals.insert(Name.clone(), self.PathToType(TypeName));
+                        locals.insert(Name.clone(), self.TypeRefToType(TypeName));
                     }
                 }
                 SdslvStatement::Assign { Target, Value } => {
@@ -1400,12 +1403,12 @@ impl<'a> Validator<'a> {
             if let Some(r) = self.RecordByName.get(base_name) {
                 r.Fields
                     .iter()
-                    .map(|f| (f.Name.clone(), self.PathToType(&f.TypeName)))
+                    .map(|f| (f.Name.clone(), self.TypeRefToType(&f.TypeName)))
                     .collect()
             } else if let Some(s) = self.StreamByName.get(base_name) {
                 s.Fields
                     .iter()
-                    .map(|f| (f.Name.clone(), self.PathToType(&f.TypeName)))
+                    .map(|f| (f.Name.clone(), self.TypeRefToType(&f.TypeName)))
                     .collect()
             } else {
                 HashMap::new()
@@ -1534,7 +1537,7 @@ impl<'a> Validator<'a> {
         if let Some(stream) = self.StreamByName.get(base_name)
             && let Some(stream_field) = stream.Fields.iter().find(|x| x.Name == field)
         {
-            return self.PathToType(&stream_field.TypeName);
+            return self.TypeRefToType(&stream_field.TypeName);
         }
         let underlying = self.ResolveUnderlyingName(base_name);
         if let Some(swizzle) = Self::ResolveSwizzleType(&underlying, field) {
@@ -1574,7 +1577,10 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn PathToType(&self, path: &SdslvPath) -> TypeRef {
+    fn TypeRefToType(&self, type_ref: &SdslvTypeRef) -> TypeRef {
+        let Some(path) = type_ref.AsNamedPath() else {
+            return TypeRef::Unknown;
+        };
         TypeRef::Named(path.Segments.join("."))
     }
     fn TypeName(&self, t: &TypeRef) -> String {

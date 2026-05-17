@@ -308,7 +308,7 @@ impl<'a> HlslEmitter<'a> {
             if let Some(param) = local_method.Parameters.iter_mut().find(|p| {
                 shader
                     .GenericParameters
-                    .contains(&p.TypeName.Segments.join("."))
+                    .contains(&p.TypeName.ToDisplayString())
             }) {
                 param.TypeName = first.clone();
             }
@@ -345,7 +345,7 @@ impl<'a> HlslEmitter<'a> {
                     {
                         text = text.replace(
                             "mat.BaseColor(",
-                            &format!("{}_BaseColor(", first.Segments.join(".")),
+                            &format!("{}_BaseColor(", first.ToDisplayString()),
                         );
                     }
                     self.Lines.push(format!("    {}", text));
@@ -418,7 +418,7 @@ impl<'a> HlslEmitter<'a> {
                 TypeName,
                 Initializer,
             } => {
-                let type_name = TypeName.Segments.join(".");
+                let type_name = TypeName.ToDisplayString();
                 let rendered = self.MapBuiltinType(&type_name).unwrap_or(&type_name);
                 if let Some(init) = Initializer {
                     if let SdslvExpression::Switch {
@@ -719,10 +719,10 @@ impl<'a> HlslEmitter<'a> {
         }
     }
     fn IsPositionField(&self, field: &SdslvFieldDecl) -> bool {
-        if field.Name == "Position" && field.TypeName.Segments.join(".") == "ClipPosition4" {
+        if field.Name == "Position" && field.TypeName.ToDisplayString() == "ClipPosition4" {
             return true;
         }
-        if let Some(alias) = self.AliasByName.get(&field.TypeName.Segments.join("."))
+        if let Some(alias) = self.AliasByName.get(&field.TypeName.ToDisplayString())
             && let Some(space) = &alias.SpaceAnnotation
         {
             return space.Segments.join(".") == "clip.position";
@@ -730,7 +730,11 @@ impl<'a> HlslEmitter<'a> {
         false
     }
 
-    fn MapTypeFromPath(&mut self, path: &SdslvPath) -> Option<String> {
+    fn MapTypeFromPath(&mut self, type_ref: &SdslvTypeRef) -> Option<String> {
+        let Some(path) = type_ref.AsNamedPath() else {
+            self.Err("generic type references are not supported in SDSL-V M59a");
+            return None;
+        };
         self.ResolveTypeName(&path.Segments.join("."), 0)
     }
 
@@ -748,7 +752,7 @@ impl<'a> HlslEmitter<'a> {
         }
 
         if let Some(alias) = self.AliasByName.get(type_name) {
-            return self.ResolveTypeName(&alias.TargetType.Segments.join("."), depth + 1);
+            return self.ResolveTypeName(&alias.TargetType.ToDisplayString(), depth + 1);
         }
 
         if self.IsKnownAggregateType(type_name) {
@@ -797,7 +801,7 @@ impl<'a> HlslEmitter<'a> {
             return;
         };
         if !Self::IsLowerableValueType(&return_type) {
-            self.Err(&format!("flow '{}' returns '{}', which cannot be lowered to an HLSL value function in SDSL-V M13", flow.Name, flow.ReturnType.Segments.join(".")));
+            self.Err(&format!("flow '{}' returns '{}', which cannot be lowered to an HLSL value function in SDSL-V M13", flow.Name, flow.ReturnType.ToDisplayString()));
             return;
         }
         let mut state_by_name = HashMap::new();
@@ -840,7 +844,7 @@ impl<'a> HlslEmitter<'a> {
                     return;
                 };
                 let Some(default) = Self::DefaultValueForType(&mapped) else {
-                    self.Err(&format!("flow '{}' board field '{}' of type '{}' cannot be lowered with a default value in SDSL-V M13", flow.Name, field.Name, field.TypeName.Segments.join(".")));
+                    self.Err(&format!("flow '{}' board field '{}' of type '{}' cannot be lowered with a default value in SDSL-V M13", flow.Name, field.Name, field.TypeName.ToDisplayString()));
                     return;
                 };
                 self.Lines
