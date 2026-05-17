@@ -2482,3 +2482,79 @@ fn ValidateArrayIndexRejectsNonArrayBase() {
         "expected non-array indexing diagnostic"
     );
 }
+
+#[test]
+fn ValidateArrayElementAssignmentM60() {
+    ValidateSource("shader S { fn F(i: i32) -> f32 { let weights: array<f32, 4>; weights[i] = 1.0; return weights[i]; } }")
+        .expect("array element assignment should validate");
+}
+
+#[test]
+fn ValidateArrayElementAssignmentRejectsNonIntegerIndexM60() {
+    let diagnostics =
+        ValidateSource("shader S { fn F() -> f32 { let weights: array<f32, 4>; weights[0.5] = 1.0; return 0.0; } }")
+            .expect_err("non-integer array index assignment should be rejected");
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("array index must be integer; found float")),
+        "expected non-integer index assignment diagnostic"
+    );
+}
+
+#[test]
+fn ValidateArrayElementAssignmentRejectsTypeMismatchM60() {
+    let diagnostics = ValidateSource(
+        "shader S { fn F(i: i32) -> f32 { let weights: array<f32, 4>; weights[i] = true; return 0.0; } }",
+    )
+    .expect_err("array element assignment type mismatch should be rejected");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.Message.contains("array element assignment type mismatch")),
+        "expected array element assignment mismatch diagnostic"
+    );
+}
+
+#[test]
+fn ValidateArrayParameterElementAssignmentRejectedM60() {
+    let diagnostics = ValidateSource(
+        "shader S { fn Fill(weights: array<f32, 4>) -> f32 { weights[0] = 1.0; return weights[0]; } }",
+    )
+    .expect_err("array parameter element mutation should be rejected");
+    assert!(
+        diagnostics.iter().any(|d| d
+            .Message
+            .contains("cannot assign to element of immutable array parameter 'weights'")),
+        "expected immutable array parameter assignment diagnostic"
+    );
+}
+
+#[test]
+fn EmitArrayElementAssignmentM60() {
+    let hlsl = CompileSourceToHlsl(
+        "shader S { fn F() -> f32 { let weights: array<f32, 4>; weights[0] = 1.0; return weights[0]; } }",
+    )
+    .expect("array element assignment should lower to hlsl");
+    assert!(
+        hlsl.contains("weights[0] = 1.0;"),
+        "expected array element assignment lowering"
+    );
+}
+
+#[test]
+fn EmitArrayElementAssignmentInForLoopM60Deterministic() {
+    let src = "shader S { fn F() -> f32 { let weights: array<f32, 4>; for i in 0..4 { weights[i] = 1.0; } return weights[0]; } }";
+    let hlsl_a = CompileSourceToHlsl(src).expect("array assignment in for-loop should lower");
+    let hlsl_b =
+        CompileSourceToHlsl(src).expect("array assignment lowering should be deterministic");
+    assert!(
+        hlsl_a.contains("for (int i = 0; i < 4; i = i + 1) {"),
+        "expected deterministic for-loop lowering"
+    );
+    assert!(
+        hlsl_a.contains("weights[i] = 1.0;"),
+        "expected array element assignment in loop body"
+    );
+    assert_eq!(hlsl_a, hlsl_b, "repeated emission should match exactly");
+}

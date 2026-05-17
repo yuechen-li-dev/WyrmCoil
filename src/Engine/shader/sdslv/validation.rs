@@ -917,6 +917,7 @@ impl<'a> Validator<'a> {
                     }
                 }
                 SdslvStatement::Assign { Target, Value } => {
+                    self.CheckExpressionCalls(shader, locals, Target, is_fallible_fn, false);
                     self.CheckExpressionCalls(shader, locals, Value, is_fallible_fn, false);
                     if self.IsFallibleExpression(shader, locals, Value) {
                         self.Err("fallible expression must be handled with ? or !");
@@ -924,9 +925,12 @@ impl<'a> Validator<'a> {
                     self.ValidateImmutableAggregateParameterAssignment(parameter_types, Target);
                     let expected = self.ResolveAssignmentTargetType(shader, locals, Target);
                     let actual = self.ResolveExpressionType(shader, locals, Value);
-                    if let Some(msg) =
-                        self.TypeMismatch("assignment type mismatch", &expected, &actual)
-                    {
+                    let mismatch_label = if matches!(Target, SdslvExpression::Index { .. }) {
+                        "array element assignment type mismatch"
+                    } else {
+                        "assignment type mismatch"
+                    };
+                    if let Some(msg) = self.TypeMismatch(mismatch_label, &expected, &actual) {
                         self.Err(&format!("{}: expected {}, found {}", msg.0, msg.1, msg.2));
                     }
                     self.ValidateSwitchExpression(shader, locals, Value);
@@ -1099,6 +1103,14 @@ impl<'a> Validator<'a> {
         parameter_types: &HashMap<String, TypeRef>,
         target: &SdslvExpression,
     ) {
+        if let Some(base_parameter_name) = Self::TryGetIndexAssignmentRootParameter(target) {
+            if let Some(TypeRef::Array { .. }) = parameter_types.get(&base_parameter_name) {
+                self.Err(&format!(
+                    "cannot assign to element of immutable array parameter '{}'",
+                    base_parameter_name
+                ));
+            }
+        }
         let Some((base_parameter_name, target_field_name)) =
             Self::TryGetFieldAssignmentRootParameter(target)
         else {
@@ -1137,6 +1149,22 @@ impl<'a> Validator<'a> {
             return None;
         };
         Some((root_name.clone(), Field.clone()))
+    }
+
+    fn TryGetIndexAssignmentRootParameter(target: &SdslvExpression) -> Option<String> {
+        let mut cursor = target;
+        loop {
+            match cursor {
+                SdslvExpression::Index { Base, .. } => {
+                    cursor = Base.as_ref();
+                }
+                SdslvExpression::FieldAccess { Base, .. } => {
+                    cursor = Base.as_ref();
+                }
+                SdslvExpression::Identifier(root_name) => return Some(root_name.clone()),
+                _ => return None,
+            }
+        }
     }
 
     fn ResolveAssignmentTargetType(
