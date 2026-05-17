@@ -2732,3 +2732,82 @@ fn EmitVectorConstructorCallsRemainUnchangedM62() {
         "expected constructor call emission to remain unchanged"
     );
 }
+
+#[test]
+fn ValidationM63FallibilityIntegrationAcrossArraysConstructorsWithAndControlFlow() {
+    let unhandled_array_literal = ValidateSource("shader S { fn F() -> i32 ! Error { return 1; } fn G() -> i32 ! Error { let xs: array<i32, 2> = [0, F()]; return xs[0]; } }")
+        .expect_err("unhandled fallible array literal element should fail");
+    assert!(
+        unhandled_array_literal.iter().any(|d| d
+            .Message
+            .contains("fallible expression must be handled with ? or !")),
+        "expected unhandled fallible diagnostic for array literal element"
+    );
+    ValidateSource("shader S { fn F() -> i32 ! Error { return 1; } fn G() -> i32 ! Error { let xs: array<i32, 2> = [0, F()?]; return xs[F()?]; } }")
+        .expect("handled fallible array literal/index should validate");
+
+    let unhandled_assignment_index = ValidateSource("shader S { fn F() -> i32 ! Error { return 1; } fn G(values: array<i32, 2>) -> i32 ! Error { values[F()] = 1; return values[0]; } }")
+        .expect_err("unhandled fallible array assignment index should fail");
+    assert!(
+        unhandled_assignment_index.iter().any(|d| d
+            .Message
+            .contains("fallible expression must be handled with ? or !")),
+        "expected unhandled fallible diagnostic for assignment index"
+    );
+
+    let unhandled_assignment_rhs = ValidateSource("shader S { fn F() -> i32 ! Error { return 1; } fn G() -> i32 ! Error { let values: array<i32, 2>; values[0] = F(); return values[0]; } }")
+        .expect_err("unhandled fallible array assignment rhs should fail");
+    assert!(
+        unhandled_assignment_rhs.iter().any(|d| d
+            .Message
+            .contains("fallible expression must be handled with ? or !")),
+        "expected unhandled fallible diagnostic for assignment rhs"
+    );
+    ValidateSource("shader S { fn F() -> i32 ! Error { return 1; } fn G() -> i32 ! Error { let values: array<i32, 2>; values[F()?] = 1; values[0] = F()?; return values[0]; } }")
+        .expect("handled fallible array assignment index/rhs should validate");
+
+    let unhandled_ctor_arg = ValidateSource("shader S { fn F() -> float ! Error { return 1.0; } fn G() -> float4 ! Error { return float4(1.0, F(), 0.0, 1.0); } }")
+        .expect_err("unhandled fallible constructor arg should fail");
+    assert!(
+        unhandled_ctor_arg.iter().any(|d| d
+            .Message
+            .contains("fallible expression must be handled with ? or !")),
+        "expected unhandled fallible diagnostic for constructor arg"
+    );
+    ValidateSource("shader S { fn F() -> float ! Error { return 1.0; } fn G() -> float4 ! Error { return float4(1.0, F()?, 0.0, 1.0); } fn H() -> float4 { return float4(1.0, F()!, 0.0, 1.0); } }")
+        .expect("handled fallible constructor args should validate with success type");
+
+    let unhandled_with_value = ValidateSource("record SurfaceData { Roughness: float; } shader S { fn LoadRoughness() -> float ! Error { return 0.5; } fn G(surface: SurfaceData) -> SurfaceData ! Error { return surface with { Roughness: LoadRoughness(), }; } }")
+        .expect_err("unhandled fallible with update should fail");
+    assert!(
+        unhandled_with_value.iter().any(|d| d
+            .Message
+            .contains("fallible expression must be handled with ? or !")),
+        "expected unhandled fallible diagnostic for with update value"
+    );
+    ValidateSource("record SurfaceData { Roughness: float; } shader S { fn LoadRoughness() -> float ! Error { return 0.5; } fn G(surface: SurfaceData) -> SurfaceData ! Error { return surface with { Roughness: LoadRoughness()?, }; } }")
+        .expect("handled fallible with update value should validate");
+
+    let unhandled_if_condition = ValidateSource("shader S { fn IsEnabled() -> bool ! Error { return true; } fn G() -> i32 ! Error { if IsEnabled() { return 1; } return 0; } }")
+        .expect_err("unhandled fallible if condition should fail");
+    assert!(
+        unhandled_if_condition.iter().any(|d| d
+            .Message
+            .contains("fallible expression must be handled with ? or !")),
+        "expected unhandled fallible diagnostic for if condition"
+    );
+    ValidateSource("shader S { fn IsEnabled() -> bool ! Error { return true; } fn G() -> i32 ! Error { if IsEnabled()? { return 1; } return 0; } }")
+        .expect("handled fallible if condition should validate");
+
+    let unhandled_switch_and_for = ValidateSource("shader S { fn IsLow() -> bool ! Error { return true; } fn LoadCode() -> i32 ! Error { return 408; } fn Step() -> i32 ! Error { return 1; } fn F() -> i32 ! Error { let code: i32 = LoadCode()?; let a: i32 = switch { case IsLow() => 1 else => 2 }; let b: i32 = switch LoadCode() { case 408 => 1 else => 0 }; let c: i32 = switch code { case 1 => LoadCode() else => 0 }; let sum: i32 = 0; for i in 0..LoadCode() { sum = sum + i; } for j in 0..10 step Step() { sum = sum + j; } return a + b + c + sum; } }")
+        .expect_err("unhandled fallible switch/for expressions should fail");
+    assert!(
+        unhandled_switch_and_for.iter().any(|d| d
+            .Message
+            .contains("fallible expression must be handled with ? or !")),
+        "expected unhandled fallible diagnostic across switch/for contexts"
+    );
+
+    ValidateSource("shader S { fn IsLow() -> bool ! Error { return true; } fn LoadCode() -> i32 ! Error { return 408; } fn Step() -> i32 ! Error { return 1; } fn F() -> i32 ! Error { let code: i32 = LoadCode()?; let a: i32 = switch { case IsLow()? => 1 else => 2 }; let b: i32 = switch LoadCode()? { case 408 => 1 else => 0 }; let c: i32 = switch code { case 1 => LoadCode()? else => 0 }; let sum: i32 = 0; for i in 0..LoadCode()? { sum = sum + i; } for j in 0..10 step Step()? { sum = sum + j; } return a + b + c + sum; } }")
+        .expect("handled fallible switch/for expressions should validate");
+}

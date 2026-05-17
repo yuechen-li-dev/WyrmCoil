@@ -697,3 +697,19 @@ Out of scope in M62:
 - Oct `vector[...]` / `matrix[[...]]` literal syntax.
 - Dynamic arrays/slices.
 - Broad overload resolution for constructor signatures.
+
+
+## M63 fallibility integration hardening
+
+M63 extends M58/M58b fallibility validation across newer expression/statement surfaces.
+
+- Fallibility is checked recursively through array literals, array indexes, array element assignments, `with` updates, constructor arguments, `if` conditions, `switch` conditions/subjects/arm values, and `for` bounds/step expressions.
+- These contexts do not hide fallible expressions: unhandled fallible usage emits `fallible expression must be handled with ? or !`.
+- Existing diagnostics remain authoritative:
+  - `? can only be used inside a fallible function`
+  - `? requires a fallible expression`
+  - `! unwrap requires a fallible expression`
+- Handled `?` / `!` expressions participate in existing type validation as success values (`Fallible<T>` usage validates as `T` for constructor args, array indexes/elements, switch/if/for checks).
+- Fallible `match` remains future work.
+- HLSL fallible lowering remains unsupported; modules using fallible functions/expressions continue producing the explicit unsupported-emission diagnostic.
+- `.sdslvtest` runner behavior remains unsupported for fallible execution, but nested fallible forms in these expression shapes must produce explicit unsupported diagnostics rather than panicking.

@@ -1004,3 +1004,19 @@ Out of scope in M62:
 - Oct `vector[...]` / `matrix[[...]]` literal syntax.
 - Dynamic arrays/slices.
 - Broad overload resolution for constructor signatures.
+
+
+## M63 fallibility integration across arrays/constructors/control flow
+
+M63 is a validation hardening pass (no new syntax):
+
+- The Oct-style rule remains: if an expression can fail, callers must handle it with `?` or `!`.
+- Recursive fallibility checks apply across array literals, array indexing, array element assignment, `with` update values/base, vector/matrix constructor arguments, `if` conditions, condition-switch and subject-switch conditions/subjects/case values, switch arm values, and bounded `for` start/end/step expressions.
+- Unhandled fallible usage in these positions is rejected with the standard diagnostic: `fallible expression must be handled with ? or !`.
+- Postfix `?` / `!` keep existing validation diagnostics and are type-checked as success-value expressions for downstream checks (`bool` conditions, integer indexes/bounds/step, constructor argument compatibility, array element compatibility).
+
+Still out of scope in M63:
+
+- fallible `match`
+- tuple syntax/types/returns/destructuring
+- HLSL fallibility lowering or error ABI generation
