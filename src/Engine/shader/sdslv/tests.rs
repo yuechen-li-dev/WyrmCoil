@@ -230,6 +230,53 @@ shader S {
 }
 
 #[test]
+fn ParserSubjectSwitchParsesAndSetsSubject() {
+    let src = r#"
+shader S {
+    fn A(code: i32) -> i32 {
+        let a: i32 = switch code { case 408 => 3 case 429 => 5 else => 0 };
+        let b: i32 = switch code { case 1 -> 9 else -> 2 };
+        let c: i32 = switch { case code > 0 => 1 else => 0 };
+        return a + b + c;
+    }
+}
+"#;
+    let module = ParseSource(src).expect("subject-switch expressions should parse");
+    let shader = module
+        .Declarations
+        .iter()
+        .find_map(|d| match d {
+            SdslvDecl::Shader(s) => Some(s),
+            _ => None,
+        })
+        .expect("shader expected");
+    let body = shader.Methods[0].Body.as_ref().expect("body expected");
+    let SdslvStatement::Let {
+        Initializer: Some(SdslvExpression::Switch { Subject, Cases, .. }),
+        ..
+    } = &body.Statements[0]
+    else {
+        panic!("first let should be subject switch");
+    };
+    assert!(
+        Subject.is_some(),
+        "subject-switch must capture subject expression"
+    );
+    assert_eq!(Cases.len(), 2, "subject-switch should preserve case count");
+    let SdslvStatement::Let {
+        Initializer: Some(SdslvExpression::Switch { Subject, .. }),
+        ..
+    } = &body.Statements[2]
+    else {
+        panic!("third let should be condition-switch");
+    };
+    assert!(
+        Subject.is_none(),
+        "condition-switch should keep Subject=None"
+    );
+}
+
+#[test]
 fn ParserInvalidCases() {
     assert!(ParseSource("namespace ;").is_err());
     assert!(ParseSource("stream A { X float4; }").is_err());
@@ -2019,6 +2066,20 @@ shader S {
                 || d.Message.contains("return type mismatch in F")),
         "expected switch arm mismatch diagnostic"
     );
+
+    ValidateSource("shader S { fn F(code: i32) -> i32 { return switch code { case 408 => 3 case 429 => 5 else => 0 }; } }")
+        .expect("subject switch with matching i32 subject/cases should validate");
+
+    let switch_case_mismatch = ValidateSource(
+        "shader S { fn F(code: i32) -> i32 { return switch code { case true => 3 else => 0 }; } }",
+    )
+    .expect_err("subject switch case type mismatch should fail");
+    assert!(
+        switch_case_mismatch.iter().any(|d| d
+            .Message
+            .contains("switch case type mismatch: expected i32, found bool")),
+        "expected subject switch case type mismatch diagnostic"
+    );
 }
 
 #[test]
@@ -2072,4 +2133,42 @@ shader S {
 
     let again = CompileSourceToHlsl(src).expect("second compile should also succeed");
     assert_eq!(hlsl, again, "emission should be deterministic");
+}
+
+#[test]
+fn EmitHlslSubjectSwitchLoweringM56() {
+    let src = r#"
+shader S {
+    fn F(code: i32) -> i32 {
+        let retries: i32 = switch code { case 408 => 3 case 429 => 5 else => 0 };
+        retries = switch code { case 500 => 9 else => retries };
+        return switch code { case 200 => retries case 204 => 1 else => 2 };
+    }
+}
+"#;
+    let hlsl = CompileSourceToHlsl(src).expect("subject switch lowering should compile to HLSL");
+    assert!(
+        hlsl.contains("if (code == 408) {"),
+        "subject-switch init should compare subject against case"
+    );
+    assert!(
+        hlsl.contains("else if (code == 429) {"),
+        "subject-switch init should emit else-if comparison"
+    );
+    assert!(
+        hlsl.contains("retries = 3;"),
+        "subject-switch init arm should assign result"
+    );
+    assert!(
+        hlsl.contains("if (code == 500) {"),
+        "subject-switch assignment RHS should compare subject"
+    );
+    assert!(
+        hlsl.contains("if (code == 200) {"),
+        "subject-switch return should compare subject"
+    );
+    assert!(
+        !hlsl.contains("if (code) {"),
+        "subject-switch lowering should not treat case values as boolean conditions"
+    );
 }
