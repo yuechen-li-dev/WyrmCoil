@@ -142,6 +142,12 @@ impl<'a> Lexer<'a> {
                 self.Push(SdslvTokenKind::Arrow, st);
                 continue;
             }
+            if c == '.' && self.Peek(1) == Some('.') {
+                self.Bump('.');
+                self.Bump('.');
+                self.Push(SdslvTokenKind::Range, st);
+                continue;
+            }
             let kind = match c {
                 '{' => Some(SdslvTokenKind::LeftBrace),
                 '}' => Some(SdslvTokenKind::RightBrace),
@@ -203,6 +209,10 @@ impl<'a> Lexer<'a> {
             "with" => SdslvTokenKind::KeywordWith,
             "if" => SdslvTokenKind::KeywordIf,
             "switch" => SdslvTokenKind::KeywordSwitch,
+            "for" => SdslvTokenKind::KeywordFor,
+            "while" => SdslvTokenKind::KeywordWhile,
+            "in" => SdslvTokenKind::KeywordIn,
+            "step" => SdslvTokenKind::KeywordStep,
             _ => SdslvTokenKind::Identifier(t.to_string()),
         }
     }

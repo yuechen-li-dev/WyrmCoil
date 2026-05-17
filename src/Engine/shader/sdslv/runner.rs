@@ -139,6 +139,10 @@ fn execute_statement(
             Message: "if statement is not supported in SDSL-V M55c test execution".to_string(),
             Span: None,
         }),
+        SdslvStatement::For { .. } => Err(SdslvAssertFailure {
+            Message: "for statement is not supported in SDSL-V M57 test execution".to_string(),
+            Span: None,
+        }),
     }
 }
 

@@ -221,7 +221,20 @@ Validation/lowering rules (M56):
 - switch expression use outside supported statement contexts emits a clear M55c diagnostic.
 
 Not currently fully supported in shader function bodies:
-- loops (`for`, `while`)
+- bounded loops are supported only in numeric range form:
+  - `for i in start..end { ... }`
+  - `for i in start..end step k { ... }`
+- loop rules:
+  - inclusive `start`, exclusive `end`
+  - integer bounds/step when known
+  - step defaults to `1`
+  - known literal step must be `> 0`
+- unsupported loop/control forms:
+  - `while` (reserved for future bounded condition-loop design)
+  - `break`
+  - `continue`
+- shader authors should prefer bounded `for` loops for predictable GPU execution.
+- `flow`, `state`, and `step` are reserved SDSL-V keywords and cannot be used as local/declaration identifiers.
 - `match`
 - nested block-control syntax beyond the bounded parser subset
 - `discard`

@@ -201,6 +201,14 @@ pub enum SdslvStatement {
         ElseBody: Option<Vec<SdslvStatement>>,
         Span: SdslvSpan,
     },
+    For {
+        Iterator: String,
+        Start: SdslvExpression,
+        End: SdslvExpression,
+        Step: Option<SdslvExpression>,
+        Body: Vec<SdslvStatement>,
+        Span: SdslvSpan,
+    },
     Expression {
         Value: SdslvExpression,
     },
