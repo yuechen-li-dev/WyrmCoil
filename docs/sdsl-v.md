@@ -1039,4 +1039,23 @@ Still out of scope in M64b:
 
 - Enum payload variants.
 - Fallible `match ok/err` forms.
-- HLSL lowering for enum/match (M64c/future).
+- (Implemented in M64c) deterministic HLSL lowering for tag enums, enum type refs, enum variant refs, and bounded-context match expressions.
+
+## M64c enum/match HLSL lowering
+
+M64c completes deterministic HLSL emission for tag-only enum + exhaustive match authoring.
+
+- Tag enums lower to deterministic integer constants in declaration order:
+  - `enum ShadowMode { None; Hard; Soft; }`
+  - emits `static const int ShadowMode_None = 0;`, `ShadowMode_Hard = 1;`, `ShadowMode_Soft = 2;`.
+- Enum type references lower to `int` in parameters, locals, record fields, and compatible array element contexts.
+- Qualified variant references lower from `Enum.Variant` to `Enum_Variant`.
+- Exhaustive `match` lowers in bounded statement contexts (local initializer, assignment RHS, return expression) as deterministic `if` / `else if` / `else` chains.
+- Because exhaustiveness is validated before emission, the final match arm lowers as `else`.
+- Nested/non-bounded match-expression contexts produce:
+  - `match expression is not supported in this expression context in SDSL-V M64c`
+
+Still out of scope in M64c:
+- payload-carrying enum variants
+- fallible match lowering
+- wildcard/default match arms

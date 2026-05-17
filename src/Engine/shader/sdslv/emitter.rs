@@ -32,6 +32,7 @@ struct FlowLowerContext<'a> {
 struct HlslEmitter<'a> {
     Module: &'a SdslvModule,
     AliasByName: HashMap<String, &'a SdslvTypeAliasDecl>,
+    EnumByName: HashMap<String, &'a SdslvEnumDecl>,
     Lines: Vec<String>,
     Diagnostics: Vec<SdslvDiagnostic>,
 }
@@ -44,9 +45,16 @@ impl<'a> HlslEmitter<'a> {
                 alias_by_name.insert(alias.Name.clone(), alias);
             }
         }
+        let mut enum_by_name = HashMap::new();
+        for decl in &module.Declarations {
+            if let SdslvDecl::Enum(enum_decl) = decl {
+                enum_by_name.insert(enum_decl.Name.clone(), enum_decl);
+            }
+        }
         Self {
             Module: module,
             AliasByName: alias_by_name,
+            EnumByName: enum_by_name,
             Lines: vec![],
             Diagnostics: vec![],
         }
@@ -65,10 +73,10 @@ impl<'a> HlslEmitter<'a> {
                 SdslvDecl::TypeAlias(alias) => self.EmitTypeAlias(alias),
                 SdslvDecl::Stream(stream) => self.EmitStream(stream),
                 SdslvDecl::Record(record) => self.EmitRecord(record),
+                SdslvDecl::Enum(enum_decl) => self.EmitEnum(enum_decl),
                 SdslvDecl::Shader(shader) => self.EmitShader(shader),
                 SdslvDecl::Flow(flow) => self.EmitFlow(flow),
                 SdslvDecl::Compile(compile) => self.EmitCompile(compile),
-                SdslvDecl::Enum(_) => {}
                 SdslvDecl::Interface(interface) => {
                     self.Lines.push(format!(
                         "// interface {} omitted in HLSL M3",
@@ -76,6 +84,14 @@ impl<'a> HlslEmitter<'a> {
                     ));
                 }
             }
+        }
+    }
+    fn EmitEnum(&mut self, enum_decl: &SdslvEnumDecl) {
+        for (index, variant) in enum_decl.Variants.iter().enumerate() {
+            self.Lines.push(format!(
+                "static const int {}_{} = {};",
+                enum_decl.Name, variant.Name, index
+            ));
         }
     }
 
@@ -269,6 +285,52 @@ impl<'a> HlslEmitter<'a> {
             _ => false,
         }
     }
+    fn ExpressionContainsMatch(expression: &SdslvExpression) -> bool {
+        match expression {
+            SdslvExpression::Match { .. } => true,
+            SdslvExpression::Call { Callee, Arguments } => {
+                Self::ExpressionContainsMatch(Callee)
+                    || Arguments.iter().any(Self::ExpressionContainsMatch)
+            }
+            SdslvExpression::FieldAccess { Base, .. } => Self::ExpressionContainsMatch(Base),
+            SdslvExpression::Unary { Operand, .. } => Self::ExpressionContainsMatch(Operand),
+            SdslvExpression::Binary { Left, Right, .. } => {
+                Self::ExpressionContainsMatch(Left) || Self::ExpressionContainsMatch(Right)
+            }
+            SdslvExpression::With { Base, Updates } => {
+                Self::ExpressionContainsMatch(Base)
+                    || Updates
+                        .iter()
+                        .any(|u| Self::ExpressionContainsMatch(&u.Value))
+            }
+            SdslvExpression::Switch {
+                Subject,
+                Cases,
+                ElseValue,
+                ..
+            } => {
+                Subject
+                    .as_ref()
+                    .is_some_and(|s| Self::ExpressionContainsMatch(s))
+                    || Cases.iter().any(|c| {
+                        Self::ExpressionContainsMatch(&c.Condition)
+                            || Self::ExpressionContainsMatch(&c.Value)
+                    })
+                    || Self::ExpressionContainsMatch(ElseValue)
+            }
+            SdslvExpression::Index { Base, Index, .. } => {
+                Self::ExpressionContainsMatch(Base) || Self::ExpressionContainsMatch(Index)
+            }
+            SdslvExpression::TryPropagate { Expression, .. }
+            | SdslvExpression::Unwrap { Expression, .. } => {
+                Self::ExpressionContainsMatch(Expression)
+            }
+            SdslvExpression::ArrayLiteral { Elements, .. } => {
+                Elements.iter().any(Self::ExpressionContainsMatch)
+            }
+            _ => false,
+        }
+    }
     fn EmitShaderMethodNamed(&mut self, shader_name: &str, method: &SdslvFunctionDecl) {
         let Some(return_type) = self.MapTypeFromPath(&method.ReturnType) else {
             return;
@@ -419,8 +481,9 @@ impl<'a> HlslEmitter<'a> {
                 TypeName,
                 Initializer,
             } => {
-                let type_name = TypeName.ToDisplayString();
-                let rendered = self.MapBuiltinType(&type_name).unwrap_or(&type_name);
+                let rendered = self
+                    .MapTypeFromPath(TypeName)
+                    .unwrap_or(TypeName.ToDisplayString());
                 if let Some(init) = Initializer {
                     if let SdslvExpression::ArrayLiteral { Elements, .. } = init {
                         let mut lines = vec![format!("{} {};", rendered, Name)];
@@ -451,6 +514,15 @@ impl<'a> HlslEmitter<'a> {
                         ));
                         return lines;
                     }
+                    if let SdslvExpression::Match { Subject, Arms, .. } = init {
+                        let mut lines = vec![format!("{} {};", rendered, Name)];
+                        lines.extend(self.EmitMatchChainLines(
+                            Subject,
+                            Arms,
+                            &format!("{Name} = {{value}};"),
+                        ));
+                        return lines;
+                    }
                     if let SdslvExpression::With { Base, Updates } = init {
                         let mut lines = vec![format!(
                             "{} {} = {};",
@@ -468,6 +540,9 @@ impl<'a> HlslEmitter<'a> {
                         }
                         lines
                     } else {
+                        if Self::ExpressionContainsMatch(init) {
+                            self.Err("match expression is not supported in this expression context in SDSL-V M64c");
+                        }
                         vec![format!(
                             "{} {} = {};",
                             rendered,
@@ -509,6 +584,14 @@ impl<'a> HlslEmitter<'a> {
                         "if",
                     );
                 }
+                if let SdslvExpression::Match { Subject, Arms, .. } = Value {
+                    let target_text = self.EmitExpression(Target, 0);
+                    return self.EmitMatchChainLines(
+                        Subject,
+                        Arms,
+                        &format!("{target_text} = {{value}};"),
+                    );
+                }
                 if let SdslvExpression::With { Base, Updates } = Value {
                     let target_text = self.EmitExpression(Target, 0);
                     let mut lines = vec![format!(
@@ -526,6 +609,9 @@ impl<'a> HlslEmitter<'a> {
                     }
                     lines
                 } else {
+                    if Self::ExpressionContainsMatch(Value) {
+                        self.Err("match expression is not supported in this expression context in SDSL-V M64c");
+                    }
                     vec![format!(
                         "{} = {};",
                         self.EmitExpression(Target, 0),
@@ -549,6 +635,9 @@ impl<'a> HlslEmitter<'a> {
                         "if",
                     );
                 }
+                if let SdslvExpression::Match { Subject, Arms, .. } = Value {
+                    return self.EmitMatchChainLines(Subject, Arms, "return {value};");
+                }
                 if let SdslvExpression::With { Base, Updates } = Value {
                     let temp_name = format!("__with{}", *with_counter);
                     *with_counter += 1;
@@ -568,6 +657,9 @@ impl<'a> HlslEmitter<'a> {
                     lines.push(format!("return {};", temp_name));
                     lines
                 } else {
+                    if Self::ExpressionContainsMatch(Value) {
+                        self.Err("match expression is not supported in this expression context in SDSL-V M64c");
+                    }
                     vec![format!("return {};", self.EmitExpression(Value, 0))]
                 }
             }
@@ -631,6 +723,46 @@ impl<'a> HlslEmitter<'a> {
             }
         }
     }
+    fn EmitMatchChainLines(
+        &mut self,
+        subject: &SdslvExpression,
+        arms: &[SdslvMatchArm],
+        template: &str,
+    ) -> Vec<String> {
+        let mut lines = vec![];
+        if arms.is_empty() {
+            self.Err("match expression is not supported in this expression context in SDSL-V M64c");
+            return vec![
+                "/* match expression is not supported in this expression context in SDSL-V M64c */"
+                    .to_string(),
+            ];
+        }
+        let subject_text = self.EmitExpression(subject, 0);
+        for (index, arm) in arms.iter().enumerate() {
+            let keyword = if index == 0 {
+                "if"
+            } else if index == arms.len() - 1 {
+                "else"
+            } else {
+                "else if"
+            };
+            if keyword == "else" {
+                lines.push("else {".to_string());
+            } else {
+                let variant_text = self.EmitVariantPath(&arm.VariantPath);
+                lines.push(format!(
+                    "{} ({} == {}) {{",
+                    keyword, subject_text, variant_text
+                ));
+            }
+            lines.push(format!(
+                "    {}",
+                template.replace("{value}", &self.EmitExpression(&arm.Value, 0))
+            ));
+            lines.push("}".to_string());
+        }
+        lines
+    }
 
     fn EmitSwitchChainLines(
         &mut self,
@@ -692,6 +824,11 @@ impl<'a> HlslEmitter<'a> {
                 "/* array literal requires expected context */".to_string()
             }
             SdslvExpression::FieldAccess { Base, Field } => {
+                if let SdslvExpression::Identifier(enum_name) = Base.as_ref()
+                    && self.EnumByName.contains_key(enum_name)
+                {
+                    return format!("{}_{}", enum_name, Field);
+                }
                 format!("{}.{}", self.EmitExpression(Base, 3), Field)
             }
             SdslvExpression::Index { Base, Index, .. } => {
@@ -750,13 +887,19 @@ impl<'a> HlslEmitter<'a> {
                     .to_string()
             }
             SdslvExpression::Match { .. } => {
-                "/* match expression is not supported in this expression context in M64 */"
+                "/* match expression is not supported in this expression context in SDSL-V M64c */"
                     .to_string()
             }
             SdslvExpression::TryPropagate { .. } | SdslvExpression::Unwrap { .. } => {
                 "/* fallible function emission is not implemented in SDSL-V M58 */".to_string()
             }
         }
+    }
+    fn EmitVariantPath(&self, path: &SdslvPath) -> String {
+        if path.Segments.len() == 2 {
+            return format!("{}_{}", path.Segments[0], path.Segments[1]);
+        }
+        path.Segments.join("_")
     }
     fn IsPositionField(&self, field: &SdslvFieldDecl) -> bool {
         if field.Name == "Position" && field.TypeName.ToDisplayString() == "ClipPosition4" {
@@ -801,6 +944,9 @@ impl<'a> HlslEmitter<'a> {
 
         if self.IsKnownAggregateType(type_name) {
             return Some(type_name.to_string());
+        }
+        if self.EnumByName.contains_key(type_name) {
+            return Some("int".to_string());
         }
 
         self.Err(&format!("unknown type '{}' in HLSL emission", type_name));

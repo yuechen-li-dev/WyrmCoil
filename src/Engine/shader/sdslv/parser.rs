@@ -212,11 +212,26 @@ impl<'a> Parser<'a> {
             let span = self.CurrentSpan();
             let variant_name = self.IdentReq("expected enum variant name")?;
             self.Expect(SdslvTokenKind::Semicolon, "expected ';' after enum variant");
-            variants.push(SdslvEnumVariant { Name: variant_name, Span: span });
+            variants.push(SdslvEnumVariant {
+                Name: variant_name,
+                Span: span,
+            });
         }
-        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after enum variants");
+        self.Expect(
+            SdslvTokenKind::RightBrace,
+            "expected '}' after enum variants",
+        );
         let end = self.PrevSpan();
-        Some(SdslvEnumDecl { Name: name, Variants: variants, Span: SdslvSpan { Start: start.Start, End: end.End, Line: start.Line, Column: start.Column } })
+        Some(SdslvEnumDecl {
+            Name: name,
+            Variants: variants,
+            Span: SdslvSpan {
+                Start: start.Start,
+                End: end.End,
+                Line: start.Line,
+                Column: start.Column,
+            },
+        })
     }
 
     fn ParseCompile(&mut self) -> Option<SdslvCompileDecl> {
@@ -1155,21 +1170,39 @@ impl<'a> Parser<'a> {
             self.ErrHere("match expression missing subject expression");
             None
         })?);
-        self.Expect(SdslvTokenKind::LeftBrace, "expected '{' after match subject");
+        self.Expect(
+            SdslvTokenKind::LeftBrace,
+            "expected '{' after match subject",
+        );
         let mut arms = vec![];
         while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
             let span = self.CurrentSpan();
             let variant_path = self.ParsePathReq("expected Enum.Variant in match arm")?;
-            if !self.MatchSwitchArmArrow("expected '=>' or '->' in match arm") { return None; }
+            if !self.MatchSwitchArmArrow("expected '=>' or '->' in match arm") {
+                return None;
+            }
             let value = self.ParseExpression().or_else(|| {
                 self.ErrHere("expected match arm expression after arrow");
                 None
             })?;
-            arms.push(SdslvMatchArm { VariantPath: variant_path, Value: value, Span: span });
+            arms.push(SdslvMatchArm {
+                VariantPath: variant_path,
+                Value: value,
+                Span: span,
+            });
         }
         self.Expect(SdslvTokenKind::RightBrace, "expected '}' after match arms");
         let end = self.PrevSpan();
-        Some(SdslvExpression::Match { Subject: subject, Arms: arms, Span: SdslvSpan { Start: start.Start, End: end.End, Line: start.Line, Column: start.Column } })
+        Some(SdslvExpression::Match {
+            Subject: subject,
+            Arms: arms,
+            Span: SdslvSpan {
+                Start: start.Start,
+                End: end.End,
+                Line: start.Line,
+                Column: start.Column,
+            },
+        })
     }
 
     fn ParsePrimary(&mut self) -> Option<SdslvExpression> {
