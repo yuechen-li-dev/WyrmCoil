@@ -117,6 +117,10 @@ Rust's `non_snake_case` lint is intentionally disabled workspace-wide; `wyrmfmt`
 cargo test
 ```
 
+## Native material TOML status
+
+Native `.toml` material assets now include parse + structural validation (M91) and an initial semantic validation seed (M92) for core node kinds (`constant_f32`, `constant_float4`, `texture2d`, `multiply`, `add`, `lerp`, `standard_surface`). Semantic validation is still pre-codegen: no SDSL-V generation, no MaterialX import implementation, and no runtime material binding integration yet.
+
 ## Persistent controller sample (M52)
 
 `Demo::persistent_controller` is a copyable authoring pattern for persistent root-controller flows:

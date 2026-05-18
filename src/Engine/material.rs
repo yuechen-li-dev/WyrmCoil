@@ -88,6 +88,63 @@ pub enum MaterialTomlValidationError {
     GraphCycleDetected,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MaterialValueType {
+    F32,
+    Float2,
+    Float3,
+    Float4,
+    Texture2D,
+    Surface,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaterialGraphSemantics {
+    pub OutputNodeId: String,
+    pub NodeTypes: BTreeMap<String, MaterialValueType>,
+    pub TopologicalNodeIds: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum MaterialSemanticError {
+    Structural(MaterialTomlValidationError),
+    UnsupportedNodeKind {
+        NodeId: String,
+        Kind: String,
+    },
+    MissingInput {
+        NodeId: String,
+        Input: String,
+    },
+    UnknownInput {
+        NodeId: String,
+        Input: String,
+    },
+    MissingParam {
+        NodeId: String,
+        Param: String,
+    },
+    UnknownParam {
+        NodeId: String,
+        Param: String,
+    },
+    ParamTypeMismatch {
+        NodeId: String,
+        Param: String,
+        Expected: String,
+        Found: String,
+    },
+    OperationTypeMismatch {
+        NodeId: String,
+        Message: String,
+    },
+    OutputMustBeSurface {
+        OutputNodeId: String,
+        Found: MaterialValueType,
+    },
+}
+
 impl MaterialTomlAsset {
     pub fn NodeById(&self, id: &str) -> Option<&MaterialNode> {
         self.Nodes.iter().find(|node| node.Id == id)
@@ -405,6 +462,361 @@ fn IsValidNodeId(value: &str) -> bool {
     chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
+pub fn ValidateMaterialTomlSemantics(
+    asset: &MaterialTomlAsset,
+) -> Result<MaterialGraphSemantics, MaterialSemanticError> {
+    ValidateMaterialTomlAsset(asset).map_err(MaterialSemanticError::Structural)?;
+    let all_topo = asset
+        .TopologicalNodeIds()
+        .map_err(MaterialSemanticError::Structural)?;
+    let reachable = ReachableNodeIdsFromOutput(asset);
+    let node_by_id: BTreeMap<&str, &MaterialNode> =
+        asset.Nodes.iter().map(|n| (n.Id.as_str(), n)).collect();
+    let mut node_types: BTreeMap<String, MaterialValueType> = BTreeMap::new();
+    let topo_reachable: Vec<String> = all_topo
+        .into_iter()
+        .filter(|id| reachable.contains(id))
+        .collect();
+
+    for node_id in &topo_reachable {
+        let node = node_by_id
+            .get(node_id.as_str())
+            .expect("reachable node should exist");
+        let inferred = InferNodeType(node, &node_types, &node_by_id)?;
+        node_types.insert(node_id.clone(), inferred);
+    }
+
+    let output_type = node_types
+        .get(&asset.Material.Output)
+        .copied()
+        .unwrap_or(MaterialValueType::Unknown);
+    if output_type != MaterialValueType::Surface {
+        return Err(MaterialSemanticError::OutputMustBeSurface {
+            OutputNodeId: asset.Material.Output.clone(),
+            Found: output_type,
+        });
+    }
+
+    Ok(MaterialGraphSemantics {
+        OutputNodeId: asset.Material.Output.clone(),
+        NodeTypes: node_types,
+        TopologicalNodeIds: topo_reachable,
+    })
+}
+
+fn ReachableNodeIdsFromOutput(asset: &MaterialTomlAsset) -> BTreeSet<String> {
+    let mut visited = BTreeSet::new();
+    let mut stack = vec![asset.Material.Output.clone()];
+    let by_id: BTreeMap<&str, &MaterialNode> =
+        asset.Nodes.iter().map(|n| (n.Id.as_str(), n)).collect();
+    while let Some(node_id) = stack.pop() {
+        if !visited.insert(node_id.clone()) {
+            continue;
+        }
+        if let Some(node) = by_id.get(node_id.as_str()) {
+            for dep in node.Inputs.values() {
+                stack.push(dep.clone());
+            }
+        }
+    }
+    visited
+}
+
+fn InferNodeType(
+    node: &MaterialNode,
+    known_types: &BTreeMap<String, MaterialValueType>,
+    node_by_id: &BTreeMap<&str, &MaterialNode>,
+) -> Result<MaterialValueType, MaterialSemanticError> {
+    match node.Kind.as_str() {
+        "constant_f32" => {
+            RequireExactInputs(node, &[])?;
+            RequireExactParams(node, &["value"])?;
+            let value = node.Params.get("value").expect("value required");
+            if !IsNumericParam(value) {
+                return Err(MaterialSemanticError::ParamTypeMismatch {
+                    NodeId: node.Id.clone(),
+                    Param: "value".to_string(),
+                    Expected: "numeric".to_string(),
+                    Found: MaterialParamTypeName(value).to_string(),
+                });
+            }
+            Ok(MaterialValueType::F32)
+        }
+        "constant_float4" => {
+            RequireExactInputs(node, &[])?;
+            RequireExactParams(node, &["value"])?;
+            let value = node.Params.get("value").expect("value required");
+            if AsFloat4Param(value).is_none() {
+                return Err(MaterialSemanticError::ParamTypeMismatch {
+                    NodeId: node.Id.clone(),
+                    Param: "value".to_string(),
+                    Expected: "float4".to_string(),
+                    Found: MaterialParamTypeName(value).to_string(),
+                });
+            }
+            Ok(MaterialValueType::Float4)
+        }
+        "texture2d" => {
+            RequireExactInputs(node, &[])?;
+            RequireAllowedParams(node, &["path", "color_space"])?;
+            let path = match node.Params.get("path") {
+                Some(MaterialParamValue::String(v)) if !v.trim().is_empty() => v,
+                Some(v) => {
+                    return Err(MaterialSemanticError::ParamTypeMismatch {
+                        NodeId: node.Id.clone(),
+                        Param: "path".to_string(),
+                        Expected: "non-empty string".to_string(),
+                        Found: MaterialParamTypeName(v).to_string(),
+                    });
+                }
+                None => {
+                    return Err(MaterialSemanticError::MissingParam {
+                        NodeId: node.Id.clone(),
+                        Param: "path".to_string(),
+                    });
+                }
+            };
+            let _ = path;
+            if let Some(color_space) = node.Params.get("color_space") {
+                match color_space {
+                    MaterialParamValue::String(v) if v == "srgb" || v == "linear" => {}
+                    MaterialParamValue::String(_) => {
+                        return Err(MaterialSemanticError::ParamTypeMismatch {
+                            NodeId: node.Id.clone(),
+                            Param: "color_space".to_string(),
+                            Expected: "'srgb' or 'linear'".to_string(),
+                            Found: "other string".to_string(),
+                        });
+                    }
+                    other => {
+                        return Err(MaterialSemanticError::ParamTypeMismatch {
+                            NodeId: node.Id.clone(),
+                            Param: "color_space".to_string(),
+                            Expected: "string".to_string(),
+                            Found: MaterialParamTypeName(other).to_string(),
+                        });
+                    }
+                }
+            }
+            Ok(MaterialValueType::Float4)
+        }
+        "multiply" => {
+            RequireExactParams(node, &[])?;
+            RequireExactInputs(node, &["a", "b"])?;
+            let a = InputType(node, "a", known_types, node_by_id)?;
+            let b = InputType(node, "b", known_types, node_by_id)?;
+            match (a, b) {
+                (MaterialValueType::F32, MaterialValueType::F32) => Ok(MaterialValueType::F32),
+                (MaterialValueType::Float4, MaterialValueType::Float4)
+                | (MaterialValueType::Float4, MaterialValueType::F32)
+                | (MaterialValueType::F32, MaterialValueType::Float4) => {
+                    Ok(MaterialValueType::Float4)
+                }
+                _ => Err(MaterialSemanticError::OperationTypeMismatch {
+                    NodeId: node.Id.clone(),
+                    Message: format!("multiply unsupported types: {a:?} * {b:?}"),
+                }),
+            }
+        }
+        "add" => {
+            RequireExactParams(node, &[])?;
+            RequireExactInputs(node, &["a", "b"])?;
+            let a = InputType(node, "a", known_types, node_by_id)?;
+            let b = InputType(node, "b", known_types, node_by_id)?;
+            match (a, b) {
+                (MaterialValueType::F32, MaterialValueType::F32) => Ok(MaterialValueType::F32),
+                (MaterialValueType::Float4, MaterialValueType::Float4) => {
+                    Ok(MaterialValueType::Float4)
+                }
+                _ => Err(MaterialSemanticError::OperationTypeMismatch {
+                    NodeId: node.Id.clone(),
+                    Message: format!("add unsupported types: {a:?} + {b:?}"),
+                }),
+            }
+        }
+        "lerp" => {
+            RequireExactParams(node, &[])?;
+            RequireExactInputs(node, &["a", "b", "t"])?;
+            let a = InputType(node, "a", known_types, node_by_id)?;
+            let b = InputType(node, "b", known_types, node_by_id)?;
+            let t = InputType(node, "t", known_types, node_by_id)?;
+            if a != b {
+                return Err(MaterialSemanticError::OperationTypeMismatch {
+                    NodeId: node.Id.clone(),
+                    Message: format!("lerp a/b types must match: {a:?} vs {b:?}"),
+                });
+            }
+            if !(a == MaterialValueType::F32 || a == MaterialValueType::Float4) {
+                return Err(MaterialSemanticError::OperationTypeMismatch {
+                    NodeId: node.Id.clone(),
+                    Message: format!("lerp supports F32 or Float4, got {a:?}"),
+                });
+            }
+            if t != MaterialValueType::F32 {
+                return Err(MaterialSemanticError::OperationTypeMismatch {
+                    NodeId: node.Id.clone(),
+                    Message: format!("lerp t must be F32, got {t:?}"),
+                });
+            }
+            Ok(a)
+        }
+        "standard_surface" => {
+            RequireExactParams(node, &[])?;
+            RequireAllowedInputs(node, &["base_color", "roughness", "metallic"])?;
+            if !node.Inputs.contains_key("base_color") {
+                return Err(MaterialSemanticError::MissingInput {
+                    NodeId: node.Id.clone(),
+                    Input: "base_color".to_string(),
+                });
+            }
+            if InputType(node, "base_color", known_types, node_by_id)? != MaterialValueType::Float4
+            {
+                return Err(MaterialSemanticError::OperationTypeMismatch {
+                    NodeId: node.Id.clone(),
+                    Message: "standard_surface.base_color must be Float4".to_string(),
+                });
+            }
+            if node.Inputs.contains_key("roughness")
+                && InputType(node, "roughness", known_types, node_by_id)? != MaterialValueType::F32
+            {
+                return Err(MaterialSemanticError::OperationTypeMismatch {
+                    NodeId: node.Id.clone(),
+                    Message: "standard_surface.roughness must be F32".to_string(),
+                });
+            }
+            if node.Inputs.contains_key("metallic")
+                && InputType(node, "metallic", known_types, node_by_id)? != MaterialValueType::F32
+            {
+                return Err(MaterialSemanticError::OperationTypeMismatch {
+                    NodeId: node.Id.clone(),
+                    Message: "standard_surface.metallic must be F32".to_string(),
+                });
+            }
+            Ok(MaterialValueType::Surface)
+        }
+        "output" => {
+            RequireExactParams(node, &[])?;
+            RequireExactInputs(node, &["color"])?;
+            if InputType(node, "color", known_types, node_by_id)? != MaterialValueType::Float4 {
+                return Err(MaterialSemanticError::OperationTypeMismatch {
+                    NodeId: node.Id.clone(),
+                    Message: "output.color must be Float4".to_string(),
+                });
+            }
+            Ok(MaterialValueType::Surface)
+        }
+        _ => Err(MaterialSemanticError::UnsupportedNodeKind {
+            NodeId: node.Id.clone(),
+            Kind: node.Kind.clone(),
+        }),
+    }
+}
+
+fn InputType(
+    node: &MaterialNode,
+    input: &str,
+    known_types: &BTreeMap<String, MaterialValueType>,
+    _: &BTreeMap<&str, &MaterialNode>,
+) -> Result<MaterialValueType, MaterialSemanticError> {
+    let source_id = node
+        .Inputs
+        .get(input)
+        .ok_or_else(|| MaterialSemanticError::MissingInput {
+            NodeId: node.Id.clone(),
+            Input: input.to_string(),
+        })?;
+    known_types.get(source_id).copied().ok_or_else(|| {
+        MaterialSemanticError::OperationTypeMismatch {
+            NodeId: node.Id.clone(),
+            Message: format!("input '{input}' dependency '{source_id}' type unavailable"),
+        }
+    })
+}
+fn RequireExactInputs(node: &MaterialNode, expected: &[&str]) -> Result<(), MaterialSemanticError> {
+    RequireAllowedInputs(node, expected)?;
+    for name in expected {
+        if !node.Inputs.contains_key(*name) {
+            return Err(MaterialSemanticError::MissingInput {
+                NodeId: node.Id.clone(),
+                Input: (*name).to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+fn RequireAllowedInputs(
+    node: &MaterialNode,
+    allowed: &[&str],
+) -> Result<(), MaterialSemanticError> {
+    for name in node.Inputs.keys() {
+        if !allowed.contains(&name.as_str()) {
+            return Err(MaterialSemanticError::UnknownInput {
+                NodeId: node.Id.clone(),
+                Input: name.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+fn RequireExactParams(node: &MaterialNode, expected: &[&str]) -> Result<(), MaterialSemanticError> {
+    RequireAllowedParams(node, expected)?;
+    for name in expected {
+        if !node.Params.contains_key(*name) {
+            return Err(MaterialSemanticError::MissingParam {
+                NodeId: node.Id.clone(),
+                Param: (*name).to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+fn RequireAllowedParams(
+    node: &MaterialNode,
+    allowed: &[&str],
+) -> Result<(), MaterialSemanticError> {
+    for name in node.Params.keys() {
+        if !allowed.contains(&name.as_str()) {
+            return Err(MaterialSemanticError::UnknownParam {
+                NodeId: node.Id.clone(),
+                Param: name.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+fn MaterialParamTypeName(value: &MaterialParamValue) -> &'static str {
+    match value {
+        MaterialParamValue::String(_) => "string",
+        MaterialParamValue::Integer(_) => "integer",
+        MaterialParamValue::Float(_) => "float",
+        MaterialParamValue::Boolean(_) => "boolean",
+        MaterialParamValue::Array(_) => "array",
+    }
+}
+fn IsNumericParam(value: &MaterialParamValue) -> bool {
+    matches!(
+        value,
+        MaterialParamValue::Integer(_) | MaterialParamValue::Float(_)
+    )
+}
+fn AsFloat4Param(value: &MaterialParamValue) -> Option<[f32; 4]> {
+    let MaterialParamValue::Array(values) = value else {
+        return None;
+    };
+    if values.len() != 4 {
+        return None;
+    }
+    let mut out = [0.0; 4];
+    for (idx, v) in values.iter().enumerate() {
+        out[idx] = match v {
+            MaterialParamValue::Integer(i) => *i as f32,
+            MaterialParamValue::Float(f) => *f as f32,
+            _ => return None,
+        };
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,6 +1048,62 @@ y='a'",
         assert!(matches!(
             ValidateMaterialTomlAsset(&cycle),
             Err(MaterialTomlValidationError::GraphCycleDetected)
+        ));
+    }
+
+    #[test]
+    fn SemanticValidationHappyPath() {
+        let flat = ParseMaterialToml("flat.toml", FlatMaterialSource()).expect("flat parse");
+        let semantics = ValidateMaterialTomlSemantics(&flat).expect("flat semantic validation");
+        assert_eq!(semantics.OutputNodeId, "surface");
+        assert_eq!(
+            semantics.NodeTypes.get("color"),
+            Some(&MaterialValueType::Float4)
+        );
+        assert_eq!(
+            semantics.NodeTypes.get("surface"),
+            Some(&MaterialValueType::Surface)
+        );
+
+        let tint = ParseMaterialToml("tint.toml", TextureTintSource()).expect("tint parse");
+        let tint_semantics =
+            ValidateMaterialTomlSemantics(&tint).expect("tint semantic validation");
+        assert_eq!(
+            tint_semantics.NodeTypes.get("base_color"),
+            Some(&MaterialValueType::Float4)
+        );
+        assert_eq!(
+            tint_semantics.TopologicalNodeIds.last().map(String::as_str),
+            Some("surface"),
+            "surface should be last reachable node in topological order"
+        );
+    }
+
+    #[test]
+    fn SemanticValidationRejectsInvalidKindsParamsAndTypes() {
+        let unknown_reachable = ParseMaterialToml(
+            "unknown.toml",
+            "[asset]\ntype='material'\nversion=1\n[material]\nname='n'\noutput='surface'\n[[node]]\nid='x'\nkind='mystery'\n[[node]]\nid='surface'\nkind='standard_surface'\n[node.inputs]\nbase_color='x'",
+        ).expect("unknown sample parse");
+        assert!(matches!(
+            ValidateMaterialTomlSemantics(&unknown_reachable),
+            Err(MaterialSemanticError::UnsupportedNodeKind { .. })
+        ));
+
+        let unknown_unreachable = ParseMaterialToml(
+            "unknown_unreach.toml",
+            "[asset]\ntype='material'\nversion=1\n[material]\nname='n'\noutput='surface'\n[[node]]\nid='color'\nkind='constant_float4'\n[node.params]\nvalue=[1,1,1,1]\n[[node]]\nid='surface'\nkind='standard_surface'\n[node.inputs]\nbase_color='color'\n[[node]]\nid='x'\nkind='mystery'",
+        ).expect("unknown-unreachable sample parse");
+        ValidateMaterialTomlSemantics(&unknown_unreachable)
+            .expect("unreachable unknown node should be ignored");
+
+        let bad_constant = ParseMaterialToml(
+            "bad_constant.toml",
+            "[asset]\ntype='material'\nversion=1\n[material]\nname='n'\noutput='surface'\n[[node]]\nid='roughness'\nkind='constant_f32'\n[[node]]\nid='color'\nkind='constant_float4'\n[node.params]\nvalue=[1,1,1,1]\n[[node]]\nid='surface'\nkind='standard_surface'\n[node.inputs]\nbase_color='color'\nroughness='roughness'",
+        ).expect("bad constant parse");
+        assert!(matches!(
+            ValidateMaterialTomlSemantics(&bad_constant),
+            Err(MaterialSemanticError::MissingParam { .. })
         ));
     }
 }
