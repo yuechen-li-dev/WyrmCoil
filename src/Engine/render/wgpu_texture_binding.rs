@@ -5,6 +5,8 @@ use crate::Engine::render::texture_binding::{
     TextureSamplerBindingLayoutPlan, TextureSamplerBindingLayoutPlanError,
     ValidateTextureSamplerBindingLayoutPlan,
 };
+use crate::Engine::render::wgpu_sampler::WgpuSamplerResource;
+use crate::Engine::render::wgpu_texture::WgpuTextureResource;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WgpuBindGroupLayoutEntryDesc {
@@ -22,6 +24,44 @@ pub struct WgpuTextureSamplerBindingLayoutDesc {
 pub struct WgpuTextureSamplerBindGroupLayoutResource {
     pub Layout: wgpu::BindGroupLayout,
     pub Label: String,
+    pub TextureBinding: u32,
+    pub SamplerBinding: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WgpuTextureResourceMetadata {
+    pub Label: String,
+    pub Width: u32,
+    pub Height: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WgpuSamplerResourceMetadata {
+    pub Label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WgpuTextureSamplerBindGroupLayoutMetadata {
+    pub Label: String,
+    pub TextureBinding: u32,
+    pub SamplerBinding: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WgpuTextureSamplerBindGroupDesc {
+    pub Label: String,
+    pub TextureBinding: u32,
+    pub SamplerBinding: u32,
+    pub TextureLabel: String,
+    pub SamplerLabel: String,
+    pub LayoutLabel: String,
+}
+
+pub struct WgpuTextureSamplerBindGroupResource {
+    pub BindGroup: wgpu::BindGroup,
+    pub Label: String,
+    pub TextureBinding: u32,
+    pub SamplerBinding: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +69,10 @@ pub enum WgpuTextureBindingResourceError {
     InvalidPlan(TextureSamplerBindingLayoutPlanError),
     UnsupportedTextureDimension,
     UnsupportedSampleKind,
+    EmptyLabel,
+    LayoutPlanMismatch,
+    TextureResourceMismatch,
+    SamplerResourceMismatch,
 }
 
 pub fn BuildWgpuTextureSamplerBindingLayoutDesc(
@@ -82,6 +126,105 @@ pub fn CreateWgpuTextureSamplerBindGroupLayout(
     Ok(WgpuTextureSamplerBindGroupLayoutResource {
         Layout: layout,
         Label: desc.Label,
+        TextureBinding: plan.TextureBinding,
+        SamplerBinding: plan.SamplerBinding,
+    })
+}
+
+pub fn BuildWgpuTextureSamplerBindGroupDescFromMetadata(
+    plan: &TextureSamplerBindingLayoutPlan,
+    texture: &WgpuTextureResourceMetadata,
+    sampler: &WgpuSamplerResourceMetadata,
+    layout: &WgpuTextureSamplerBindGroupLayoutMetadata,
+    label: &str,
+) -> Result<WgpuTextureSamplerBindGroupDesc, WgpuTextureBindingResourceError> {
+    ValidateTextureSamplerBindingLayoutPlan(plan)
+        .map_err(WgpuTextureBindingResourceError::InvalidPlan)?;
+
+    if label.trim().is_empty() {
+        return Err(WgpuTextureBindingResourceError::EmptyLabel);
+    }
+    if texture.Label.trim().is_empty() || texture.Width == 0 || texture.Height == 0 {
+        return Err(WgpuTextureBindingResourceError::TextureResourceMismatch);
+    }
+    if sampler.Label.trim().is_empty() {
+        return Err(WgpuTextureBindingResourceError::SamplerResourceMismatch);
+    }
+    if layout.Label.trim().is_empty() {
+        return Err(WgpuTextureBindingResourceError::LayoutPlanMismatch);
+    }
+
+    if layout.TextureBinding != plan.TextureBinding || layout.SamplerBinding != plan.SamplerBinding
+    {
+        return Err(WgpuTextureBindingResourceError::LayoutPlanMismatch);
+    }
+
+    Ok(WgpuTextureSamplerBindGroupDesc {
+        Label: label.to_string(),
+        TextureBinding: plan.TextureBinding,
+        SamplerBinding: plan.SamplerBinding,
+        TextureLabel: texture.Label.clone(),
+        SamplerLabel: sampler.Label.clone(),
+        LayoutLabel: layout.Label.clone(),
+    })
+}
+
+pub fn BuildWgpuTextureSamplerBindGroupDesc(
+    plan: &TextureSamplerBindingLayoutPlan,
+    texture: &WgpuTextureResource,
+    sampler: &WgpuSamplerResource,
+    layout: &WgpuTextureSamplerBindGroupLayoutResource,
+    label: &str,
+) -> Result<WgpuTextureSamplerBindGroupDesc, WgpuTextureBindingResourceError> {
+    BuildWgpuTextureSamplerBindGroupDescFromMetadata(
+        plan,
+        &WgpuTextureResourceMetadata {
+            Label: texture.Label.clone(),
+            Width: texture.Width,
+            Height: texture.Height,
+        },
+        &WgpuSamplerResourceMetadata {
+            Label: sampler.Label.clone(),
+        },
+        &WgpuTextureSamplerBindGroupLayoutMetadata {
+            Label: layout.Label.clone(),
+            TextureBinding: layout.TextureBinding,
+            SamplerBinding: layout.SamplerBinding,
+        },
+        label,
+    )
+}
+
+pub fn CreateWgpuTextureSamplerBindGroup(
+    device: &wgpu::Device,
+    plan: &TextureSamplerBindingLayoutPlan,
+    texture: &WgpuTextureResource,
+    sampler: &WgpuSamplerResource,
+    layout: &WgpuTextureSamplerBindGroupLayoutResource,
+    label: &str,
+) -> Result<WgpuTextureSamplerBindGroupResource, WgpuTextureBindingResourceError> {
+    let desc = BuildWgpuTextureSamplerBindGroupDesc(plan, texture, sampler, layout, label)?;
+
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(&desc.Label),
+        layout: &layout.Layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: desc.TextureBinding,
+                resource: wgpu::BindingResource::TextureView(&texture.View),
+            },
+            wgpu::BindGroupEntry {
+                binding: desc.SamplerBinding,
+                resource: wgpu::BindingResource::Sampler(&sampler.Sampler),
+            },
+        ],
+    });
+
+    Ok(WgpuTextureSamplerBindGroupResource {
+        BindGroup: bind_group,
+        Label: desc.Label,
+        TextureBinding: desc.TextureBinding,
+        SamplerBinding: desc.SamplerBinding,
     })
 }
 
@@ -267,6 +410,156 @@ mod tests {
         assert_eq!(a, b, "repeated descriptor builds should be deterministic");
     }
 
+    #[test]
+    fn BuildWgpuTextureSamplerBindGroupDescFromMetadataPreservesFields() {
+        let plan = TextureSamplerBindingLayoutPlan::SampledColor2D(
+            "TexSamplerLayout",
+            3,
+            4,
+            ShaderStageVisibility::Pixel,
+        )
+        .expect("layout plan should construct");
+
+        let desc = BuildWgpuTextureSamplerBindGroupDescFromMetadata(
+            &plan,
+            &WgpuTextureResourceMetadata {
+                Label: "ColorTex".to_string(),
+                Width: 16,
+                Height: 8,
+            },
+            &WgpuSamplerResourceMetadata {
+                Label: "LinearSampler".to_string(),
+            },
+            &WgpuTextureSamplerBindGroupLayoutMetadata {
+                Label: "TexSamplerLayout".to_string(),
+                TextureBinding: 3,
+                SamplerBinding: 4,
+            },
+            "ColorBindGroup",
+        )
+        .expect("metadata descriptor should construct");
+
+        assert_eq!(
+            desc.Label, "ColorBindGroup",
+            "bind-group label should be preserved"
+        );
+        assert_eq!(
+            desc.TextureBinding, 3,
+            "texture binding should match the plan"
+        );
+        assert_eq!(
+            desc.SamplerBinding, 4,
+            "sampler binding should match the plan"
+        );
+        assert_eq!(
+            desc.TextureLabel, "ColorTex",
+            "texture label should be preserved"
+        );
+        assert_eq!(
+            desc.SamplerLabel, "LinearSampler",
+            "sampler label should be preserved"
+        );
+        assert_eq!(
+            desc.LayoutLabel, "TexSamplerLayout",
+            "layout label should be preserved"
+        );
+    }
+
+    #[test]
+    fn BuildWgpuTextureSamplerBindGroupDescFromMetadataRejectsEmptyBindGroupLabel() {
+        let plan = TextureSamplerBindingLayoutPlan::DefaultSampledColor2D("Layout")
+            .expect("default plan should construct");
+
+        let result = BuildWgpuTextureSamplerBindGroupDescFromMetadata(
+            &plan,
+            &WgpuTextureResourceMetadata {
+                Label: "Tex".to_string(),
+                Width: 2,
+                Height: 2,
+            },
+            &WgpuSamplerResourceMetadata {
+                Label: "Samp".to_string(),
+            },
+            &WgpuTextureSamplerBindGroupLayoutMetadata {
+                Label: "Layout".to_string(),
+                TextureBinding: 0,
+                SamplerBinding: 1,
+            },
+            " ",
+        );
+
+        assert_eq!(
+            result.unwrap_err(),
+            WgpuTextureBindingResourceError::EmptyLabel,
+            "empty bind-group labels should be rejected"
+        );
+    }
+
+    #[test]
+    fn BuildWgpuTextureSamplerBindGroupDescFromMetadataRejectsLayoutMismatch() {
+        let plan = TextureSamplerBindingLayoutPlan::DefaultSampledColor2D("Layout")
+            .expect("default plan should construct");
+
+        let result = BuildWgpuTextureSamplerBindGroupDescFromMetadata(
+            &plan,
+            &WgpuTextureResourceMetadata {
+                Label: "Tex".to_string(),
+                Width: 2,
+                Height: 2,
+            },
+            &WgpuSamplerResourceMetadata {
+                Label: "Samp".to_string(),
+            },
+            &WgpuTextureSamplerBindGroupLayoutMetadata {
+                Label: "Layout".to_string(),
+                TextureBinding: 9,
+                SamplerBinding: 1,
+            },
+            "BG",
+        );
+
+        assert_eq!(
+            result.unwrap_err(),
+            WgpuTextureBindingResourceError::LayoutPlanMismatch,
+            "layout metadata binding mismatch should be rejected"
+        );
+    }
+
+    #[test]
+    fn BuildWgpuTextureSamplerBindGroupDescFromMetadataIsDeterministic() {
+        let plan = TextureSamplerBindingLayoutPlan::SampledColor2D(
+            "StableLayout",
+            1,
+            7,
+            ShaderStageVisibility::VertexPixel,
+        )
+        .expect("plan should construct");
+
+        let texture = WgpuTextureResourceMetadata {
+            Label: "Tex".to_string(),
+            Width: 64,
+            Height: 64,
+        };
+        let sampler = WgpuSamplerResourceMetadata {
+            Label: "Samp".to_string(),
+        };
+        let layout = WgpuTextureSamplerBindGroupLayoutMetadata {
+            Label: "StableLayout".to_string(),
+            TextureBinding: 1,
+            SamplerBinding: 7,
+        };
+
+        let a = BuildWgpuTextureSamplerBindGroupDescFromMetadata(
+            &plan, &texture, &sampler, &layout, "BG",
+        )
+        .expect("first descriptor build should succeed");
+        let b = BuildWgpuTextureSamplerBindGroupDescFromMetadata(
+            &plan, &texture, &sampler, &layout, "BG",
+        )
+        .expect("second descriptor build should succeed");
+
+        assert_eq!(a, b, "descriptor construction should be deterministic");
+    }
     #[test]
     fn BuildWgpuTextureSamplerBindingLayoutDescRejectsUnsupportedSampleKindViaPlanValidation() {
         let invalid = TextureSamplerBindingLayoutPlan {

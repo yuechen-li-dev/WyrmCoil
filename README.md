@@ -245,3 +245,21 @@ M88 adds a backend-neutral texture+sampler binding layout planning boundary afte
   - sampler entry: filtering sampler.
 - No shader reflection is used; bindings are explicit author-chosen metadata.
 - No actual bind-group creation/material ownership/textured draw integration is added in M88.
+
+
+## Asset texture+sampler bind group seam status (M89)
+
+M89 adds an optional backend-specific `wgpu` bind-group resource seam for one sampled 2D texture + one filtering sampler:
+
+- `TextureUploadPlan` remains backend-neutral upload metadata.
+- `SamplerPlan` remains backend-neutral sampling intent metadata.
+- `TextureSamplerBindingLayoutPlan` remains explicit backend-neutral binding-slot metadata.
+- `BuildWgpuTextureSamplerBindGroupDesc...` provides deterministic GPU-free bind-group descriptor metadata validation.
+- `CreateWgpuTextureSamplerBindGroup(...)` optionally creates a caller-owned `wgpu::BindGroup`.
+- No material system is added in M89.
+- No textured draw integration is added in M89.
+- No shader reflection is added in M89.
+
+Current staged texture path:
+
+`Decoded image -> TextureUploadPlan -> WgpuTextureResource + SamplerPlan -> WgpuSamplerResource + TextureSamplerBindingLayoutPlan -> WgpuTextureSamplerBindGroupLayoutResource -> WgpuTextureSamplerBindGroupResource`
