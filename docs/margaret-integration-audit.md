@@ -326,3 +326,14 @@ Scope deliberately remains bounded:
 - No renderer feature coupling.
 
 M73 also demonstrates that board scalar lanes are still enough for completion routing via `query_id`, while rich query payloads can live in request objects and rich results remain in `RayQueryStore`.
+
+
+## M74 status update
+
+- Added `RayQueryRequestStore` to hold rich query requests keyed by `RayQueryId`.
+- Added `RayQueryRequest` variants for camera-ray and triangle-ray query payloads.
+- Added request-by-id execution helper at the Margaret bridge boundary.
+- Dunewyrm act and mailbox payloads remain query-id only (`DwMessage::I32(kind, query_id)`).
+- Rich request payloads live in request store; rich outcomes continue to live in `RayQueryStore`.
+- This pass removes board-scalar lane pressure from M72/M73 query payload growth.
+- Non-goals unchanged: no picking API, no RenderSnapshot bridge, no GPU tracing.
