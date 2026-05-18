@@ -414,3 +414,29 @@ Non-goals unchanged:
 - no full picking/world-entity integration yet.
 
 M79 can now consume `WorldGeometryRegistry` as a world-picking source instead of relying on the temporary RenderSnapshot visible-primitive bridge.
+
+## M79 status update
+
+M79 adds a world-owned picking bridge from `WorldGeometryRegistry` to `RayTriangleScene` with explicit source metadata mapping.
+
+New path:
+
+- `WorldGeometryRegistry` (`Engine::world`)
+- `BuildRayTriangleSceneFromWorldGeometryRegistry(...)` (`Engine::ray`)
+- `PickWorldGeometryRegistry(...)` (`Engine::ray`)
+- `WorldPickResult::{Hit, Miss}` with world source metadata (`EntityId`, `TriangleId`)
+
+Boundary reminder:
+
+- RenderSnapshot bridge (M76/M77) remains for visible/bootstrap picking.
+- WorldGeometryRegistry bridge (M79) is the world-owned pick source seed for subsystem-friendly geometry.
+- No scene graph ownership pass.
+- No material bridge.
+- No physics/collision system.
+- No GPU tracing feature work.
+
+WorldBlackboard relation:
+
+- `WorldBlackboard.Geometry` is the intended world-owned geometry source for this bridge.
+- Request-store ownership of full world geometry is intentionally deferred.
+- Future milestones can add camera/input world resources and request/actuator wiring around this helper.

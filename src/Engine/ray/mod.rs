@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::Engine::primitives::RenderSnapshot;
 use crate::Engine::render::extract::BuildVisiblePrimitiveDemoBatch;
+use crate::Engine::world::WorldGeometryRegistry;
 
 pub mod margaret;
 
@@ -73,6 +74,44 @@ pub struct RayTriangleSource {
 pub struct RenderSnapshotRayScene {
     pub Scene: RayTriangleScene,
     pub TriangleSources: Vec<RayTriangleSource>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldRayTriangleSource {
+    pub TriangleId: i32,
+    pub EntityId: crate::Engine::primitives::EntityId,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorldGeometryRayScene {
+    pub Scene: RayTriangleScene,
+    pub Sources: Vec<WorldRayTriangleSource>,
+}
+
+pub fn BuildRayTriangleSceneFromWorldGeometryRegistry(
+    registry: &WorldGeometryRegistry,
+) -> WorldGeometryRayScene {
+    let snapshot = registry.Snapshot();
+    let mut triangles = Vec::with_capacity(snapshot.len());
+    let mut sources = Vec::with_capacity(snapshot.len());
+    for entry in snapshot {
+        triangles.push(RayTriangle {
+            Id: entry.TriangleId,
+            A: entry.A,
+            B: entry.B,
+            C: entry.C,
+        });
+        sources.push(WorldRayTriangleSource {
+            TriangleId: entry.TriangleId,
+            EntityId: entry.EntityId,
+        });
+    }
+    WorldGeometryRayScene {
+        Scene: RayTriangleScene {
+            Triangles: triangles,
+        },
+        Sources: sources,
+    }
 }
 
 pub fn BuildVisiblePrimitiveRaySceneFromRenderSnapshot(
@@ -248,6 +287,90 @@ pub enum VisiblePickError {
     PickExecutionError(margaret::RayQueryExecutionError),
     MissingTriangleSource { TriangleId: i32 },
     UnexpectedCameraRayOutcome { QueryId: RayQueryId },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WorldPickResult {
+    Hit(WorldPickHit),
+    Miss(WorldPickMiss),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldPickHit {
+    pub QueryId: RayQueryId,
+    pub EntityId: crate::Engine::primitives::EntityId,
+    pub TriangleId: i32,
+    pub Distance: f32,
+    pub Position: RayVec3,
+    pub Normal: RayVec3,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldPickMiss {
+    pub QueryId: RayQueryId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WorldPickError {
+    RayQuery(margaret::RayQueryExecutionError),
+    MissingTriangleSource { TriangleId: i32 },
+    UnexpectedCameraRayOutcome { QueryId: RayQueryId },
+}
+
+pub fn ResolveWorldPickResult(
+    outcome: RayQueryOutcome,
+    triangle_sources: &[WorldRayTriangleSource],
+) -> Result<WorldPickResult, WorldPickError> {
+    match outcome {
+        RayQueryOutcome::Hit(hit) => {
+            let source = triangle_sources
+                .iter()
+                .find(|source| source.TriangleId == hit.TriangleId)
+                .ok_or(WorldPickError::MissingTriangleSource {
+                    TriangleId: hit.TriangleId,
+                })?;
+            Ok(WorldPickResult::Hit(WorldPickHit {
+                QueryId: hit.QueryId,
+                EntityId: source.EntityId,
+                TriangleId: hit.TriangleId,
+                Distance: hit.Distance,
+                Position: hit.Position,
+                Normal: hit.Normal,
+            }))
+        }
+        RayQueryOutcome::Miss(miss) => Ok(WorldPickResult::Miss(WorldPickMiss {
+            QueryId: miss.QueryId,
+        })),
+        RayQueryOutcome::CameraRay(camera_result) => {
+            Err(WorldPickError::UnexpectedCameraRayOutcome {
+                QueryId: camera_result.QueryId,
+            })
+        }
+    }
+}
+
+pub fn PickWorldGeometryRegistry(
+    registry: &WorldGeometryRegistry,
+    camera_adapter: &margaret::MargaretCameraRayAdapter,
+    screen_x: f32,
+    screen_y: f32,
+    query_id: RayQueryId,
+) -> Result<WorldPickResult, WorldPickError> {
+    let scene = BuildRayTriangleSceneFromWorldGeometryRegistry(registry);
+    let mut store = RayQueryStore::New();
+    let outcome = margaret::ExecutePickTriangleQuery(
+        PickRayQueryRequest {
+            QueryId: query_id,
+            ScreenX: screen_x,
+            ScreenY: screen_y,
+            Scene: scene.Scene,
+        },
+        camera_adapter,
+        &mut store,
+    )
+    .map_err(WorldPickError::RayQuery)?;
+
+    ResolveWorldPickResult(outcome, &scene.Sources)
 }
 
 pub fn ResolveVisiblePickResult(
