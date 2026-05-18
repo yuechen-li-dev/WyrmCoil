@@ -258,3 +258,15 @@ Bad fit for core architecture:
 - reflection/plugin system as core architecture
 
 This boundary keeps control deterministic and testable while still allowing strong domain crates behind explicit actuator seams.
+
+
+## Asset byte-load actuator seed (M83)
+
+M83 adds the second worked actuator-subsystem example after Margaret world picking.
+
+- `WorldBlackboard.Assets.Requests` stores `AssetRequest::LoadBytes` payloads.
+- `ExecuteAssetRequestById(...)` consumes request-id intent, runs utility-planned execution, and stores results in `WorldBlackboard.Assets.Results`.
+- Completion mailbox payload remains id-only: `DwMessage::I32(AssetRequestCompleted, request_id)`.
+- Missing request is an execution error with no completion staged.
+- Existing request with invalid path, missing file, or IO failure stores `AssetResult::LoadFailed(...)` and stages completion.
+- M83 supports immediate synchronous byte loading only; no decode, no upload, no hot reload, no async/deferred execution.

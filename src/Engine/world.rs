@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use margaret_core::camera::Camera;
 use margaret_core::math::{Point3, Vec3};
 
+use crate::Engine::asset::{AssetRequestStore, AssetResultStore};
 use crate::Engine::primitives::EntityId;
 use crate::Engine::ray::margaret::MargaretCameraRayAdapter;
 use crate::Engine::ray::{RayQueryRequestStore, RayQueryStore, RayVec3};
@@ -154,12 +155,30 @@ impl WorldInputResource {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
+pub struct WorldAssetResources {
+    pub Requests: AssetRequestStore,
+    pub Results: AssetResultStore,
+}
+
+impl WorldAssetResources {
+    pub fn New() -> Self {
+        Self::default()
+    }
+
+    pub fn Clear(&mut self) {
+        self.Requests = AssetRequestStore::New();
+        self.Results = AssetResultStore::New();
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct WorldBlackboard {
     pub Geometry: WorldGeometryRegistry,
     pub Camera: Option<WorldCameraResource>,
     pub Input: WorldInputResource,
     pub RayRequests: RayQueryRequestStore,
     pub RayResults: RayQueryStore,
+    pub Assets: WorldAssetResources,
 }
 
 impl WorldBlackboard {
@@ -173,5 +192,6 @@ impl WorldBlackboard {
         self.Input = WorldInputResource::New();
         self.RayRequests = RayQueryRequestStore::New();
         self.RayResults = RayQueryStore::New();
+        self.Assets.Clear();
     }
 }
