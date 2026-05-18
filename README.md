@@ -288,3 +288,14 @@ Scope in M91:
 - preserve literal params/editor metadata for future compiler/runtime work.
 
 Out of scope in M91: MaterialX import, SDSL-V codegen, and runtime material binding integration.
+
+
+## Native material TOML codegen seed status (M93)
+
+M93 adds deterministic native material graph -> SDSL-V source generation after M92 semantic validation.
+
+- Generated output emits a `MaterialSurface` record and `GeneratedMaterial::EvaluateMaterial()` function.
+- Supported lowering remains the M92 subset (`constant_f32`, `constant_float4`, `texture2d`, `multiply`, `add`, `lerp`, `standard_surface`).
+- `texture2d` currently lowers to deterministic placeholder white sample helper stubs (no real texture binding/sampling yet).
+- Output is deterministic (stable topological order, stable identifier sanitization, no timestamps).
+- No material runtime object ownership, bind-group integration, textured draw integration, or MaterialX import implementation is added in M93.

@@ -817,6 +817,219 @@ fn AsFloat4Param(value: &MaterialParamValue) -> Option<[f32; 4]> {
     Some(out)
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaterialSdslvSource {
+    pub SourceName: String,
+    pub Source: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum MaterialSdslvCodegenError {
+    Structural(MaterialTomlValidationError),
+    Semantic(MaterialSemanticError),
+    UnsupportedNodeKind { NodeId: String, Kind: String },
+    UnsupportedType { NodeId: String, TypeName: String },
+}
+
+pub fn GenerateMaterialSdslv(
+    asset: &MaterialTomlAsset,
+) -> Result<MaterialSdslvSource, MaterialSdslvCodegenError> {
+    let semantics =
+        ValidateMaterialTomlSemantics(asset).map_err(MaterialSdslvCodegenError::Semantic)?;
+    GenerateMaterialSdslvFromSemantics(asset, &semantics)
+}
+
+pub fn GenerateMaterialSdslvFromSemantics(
+    asset: &MaterialTomlAsset,
+    semantics: &MaterialGraphSemantics,
+) -> Result<MaterialSdslvSource, MaterialSdslvCodegenError> {
+    ValidateMaterialTomlAsset(asset).map_err(MaterialSdslvCodegenError::Structural)?;
+    let mut used = BTreeSet::new();
+    let mut names = BTreeMap::new();
+    for node_id in &semantics.TopologicalNodeIds {
+        names.insert(node_id.clone(), SanitizeSdslvIdentifier(node_id, &mut used));
+    }
+    let mut lines = vec![
+        "record MaterialSurface {".to_string(),
+        "    BaseColor: float4;".to_string(),
+        "    Roughness: f32;".to_string(),
+        "    Metallic: f32;".to_string(),
+        "}".to_string(),
+        "".to_string(),
+    ];
+    lines.push("shader GeneratedMaterial {".to_string());
+    for node_id in &semantics.TopologicalNodeIds {
+        let node = asset.NodeById(node_id).expect("semantic node should exist");
+        if node.Kind == "texture2d" {
+            let name = names.get(node_id).expect("mapped");
+            lines.push(format!("    fn SampleTexture2D_{name}() -> float4 {{"));
+            lines.push("        return float4(1.0, 1.0, 1.0, 1.0);".to_string());
+            lines.push("    }".to_string());
+        }
+    }
+    lines.push("    fn EvaluateMaterial() -> MaterialSurface {".to_string());
+    let output = asset
+        .NodeById(&semantics.OutputNodeId)
+        .expect("output exists");
+    for node_id in &semantics.TopologicalNodeIds {
+        let node = asset.NodeById(node_id).expect("semantic node should exist");
+        if node.Id == output.Id || node.Kind == "standard_surface" || node.Kind == "output" {
+            continue;
+        }
+        let name = names.get(node_id).expect("mapped");
+        match node.Kind.as_str() {
+            "constant_f32" => {
+                let v = node
+                    .Params
+                    .get("value")
+                    .and_then(AsF32Param)
+                    .expect("semantic value");
+                lines.push(format!("        let {name}: f32 = {};", FormatF32(v)));
+            }
+            "constant_float4" => {
+                let v = node
+                    .Params
+                    .get("value")
+                    .and_then(AsFloat4Param)
+                    .expect("semantic value");
+                lines.push(format!(
+                    "        let {name}: float4 = float4({}, {}, {}, {});",
+                    FormatF32(v[0]),
+                    FormatF32(v[1]),
+                    FormatF32(v[2]),
+                    FormatF32(v[3])
+                ));
+            }
+            "texture2d" => lines.push(format!(
+                "        let {name}: float4 = SampleTexture2D_{name}();"
+            )),
+            "multiply" | "add" | "lerp" => {
+                let a = names.get(node.Inputs.get("a").expect("a")).expect("mapped");
+                let b = names.get(node.Inputs.get("b").expect("b")).expect("mapped");
+                let ty = match semantics
+                    .NodeTypes
+                    .get(node_id)
+                    .copied()
+                    .unwrap_or(MaterialValueType::Unknown)
+                {
+                    MaterialValueType::F32 => "f32",
+                    MaterialValueType::Float4 => "float4",
+                    other => {
+                        return Err(MaterialSdslvCodegenError::UnsupportedType {
+                            NodeId: node.Id.clone(),
+                            TypeName: format!("{other:?}"),
+                        });
+                    }
+                };
+                let expr = if node.Kind == "multiply" {
+                    format!("{a} * {b}")
+                } else if node.Kind == "add" {
+                    format!("{a} + {b}")
+                } else {
+                    let t = names.get(node.Inputs.get("t").expect("t")).expect("mapped");
+                    format!("{a} + ({b} - {a}) * {t}")
+                };
+                lines.push(format!("        let {name}: {ty} = {expr};"));
+            }
+            _ => {
+                return Err(MaterialSdslvCodegenError::UnsupportedNodeKind {
+                    NodeId: node.Id.clone(),
+                    Kind: node.Kind.clone(),
+                });
+            }
+        }
+    }
+    let (base_color, roughness, metallic) = if output.Kind == "standard_surface" {
+        (
+            names
+                .get(output.Inputs.get("base_color").expect("base_color"))
+                .expect("mapped")
+                .clone(),
+            output
+                .Inputs
+                .get("roughness")
+                .and_then(|id| names.get(id))
+                .cloned()
+                .unwrap_or_else(|| "0.5".to_string()),
+            output
+                .Inputs
+                .get("metallic")
+                .and_then(|id| names.get(id))
+                .cloned()
+                .unwrap_or_else(|| "0.0".to_string()),
+        )
+    } else {
+        (
+            names
+                .get(output.Inputs.get("color").expect("output color"))
+                .expect("mapped")
+                .clone(),
+            "0.5".to_string(),
+            "0.0".to_string(),
+        )
+    };
+    lines.push("        let surface: MaterialSurface;".to_string());
+    lines.push(format!("        surface.BaseColor = {base_color};"));
+    lines.push(format!("        surface.Roughness = {roughness};"));
+    lines.push(format!("        surface.Metallic = {metallic};"));
+    lines.push("        return surface;".to_string());
+    lines.push("    }".to_string());
+    lines.push("}".to_string());
+    Ok(MaterialSdslvSource {
+        SourceName: format!("{}.generated.sdslv", asset.Material.Name),
+        Source: lines.join("\n"),
+    })
+}
+
+fn SanitizeSdslvIdentifier(source: &str, used: &mut BTreeSet<String>) -> String {
+    let mut out: String = source
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if out.is_empty() {
+        out = "node".to_string();
+    }
+    if out.starts_with(|ch: char| ch.is_ascii_digit()) {
+        out = format!("n_{out}");
+    }
+    if ["shader", "record", "fn", "let", "return"].contains(&out.as_str()) {
+        out.push_str("_v");
+    }
+    let base = out.clone();
+    let mut i = 1;
+    while used.contains(&out) {
+        out = format!("{base}_{i}");
+        i += 1;
+    }
+    used.insert(out.clone());
+    out
+}
+
+fn AsF32Param(value: &MaterialParamValue) -> Option<f32> {
+    match value {
+        MaterialParamValue::Integer(i) => Some(*i as f32),
+        MaterialParamValue::Float(f) => Some(*f as f32),
+        _ => None,
+    }
+}
+
+fn FormatF32(value: f32) -> String {
+    let mut text = format!("{value:.6}");
+    while text.contains('.') && text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.push('0');
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1105,5 +1318,70 @@ y='a'",
             ValidateMaterialTomlSemantics(&bad_constant),
             Err(MaterialSemanticError::MissingParam { .. })
         ));
+    }
+
+    #[test]
+    fn MaterialSdslvCodegenHappyPathAndDeterminism() {
+        let flat = ParseMaterialToml("flat.toml", FlatMaterialSource()).expect("flat parse");
+        let a = GenerateMaterialSdslv(&flat).expect("flat codegen");
+        let b = GenerateMaterialSdslv(&flat).expect("flat codegen repeat");
+        assert_eq!(a, b, "material codegen must be deterministic");
+        assert!(a.Source.contains("record MaterialSurface"));
+        assert!(
+            a.Source
+                .contains("fn EvaluateMaterial() -> MaterialSurface")
+        );
+        assert!(a.Source.contains("float4(1.0, 0.0, 1.0, 1.0)"));
+        assert!(a.Source.contains("surface.BaseColor = color;"));
+        assert!(a.Source.contains("surface.Roughness = 0.5;"));
+        assert!(a.Source.contains("surface.Metallic = 0.0;"));
+    }
+
+    #[test]
+    fn MaterialSdslvCodegenTextureAndSanitizationAndDefaults() {
+        let src = "[asset]
+type='material'
+version=1
+[material]
+name='San'
+output='surface'
+[[node]]
+id='base-color'
+kind='texture2d'
+[node.params]
+path='t.ppm'
+[[node]]
+id='base_color'
+kind='constant_float4'
+[node.params]
+value=[0.5,0.5,0.5,1.0]
+[[node]]
+id='mixed'
+kind='multiply'
+[node.inputs]
+a='base-color'
+b='base_color'
+[[node]]
+id='surface'
+kind='standard_surface'
+[node.inputs]
+base_color='mixed'";
+        let asset = ParseMaterialToml("san.toml", src).expect("san parse");
+        let out = GenerateMaterialSdslv(&asset).expect("san codegen");
+        assert!(out.Source.contains("SampleTexture2D_base_color"));
+        assert!(
+            out.Source
+                .contains("let mixed: float4 = base_color * base_color_1;")
+        );
+        assert!(out.Source.contains("surface.Roughness = 0.5;"));
+        assert!(out.Source.contains("surface.Metallic = 0.0;"));
+    }
+
+    #[test]
+    fn MaterialSdslvGeneratedSourceValidatesInSdslvParserValidator() {
+        let tint = ParseMaterialToml("tint.toml", TextureTintSource()).expect("parse");
+        let generated = GenerateMaterialSdslv(&tint).expect("codegen");
+        crate::Engine::shader::sdslv::ValidateSource(&generated.Source)
+            .expect("generated sdslv should parse + validate");
     }
 }
