@@ -54,12 +54,21 @@ pub struct TriangleRayQueryRequest {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct PickRayQueryRequest {
+    pub QueryId: RayQueryId,
+    pub ScreenX: f32,
+    pub ScreenY: f32,
+    pub Scene: RayTriangleScene,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum RayQueryRequest {
     CameraRay(CameraRayRequest),
     TriangleRay {
         Request: TriangleRayQueryRequest,
         Scene: RayTriangleScene,
     },
+    PickTriangle(PickRayQueryRequest),
 }
 
 impl RayQueryRequest {
@@ -67,6 +76,7 @@ impl RayQueryRequest {
         match self {
             RayQueryRequest::CameraRay(request) => request.QueryId,
             RayQueryRequest::TriangleRay { Request, .. } => Request.QueryId,
+            RayQueryRequest::PickTriangle(request) => request.QueryId,
         }
     }
 }
