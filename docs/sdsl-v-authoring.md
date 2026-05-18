@@ -294,6 +294,16 @@ Current limitations:
 
 ## 8) `.sdslvtest`
 
+**.sdslvtest runner status: WIP / bounded CPU evaluator.**
+
+The `.sdslvtest` runner is a bounded CPU-side evaluator, **not** a full SDSL-V runtime.
+It is useful for fast helper/unit-style checks over the currently implemented evaluator subset.
+
+Why this differs from C# xUnit:
+- C# xUnit executes normal C# because Roslyn/.NET compile and run the full language/runtime.
+- SDSL-V currently has parser/validator/HLSL-emitter coverage plus a small CPU evaluator used by `.sdslvtest`.
+- Therefore, only evaluator-implemented constructs execute in `.sdslvtest`.
+
 `.sdslvtest` is the SDSL-V test-file extension.
 
 Current syntax/validation:
@@ -341,11 +351,31 @@ Can execute today:
 - assertion calls (`Assert.True`, `Assert.Equals`, `Assert.Near`)
 
 Cannot execute today:
+- record/stream construction or field access execution
+- `with` expression execution
+- array indexing/literal execution
+- `if`, `switch`, and bounded `for` statement/expression execution in the runner
+- enum `match` execution
+- fallibility execution (`?`, `!`, `match ok/err`)
+- `when utility` execution
+- flow/board runtime execution
 - GPU execution
 - DXC/SPIR-V paths
 - automatic filesystem discovery of `.sdslvtest`
 - full shader-function execution pipeline
 - broad vector/matrix semantics beyond current bounded evaluator surface
+
+### Test strategy split (current)
+
+- `.sdslvtest`:
+  - fast CPU-side helper/unit tests for the bounded evaluator subset.
+- GPU/render tests:
+  - future/backend validation of compiled shader behavior, render flow, readback, and pixel results.
+
+### Future direction
+
+Full “normal SDSL-V + Assert” execution likely requires a real CPU backend and an IR/lowering path (for example Rust/MIR-style lowering).
+That direction overlaps with broader RustOct/full Octest work and is intentionally out of scope for the current shader-language runner.
 
 ## 10) Shader flows (current status)
 

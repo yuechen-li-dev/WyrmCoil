@@ -586,6 +586,13 @@ M7a introduced parse/validation support for dedicated test files with extension 
 M7b adds a minimal CPU-side test runner (`RunTestSource`) for executing `[Fact]` test bodies over a bounded scalar subset.
 M69 adds table-driven `[Theory]` + `[InlineData(...)]` support over the same CPU evaluator.
 
+**Runner status label:** the `.sdslvtest` runner is a **WIP / bounded CPU-side evaluator**, not a full SDSL-V runtime.
+
+Why this differs from C# xUnit:
+- C# xUnit executes normal C# because Roslyn/.NET compile and execute the full language/runtime.
+- SDSL-V currently provides parser/validator/HLSL-emitter coverage plus a small CPU evaluator for `.sdslvtest`.
+- So only the evaluator-implemented subset executes in `.sdslvtest`.
+
 Current test syntax:
 - top-level `namespace` and `use`
 - attributes before functions (`[Fact]`, `[Theory]`, `[InlineData(...)]`)
@@ -624,11 +631,27 @@ M7b result surface:
 - theory row failures are reported with row-qualified case names (for example `Add_Works[1]`) and row-prefixed failure messages
 
 M7b intentional limits:
+- no records/streams runtime execution
+- no `with` runtime execution
+- no arrays runtime execution
+- no `if`/`switch`/`for` runtime execution in the runner
+- no enum/fallible `match` runtime execution
+- no fallibility runtime execution (`?`, `!`)
+- no `when utility` runtime execution
+- no flow/board runtime execution
 - no shader function execution
 - no GPU execution
 - no DXC/SPIR-V integration
 - no file-system test discovery
 - unsupported statements/calls fail the test case with explicit runtime failure messages
+
+Test strategy split:
+- `.sdslvtest` = fast CPU-side helper/unit tests for the bounded evaluator subset.
+- GPU/render tests = future backend-level tests for compiled shader behavior, render flow, readback, and pixels.
+
+Future direction:
+- Full “normal SDSL-V + Assert” execution likely requires a real CPU backend / IR lowering path (for example Rust/MIR-style lowering).
+- That overlaps with broader RustOct/full Octest direction and is intentionally out of scope for this runner milestone.
 
 Intentional non-goals in M7a:
 - no test execution/runtime
