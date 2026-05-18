@@ -175,6 +175,10 @@ pub struct PickRayQueryRequest {
     pub ScreenY: f32,
     pub Scene: RayTriangleScene,
 }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldPickRayQueryRequest {
+    pub QueryId: RayQueryId,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RayQueryRequest {
@@ -184,6 +188,7 @@ pub enum RayQueryRequest {
         Scene: RayTriangleScene,
     },
     PickTriangle(PickRayQueryRequest),
+    WorldPick(WorldPickRayQueryRequest),
 }
 
 impl RayQueryRequest {
@@ -192,6 +197,7 @@ impl RayQueryRequest {
             RayQueryRequest::CameraRay(request) => request.QueryId,
             RayQueryRequest::TriangleRay { Request, .. } => Request.QueryId,
             RayQueryRequest::PickTriangle(request) => request.QueryId,
+            RayQueryRequest::WorldPick(request) => request.QueryId,
         }
     }
 }
@@ -257,6 +263,21 @@ pub enum RayQueryOutcome {
     CameraRay(CameraRayResult),
     Hit(RayHitResult),
     Miss(RayMissResult),
+    WorldPickFailure(WorldPickFailureResult),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldPickFailureResult {
+    pub QueryId: RayQueryId,
+    pub Error: WorldPickFailureKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WorldPickFailureKind {
+    MissingCamera,
+    MissingCursor,
+    InvalidCursor { ScreenX: f32, ScreenY: f32 },
+    PickExecutionError,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -313,6 +334,7 @@ pub struct WorldPickMiss {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WorldPickError {
     RayQuery(margaret::RayQueryExecutionError),
+    WorldPickFailure { QueryId: RayQueryId },
     MissingTriangleSource { TriangleId: i32 },
     UnexpectedCameraRayOutcome { QueryId: RayQueryId },
 }
@@ -341,6 +363,9 @@ pub fn ResolveWorldPickResult(
         RayQueryOutcome::Miss(miss) => Ok(WorldPickResult::Miss(WorldPickMiss {
             QueryId: miss.QueryId,
         })),
+        RayQueryOutcome::WorldPickFailure(failure) => Err(WorldPickError::WorldPickFailure {
+            QueryId: failure.QueryId,
+        }),
         RayQueryOutcome::CameraRay(camera_result) => {
             Err(WorldPickError::UnexpectedCameraRayOutcome {
                 QueryId: camera_result.QueryId,
@@ -409,6 +434,60 @@ pub fn PickWorldBlackboard(
     PickWorldGeometryRegistry(&blackboard.Geometry, &adapter, screen_x, screen_y, query_id)
         .map_err(WorldBlackboardPickError::Pick)
 }
+
+pub fn ExecuteWorldPickRequestById(
+    query_id: RayQueryId,
+    blackboard: &mut crate::Engine::world::WorldBlackboard,
+    completion_kind: u32,
+    mailbox: &mut crate::DwMailbox,
+) -> Result<(), margaret::RayQueryExecutionError> {
+    let request = blackboard
+        .RayRequests
+        .Take(query_id)
+        .ok_or(margaret::RayQueryExecutionError::MissingRequest { QueryId: query_id })?;
+
+    let world_pick_request = match request {
+        RayQueryRequest::WorldPick(request) => request,
+        _ => {
+            return Err(margaret::RayQueryExecutionError::WrongRequestKind {
+                QueryId: query_id,
+                Expected: "WorldPick",
+            });
+        }
+    };
+
+    match PickWorldBlackboard(blackboard, world_pick_request.QueryId) {
+        Ok(WorldPickResult::Hit(hit)) => blackboard.RayResults.StoreHitResult(RayHitResult {
+            QueryId: hit.QueryId,
+            TriangleId: hit.TriangleId,
+            Distance: hit.Distance,
+            Position: hit.Position,
+            Normal: hit.Normal,
+        }),
+        Ok(WorldPickResult::Miss(miss)) => blackboard.RayResults.StoreMissResult(RayMissResult {
+            QueryId: miss.QueryId,
+        }),
+        Err(error) => {
+            let kind = match error {
+                WorldBlackboardPickError::MissingCamera => WorldPickFailureKind::MissingCamera,
+                WorldBlackboardPickError::MissingCursor => WorldPickFailureKind::MissingCursor,
+                WorldBlackboardPickError::InvalidCursor { ScreenX, ScreenY } => {
+                    WorldPickFailureKind::InvalidCursor { ScreenX, ScreenY }
+                }
+                WorldBlackboardPickError::Pick(_) => WorldPickFailureKind::PickExecutionError,
+            };
+            blackboard
+                .RayResults
+                .StoreWorldPickFailure(WorldPickFailureResult {
+                    QueryId: world_pick_request.QueryId,
+                    Error: kind,
+                });
+        }
+    }
+
+    mailbox.Enqueue(crate::DwMessage::I32(completion_kind, query_id.0 as i32));
+    Ok(())
+}
 pub fn ResolveVisiblePickResult(
     outcome: RayQueryOutcome,
     triangle_sources: &[RayTriangleSource],
@@ -438,6 +517,11 @@ pub fn ResolveVisiblePickResult(
         RayQueryOutcome::CameraRay(camera_result) => {
             Err(VisiblePickError::UnexpectedCameraRayOutcome {
                 QueryId: camera_result.QueryId,
+            })
+        }
+        RayQueryOutcome::WorldPickFailure(failure) => {
+            Err(VisiblePickError::UnexpectedCameraRayOutcome {
+                QueryId: failure.QueryId,
             })
         }
     }
@@ -495,6 +579,10 @@ impl RayQueryStore {
     pub fn StoreMissResult(&mut self, result: RayMissResult) {
         self.Completed
             .insert(result.QueryId, RayQueryOutcome::Miss(result));
+    }
+    pub fn StoreWorldPickFailure(&mut self, result: WorldPickFailureResult) {
+        self.Completed
+            .insert(result.QueryId, RayQueryOutcome::WorldPickFailure(result));
     }
     pub fn GetOutcome(&self, query_id: RayQueryId) -> Option<RayQueryOutcome> {
         self.Completed.get(&query_id).copied()
