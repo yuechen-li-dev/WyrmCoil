@@ -197,3 +197,14 @@ M84 adds image decode as the next asset actuator stage after byte loading.
 - M84 supports deterministic **P6 PPM** decode only (`bytes -> width/height + RGBA8 CPU payload`).
 - Completion mailbox remains id-only (`DwMessage::I32` with `AssetRequestId`).
 - No GPU texture upload, texture resource, material integration, async jobs, hot reload, or asset database/importer yet.
+
+
+## Asset subsystem status (M85)
+
+M85 adds the CPU-image-to-texture upload boundary as a deterministic plain-data scaffold.
+
+- Input is `DecodedImageAsset` (`Width`, `Height`, `Rgba8`) from M84 decode results.
+- Output is `TextureUploadPlan` with validated label/source/dimensions/byte length and `SampledColor` usage intent.
+- Current format choice is `Rgba8UnormSrgb` for decoded color textures.
+- Optional helper accepts `AssetResult` and rejects non-decoded variants with structured error.
+- No GPU texture creation, sampler policy, bind groups, material integration, async jobs, or hot reload in M85.
