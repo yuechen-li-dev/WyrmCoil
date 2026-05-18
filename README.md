@@ -187,3 +187,13 @@ M83 adds an Engine asset actuator seed for raw file-byte loading only.
 - Actuator execution is policy-shaped via utility planning (`ImmediateBytesLoad` implemented, deferred unsupported).
 - Completion mailbox remains id-only (`AssetRequestId` via `DwMessage::I32`).
 - No texture decode, material integration, GPU upload, hot reload, or async jobs yet.
+
+
+## Asset subsystem status (M84)
+
+M84 adds image decode as the next asset actuator stage after byte loading.
+
+- Requests/results still live in `WorldBlackboard.Assets` stores and execute through utility planning.
+- M84 supports deterministic **P6 PPM** decode only (`bytes -> width/height + RGBA8 CPU payload`).
+- Completion mailbox remains id-only (`DwMessage::I32` with `AssetRequestId`).
+- No GPU texture upload, texture resource, material integration, async jobs, hot reload, or asset database/importer yet.

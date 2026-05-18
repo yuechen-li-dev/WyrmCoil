@@ -186,3 +186,12 @@ Margaret world picking (M81) is the canonical worked example of this pattern.
 ## Asset actuator subsystem seed (M83)
 
 M83 introduces asset byte-load as the second actuator-subsystem example. `WorldBlackboard` now includes grouped `Assets` resources with deterministic request/result stores. Asset execution is utility-planned (`ImmediateBytesLoad` vs `NoAssetExecutionFeasible`), but only immediate synchronous `std::fs::read` is implemented in M83. Mailbox completion remains request-id-only.
+
+
+## Asset image decode seed (M84)
+
+M84 extends the asset actuator subsystem with an image decode stage. Decode requests own source bytes and run through the same utility-planned immediate execution path as byte loading. The result store now includes CPU-side decoded image payloads (`Width`, `Height`, `Rgba8`) and structured decode failures.
+
+Current decode scope is intentionally narrow and deterministic: **P6 PPM (max value 255)** only. Mailbox completion remains request-id-only (`DwMessage::I32`).
+
+Non-goals remain unchanged in M84: no GPU upload, no texture resources, no material system integration, no async/deferred asset jobs, and no hot reload/import database path.
