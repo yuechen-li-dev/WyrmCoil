@@ -5,14 +5,25 @@ use margaret_core::image::ImageSize;
 use margaret_core::math::{Point3, Vec3};
 
 use super::{
-    CameraRayRequest, CameraRayResult, Ray3, RayHitResult, RayMissResult, RayQueryRequest,
-    RayQueryRequestStore, RayQueryStore, RayTriangle, RayTriangleScene, RayVec3,
+    CameraRayRequest, CameraRayResult, PickRayQueryRequest, Ray3, RayHitResult, RayMissResult,
+    RayQueryRequest, RayQueryRequestStore, RayQueryStore, RayTriangle, RayTriangleScene, RayVec3,
     TriangleRayQueryRequest,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RayQueryExecutionError {
-    MissingRequest { QueryId: super::RayQueryId },
+    MissingRequest {
+        QueryId: super::RayQueryId,
+    },
+    WrongRequestKind {
+        QueryId: super::RayQueryId,
+        Expected: &'static str,
+    },
+    InvalidPickScreenCoordinate {
+        QueryId: super::RayQueryId,
+        ScreenX: f32,
+        ScreenY: f32,
+    },
 }
 
 pub fn ExecuteRayQueryRequestById(
@@ -34,8 +45,38 @@ pub fn ExecuteRayQueryRequestById(
         RayQueryRequest::TriangleRay { Request, Scene } => {
             ExecuteTriangleRayQuery(Request, &Scene, results);
         }
+        RayQueryRequest::PickTriangle(request) => {
+            ExecutePickTriangleQuery(request, camera_ray_adapter, results)?;
+        }
     }
 
+    mailbox.Enqueue(crate::DwMessage::I32(completion_kind, query_id.0 as i32));
+    Ok(())
+}
+
+pub fn ExecutePickRayQueryRequestById(
+    query_id: super::RayQueryId,
+    requests: &mut RayQueryRequestStore,
+    results: &mut RayQueryStore,
+    camera_ray_adapter: &MargaretCameraRayAdapter,
+    mailbox: &mut crate::DwMailbox,
+    completion_kind: u32,
+) -> Result<(), RayQueryExecutionError> {
+    let request = requests
+        .Take(query_id)
+        .ok_or(RayQueryExecutionError::MissingRequest { QueryId: query_id })?;
+
+    let pick_request = match request {
+        RayQueryRequest::PickTriangle(request) => request,
+        _ => {
+            return Err(RayQueryExecutionError::WrongRequestKind {
+                QueryId: query_id,
+                Expected: "PickTriangle",
+            });
+        }
+    };
+
+    ExecutePickTriangleQuery(pick_request, camera_ray_adapter, results)?;
     mailbox.Enqueue(crate::DwMessage::I32(completion_kind, query_id.0 as i32));
     Ok(())
 }
@@ -47,11 +88,7 @@ pub struct MargaretCameraRayAdapter {
 }
 
 impl MargaretCameraRayAdapter {
-    pub fn BuildCameraRay(
-        &self,
-        request: CameraRayRequest,
-        store: &mut RayQueryStore,
-    ) -> CameraRayResult {
+    fn BuildCameraRayResult(&self, request: CameraRayRequest) -> CameraRayResult {
         assert!((0.0..=1.0).contains(&request.ScreenX));
         assert!((0.0..=1.0).contains(&request.ScreenY));
 
@@ -69,7 +106,7 @@ impl MargaretCameraRayAdapter {
             .Camera
             .RayForSubpixel(image_size, pixel_x, pixel_y, subpixel_x, subpixel_y);
 
-        let result = CameraRayResult {
+        CameraRayResult {
             QueryId: request.QueryId,
             Origin: RayVec3 {
                 X: ray.origin.x,
@@ -81,7 +118,15 @@ impl MargaretCameraRayAdapter {
                 Y: ray.direction.y,
                 Z: ray.direction.z,
             },
-        };
+        }
+    }
+
+    pub fn BuildCameraRay(
+        &self,
+        request: CameraRayRequest,
+        store: &mut RayQueryStore,
+    ) -> CameraRayResult {
+        let result = self.BuildCameraRayResult(request);
 
         store.StoreCompleted(result);
         result
@@ -109,6 +154,52 @@ pub fn ExecuteTriangleRayQuery(
             QueryId: request.QueryId,
         }),
     }
+}
+
+pub fn ExecutePickTriangleQuery(
+    request: PickRayQueryRequest,
+    camera_ray_adapter: &MargaretCameraRayAdapter,
+    store: &mut RayQueryStore,
+) -> Result<super::RayQueryOutcome, RayQueryExecutionError> {
+    ValidatePickScreenCoordinate(request.QueryId, request.ScreenX, request.ScreenY)?;
+
+    let camera_result = camera_ray_adapter.BuildCameraRayResult(CameraRayRequest {
+        QueryId: request.QueryId,
+        ScreenX: request.ScreenX,
+        ScreenY: request.ScreenY,
+    });
+
+    let triangle_request = TriangleRayQueryRequest {
+        QueryId: request.QueryId,
+        Ray: Ray3 {
+            Origin: camera_result.Origin,
+            Direction: camera_result.Direction,
+        },
+    };
+    ExecuteTriangleRayQuery(triangle_request, &request.Scene, store);
+
+    Ok(store
+        .GetOutcome(request.QueryId)
+        .expect("pick query should always store an outcome"))
+}
+
+fn ValidatePickScreenCoordinate(
+    query_id: super::RayQueryId,
+    screen_x: f32,
+    screen_y: f32,
+) -> Result<(), RayQueryExecutionError> {
+    if !screen_x.is_finite()
+        || !screen_y.is_finite()
+        || !(0.0..=1.0).contains(&screen_x)
+        || !(0.0..=1.0).contains(&screen_y)
+    {
+        return Err(RayQueryExecutionError::InvalidPickScreenCoordinate {
+            QueryId: query_id,
+            ScreenX: screen_x,
+            ScreenY: screen_y,
+        });
+    }
+    Ok(())
 }
 
 fn IntersectTriangle(

@@ -337,3 +337,25 @@ M73 also demonstrates that board scalar lanes are still enough for completion ro
 - Rich request payloads live in request store; rich outcomes continue to live in `RayQueryStore`.
 - This pass removes board-scalar lane pressure from M72/M73 query payload growth.
 - Non-goals unchanged: no picking API, no RenderSnapshot bridge, no GPU tracing.
+
+## M75 status update
+
+M75 adds a picking-ready composition API in the Engine ray Margaret bridge:
+
+- normalized viewport coordinate (`ScreenX`, `ScreenY`) + Margaret camera adapter + triangle scene
+- composed into one execution path that produces final `RayQueryOutcome::Hit` or `RayQueryOutcome::Miss`
+- request/result-store + query-id completion mailbox boundary remains intact
+
+Boundary details:
+
+- request store carries `RayQueryRequest::PickTriangle(PickRayQueryRequest)` payloads
+- result store carries final pick outcome (`Hit` or `Miss`) under the same query id
+- mailbox carries completion only: `DwMessage::I32(completion_kind, query_id)`
+- no RenderSnapshot/entity/world picking bridge yet
+- no GPU ray tracing changes
+
+Coordinate convention:
+
+- `ScreenX` and `ScreenY` are normalized viewport coordinates
+- M75 validates both coordinates are finite and inside `[0, 1]`
+- Y-axis mapping remains inherited from the M72 Margaret camera adapter path
