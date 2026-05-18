@@ -2,6 +2,7 @@
 
 pub mod backend;
 pub mod primitives;
+pub mod ray;
 pub mod render;
 pub mod shader;
 pub mod store;
@@ -9,6 +10,7 @@ pub mod wyrmcoil;
 
 pub use backend::*;
 pub use primitives::*;
+pub use ray::*;
 pub use render::*;
 pub use shader::*;
 pub use store::*;

@@ -282,3 +282,27 @@ Executed:
 - **What fails now:** `wyrmfmt` naming policy for Margaret (large violation set). Margaret is not in active root workspace graph.
 - **What should happen next:** M71b should first establish real workspace membership + style convergence, then M72/M73 bridge/query integration.
 - **Milestone result:** **Outcome A (success)** for M71a audit/plan scope.
+
+## M72 — Margaret Ray Query Actuator Boundary / Camera Ray Seed
+
+M72 adds a small `Engine::ray` boundary that keeps Margaret-owned camera math behind an actuator-shaped bridge.
+
+Boundary shape now documented and tested:
+
+- **brain** (`Dunewyrm` frame): emits a `BuildCameraRay` act and passes `ScreenX`, `ScreenY`, and `RayQueryId` through board keys.
+- **hands** (`Engine::ray::margaret`): `MargaretCameraRayAdapter::BuildCameraRay(...)` resolves normalized viewport coordinates `[0,1]` to Margaret pixel/subpixel coordinates and writes the result into `RayQueryStore`.
+- **eyes** (`DwMailbox`): actuator enqueues `DwMessage::I32(MailKinds::RayQueryCompleted, query_id)`; message is staged this tick and visible on next tick.
+- **world/store** (`RayQueryStore`): rich ray result payload (`origin`, `direction`) is persisted by query id and retrieved out-of-band from mailbox payload.
+
+M72 camera convention notes:
+
+- Uses Margaret `Camera` with `position + forward + up + vertical_fov_degrees`.
+- Uses normalized viewport input (`ScreenX`, `ScreenY`) in `[0,1]` at engine boundary.
+- Adapter performs viewport-to-pixel/subpixel conversion and preserves Margaret Y-down input mapping behavior.
+
+Non-goals still unchanged after M72:
+
+- No scene intersection bridge.
+- No picking API.
+- No RenderSnapshot-to-Margaret scene translation.
+- No GPU ray tracing feature work.
