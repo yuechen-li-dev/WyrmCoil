@@ -159,4 +159,13 @@ These resources are world-owned picking inputs only. This is not a full camera s
 
 `WorldBlackboard.Camera + WorldBlackboard.Input + WorldBlackboard.Geometry -> WorldPickResult`
 
+M81 adds an actuatorized world-pick request path:
+
+- Request intent is stored as `RayQueryRequest::WorldPick(WorldPickRayQueryRequest { QueryId })` in `WorldBlackboard.RayRequests`.
+- `ExecuteWorldPickRequestById(...)` consumes request-by-id, executes `PickWorldBlackboard(...)`, and stores the result in `WorldBlackboard.RayResults`.
+- Hit/miss/failure are stored by query id in `RayQueryOutcome::{Hit, Miss, WorldPickFailure}`.
+- Completion remains mailbox-scalar only: `DwMessage::I32(completion_kind, query_id)`.
+
+Scope boundaries remain unchanged: no editor UI, no window event-loop integration, no scene graph/ECS, and no GPU ray tracing.
+
 `WorldBlackboard::Clear()` currently resets all blackboard resources, including camera/input, as a seed-level full reset helper.

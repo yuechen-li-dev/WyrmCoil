@@ -450,4 +450,13 @@ M80 adds a minimal world-resource picking seam in `Engine::world` + `Engine::ray
 - World-owned input cursor resource with normalized `[0, 1]` finite validation.
 - `PickWorldBlackboard(...)` helper that composes blackboard camera/input/geometry into existing M79 world-geometry picking.
 
+### M81 — Actuatorized world pick request
+
+- Request/store shape now includes `RayQueryRequest::WorldPick(WorldPickRayQueryRequest { QueryId })` in `WorldBlackboard.RayRequests`.
+- `ExecuteWorldPickRequestById(...)` executes world pick by id against blackboard-owned `Camera`, `Input`, and `Geometry`.
+- Results are persisted in the shared `RayQueryStore` as `RayQueryOutcome::{Hit, Miss, WorldPickFailure}` keyed by `RayQueryId`.
+- Missing camera/cursor/invalid cursor are stored as `WorldPickFailure` outcomes (actuator executed), and completion is still staged.
+- Mailbox remains query-id-only completion (`DwMessage::I32(kind, query_id)`); rich result payload stays in blackboard result memory.
+- This pass does not add editor UI, winit wiring, ECS/scene graph, or GPU tracing.
+
 This remains a helper-level ergonomic pass only. It does not integrate a window event loop, does not replace render camera ownership, and does not introduce scene-graph/ECS or GPU tracing features.

@@ -48,6 +48,12 @@ pub fn ExecuteRayQueryRequestById(
         RayQueryRequest::PickTriangle(request) => {
             ExecutePickTriangleQuery(request, camera_ray_adapter, results)?;
         }
+        RayQueryRequest::WorldPick(_) => {
+            return Err(RayQueryExecutionError::WrongRequestKind {
+                QueryId: query_id,
+                Expected: "CameraRay|TriangleRay|PickTriangle",
+            });
+        }
     }
 
     mailbox.Enqueue(crate::DwMessage::I32(completion_kind, query_id.0 as i32));
