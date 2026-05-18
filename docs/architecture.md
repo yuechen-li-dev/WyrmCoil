@@ -290,3 +290,23 @@ M91 adds `Engine::material` as a native material asset parser/validator seed:
 `material.toml -> MaterialTomlAsset -> validation diagnostics`
 
 The M91 boundary is parse+validation only. It does not include shader generation, MaterialX import, or runtime material binding integration.
+
+## Native material TOML semantic validation seed (M92)
+
+M92 extends `Engine::material` with semantic validation for an initial native graph subset after M91 structural checks.
+
+Current M92 semantic subset:
+
+- `constant_f32`
+- `constant_float4`
+- `texture2d`
+- `multiply`
+- `add`
+- `lerp`
+- `standard_surface`
+
+M92 infers deterministic reachable-node output types (`F32`, `Float4`, `Surface` in current coverage), enforces required inputs/params and basic input/operation type compatibility, and requires `material.output` to resolve to `Surface`.
+
+Unknown node kinds are allowed only when unreachable from the declared material output and are rejected when reachable.
+
+Non-goals remain unchanged in M92: no SDSL-V codegen, no MaterialX import implementation, and no runtime material object/binding integration.

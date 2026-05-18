@@ -393,3 +393,34 @@ Non-goals remain unchanged for M91:
 - no SDSL-V material codegen,
 - no MaterialX import/export implementation,
 - no runtime material object/bind-group integration.
+
+## M92 semantic validation seed status
+
+M92 adds a semantic-validation layer after M91 structural validation:
+
+`material.toml -> parsed graph -> structural validation -> semantic node/type validation`
+
+Supported semantic node kinds in M92:
+
+- `constant_f32`
+- `constant_float4`
+- `texture2d`
+- `multiply`
+- `add`
+- `lerp`
+- `standard_surface`
+
+M92 semantic checks include:
+
+- required inputs and input-name validation per known node kind;
+- required params and param-name validation per known node kind;
+- param type validation (for example `constant_float4.value`, `texture2d.path`, `texture2d.color_space`);
+- deterministic output type inference per reachable node;
+- material output type enforcement (`material.output` must resolve to `Surface`, currently via `standard_surface`).
+
+Unknown node-kind policy in M92:
+
+- unknown kinds that are unreachable from `material.output` are tolerated;
+- unknown kinds that are reachable from `material.output` are rejected.
+
+M92 remains parse/validation-only and still does not implement SDSL-V material codegen, MaterialX import/export implementation, or runtime material binding ownership.
