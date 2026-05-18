@@ -60,7 +60,18 @@ pub fn RunTestSource(source: &str) -> SdslvTestRunResult {
 pub fn RunTests(module: &SdslvTestModule) -> SdslvTestRunResult {
     let mut results = vec![];
     for test in &module.Tests {
-        results.push(run_test_case(test));
+        if HasTheoryAttribute(test) {
+            let inline_rows = test
+                .Attributes
+                .iter()
+                .filter(|x| x.Name == "InlineData")
+                .collect::<Vec<_>>();
+            for (row_index, row) in inline_rows.iter().enumerate() {
+                results.push(RunTheoryCaseRow(test, row, row_index));
+            }
+        } else {
+            results.push(RunTestCase(test));
+        }
     }
     let passed = results.iter().all(|x| x.Passed);
     SdslvTestRunResult {
@@ -70,7 +81,11 @@ pub fn RunTests(module: &SdslvTestModule) -> SdslvTestRunResult {
     }
 }
 
-fn run_test_case(test: &SdslvTestFunction) -> SdslvTestCaseResult {
+fn HasTheoryAttribute(test: &SdslvTestFunction) -> bool {
+    test.Attributes.iter().any(|x| x.Name == "Theory")
+}
+
+fn RunTestCase(test: &SdslvTestFunction) -> SdslvTestCaseResult {
     let mut env = HashMap::<String, RuntimeValue>::new();
     let mut failures = vec![];
     let mut fatal = false;
@@ -78,7 +93,7 @@ fn run_test_case(test: &SdslvTestFunction) -> SdslvTestCaseResult {
         if fatal {
             break;
         }
-        if let Err(failure) = execute_statement(statement, &mut env, &mut failures) {
+        if let Err(failure) = ExecuteStatement(statement, &mut env, &mut failures) {
             failures.push(failure);
             fatal = true;
         }
@@ -90,7 +105,48 @@ fn run_test_case(test: &SdslvTestFunction) -> SdslvTestCaseResult {
     }
 }
 
-fn execute_statement(
+fn RunTheoryCaseRow(
+    test: &SdslvTestFunction,
+    row: &SdslvAttribute,
+    row_index: usize,
+) -> SdslvTestCaseResult {
+    let mut env = HashMap::<String, RuntimeValue>::new();
+    for (parameter, argument) in test.Parameters.iter().zip(row.Arguments.iter()) {
+        match EvalExpression(argument, &env) {
+            Ok(value) => {
+                env.insert(parameter.Name.clone(), value);
+            }
+            Err(failure) => {
+                return SdslvTestCaseResult {
+                    Name: format!("{}[{}]", test.Name, row_index),
+                    Passed: false,
+                    Failures: vec![failure],
+                };
+            }
+        }
+    }
+    let mut failures = vec![];
+    let mut fatal = false;
+    for statement in &test.Body.Statements {
+        if fatal {
+            break;
+        }
+        if let Err(failure) = ExecuteStatement(statement, &mut env, &mut failures) {
+            failures.push(failure);
+            fatal = true;
+        }
+    }
+    for failure in failures.iter_mut() {
+        failure.Message = format!("row {}: {}", row_index, failure.Message);
+    }
+    SdslvTestCaseResult {
+        Name: format!("{}[{}]", test.Name, row_index),
+        Passed: failures.is_empty(),
+        Failures: failures,
+    }
+}
+
+fn ExecuteStatement(
     statement: &SdslvStatement,
     env: &mut HashMap<String, RuntimeValue>,
     failures: &mut Vec<SdslvAssertFailure>,

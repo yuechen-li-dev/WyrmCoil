@@ -580,15 +580,17 @@ This M0 document intentionally narrows implementation risk:
 Current M1 parser behavior parses declaration structure only and does not semantically parse function bodies. Function and stage bodies are accepted as balanced brace blocks and preserved as raw body spans/text for future milestones.
 
 
-## SDSL-V M7a/M7b test-file syntax and minimal runner
+## SDSL-V M7a/M7b/M69 test-file syntax and minimal runner
 
 M7a introduced parse/validation support for dedicated test files with extension `.sdslvtest`.
 M7b adds a minimal CPU-side test runner (`RunTestSource`) for executing `[Fact]` test bodies over a bounded scalar subset.
+M69 adds table-driven `[Theory]` + `[InlineData(...)]` support over the same CPU evaluator.
 
 Current test syntax:
 - top-level `namespace` and `use`
-- attributes before functions (only `[Fact]` is supported)
-- `[Fact] fn TestName() { ... }` test functions
+- attributes before functions (`[Fact]`, `[Theory]`, `[InlineData(...)]`)
+- `[Fact] fn TestName() { ... }` single-case tests
+- `[Theory]` tests with one or more `[InlineData(...)]` rows
 - local `let` declarations and `Assert.*(...)` expression statements
 
 Supported assertions in M7a:
@@ -596,9 +598,13 @@ Supported assertions in M7a:
 - `Assert.Equals(actual, expected, "message")`
 - `Assert.Near(actual, expected, tolerance, "message")`
 
-Validation rules in M7a:
-- only `[Fact]` is supported; unknown attributes plus `[Theory]`/`[Case]` are rejected
+Validation rules in M69:
 - `[Fact]` cannot have arguments and test functions cannot declare parameters
+- `[Theory]` cannot have arguments, must declare at least one parameter, and must include at least one `[InlineData(...)]` row
+- `[InlineData]` is only valid on `[Theory]` tests
+- test function cannot have both `[Fact]` and `[Theory]`
+- each `[InlineData]` row arity must match function parameter arity
+- each `[InlineData]` value must be a literal and must match parameter type rules (`i32`, `f32`/`float`, `bool`)
 - duplicate test function names are rejected
 - assertion custom message is mandatory and must be a string literal
 - unknown `Assert.*` methods are rejected
@@ -615,6 +621,7 @@ M7b result surface:
 - structured run result with overall pass/fail, pre-execution diagnostics, and per-test case failures
 - parse/validation diagnostics are returned without panics and tests are not executed when diagnostics exist
 - assertion failures include the custom message text and are collected within a test (continue-on-assert-fail)
+- theory row failures are reported with row-qualified case names (for example `Add_Works[1]`) and row-prefixed failure messages
 
 M7b intentional limits:
 - no shader function execution

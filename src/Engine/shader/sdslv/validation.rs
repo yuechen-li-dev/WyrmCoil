@@ -30,6 +30,8 @@ pub fn ValidateTestModule(module: &SdslvTestModule) -> Result<(), Vec<SdslvDiagn
             ));
         }
         let mut has_fact = false;
+        let mut has_theory = false;
+        let mut inline_rows: Vec<&SdslvAttribute> = vec![];
         for attribute in &test.Attributes {
             if attribute.Name == "Fact" {
                 has_fact = true;
@@ -39,6 +41,16 @@ pub fn ValidateTestModule(module: &SdslvTestModule) -> Result<(), Vec<SdslvDiagn
                         attribute.Span,
                     ));
                 }
+            } else if attribute.Name == "Theory" {
+                has_theory = true;
+                if !attribute.Arguments.is_empty() {
+                    diagnostics.push(SdslvDiagnostic::New(
+                        "[Theory] does not accept arguments",
+                        attribute.Span,
+                    ));
+                }
+            } else if attribute.Name == "InlineData" {
+                inline_rows.push(attribute);
             } else {
                 diagnostics.push(SdslvDiagnostic::New(
                     &format!(
@@ -49,11 +61,63 @@ pub fn ValidateTestModule(module: &SdslvTestModule) -> Result<(), Vec<SdslvDiagn
                 ));
             }
         }
+        if has_fact && has_theory {
+            diagnostics.push(SdslvDiagnostic::New(
+                "test function cannot have both [Fact] and [Theory]",
+                test.Span,
+            ));
+        }
         if has_fact && !test.Parameters.is_empty() {
             diagnostics.push(SdslvDiagnostic::New(
                 &format!("[Fact] test '{}' must not declare parameters", test.Name),
                 test.Span,
             ));
+        }
+        if has_fact && !inline_rows.is_empty() {
+            for inline_data in inline_rows.iter() {
+                diagnostics.push(SdslvDiagnostic::New(
+                    "[InlineData] is only valid on [Theory] tests",
+                    inline_data.Span,
+                ));
+            }
+        }
+        if has_theory {
+            if inline_rows.is_empty() {
+                diagnostics.push(SdslvDiagnostic::New(
+                    "[Theory] requires at least one [InlineData(...)] row",
+                    test.Span,
+                ));
+            }
+            if test.Parameters.is_empty() {
+                diagnostics.push(SdslvDiagnostic::New(
+                    "[Theory] test must declare parameters matching InlineData rows",
+                    test.Span,
+                ));
+            }
+            for inline_data in inline_rows.iter() {
+                if inline_data.Arguments.len() != test.Parameters.len() {
+                    diagnostics.push(SdslvDiagnostic::New(
+                        &format!(
+                            "InlineData arity mismatch: expected {} values, found {}",
+                            test.Parameters.len(),
+                            inline_data.Arguments.len()
+                        ),
+                        inline_data.Span,
+                    ));
+                    continue;
+                }
+                for (index, argument) in inline_data.Arguments.iter().enumerate() {
+                    let parameter = &test.Parameters[index];
+                    ValidateInlineDataValueType(argument, parameter, &mut diagnostics);
+                }
+            }
+        } else if !inline_rows.is_empty() {
+            for inline_data in inline_rows.iter() {
+                diagnostics.push(SdslvDiagnostic::New(
+                    "[InlineData] is only valid on [Theory] tests",
+                    inline_data.Span,
+                ));
+            }
         }
         for statement in &test.Body.Statements {
             if let SdslvStatement::Expression { Value } = statement {
@@ -65,6 +129,71 @@ pub fn ValidateTestModule(module: &SdslvTestModule) -> Result<(), Vec<SdslvDiagn
         Ok(())
     } else {
         Err(diagnostics)
+    }
+}
+
+fn ValidateInlineDataValueType(
+    value: &SdslvExpression,
+    parameter: &SdslvFunctionParameter,
+    diagnostics: &mut Vec<SdslvDiagnostic>,
+) {
+    let Some(path) = parameter.TypeName.AsNamedPath() else {
+        diagnostics.push(SdslvDiagnostic::New(
+            &format!(
+                "InlineData type mismatch for parameter '{}': unsupported parameter type '{}'",
+                parameter.Name,
+                parameter.TypeName.ToDisplayString()
+            ),
+            SdslvSpan {
+                Start: 0,
+                End: 0,
+                Line: 1,
+                Column: 1,
+            },
+        ));
+        return;
+    };
+    let expected = path.Segments.last().map(|x| x.as_str()).unwrap_or("");
+    let found = match value {
+        SdslvExpression::IntegerLiteral(_) => "i32",
+        SdslvExpression::FloatLiteral(_) => "f32",
+        SdslvExpression::BoolLiteral(_) => "bool",
+        SdslvExpression::StringLiteral(_) => "string",
+        _ => {
+            diagnostics.push(SdslvDiagnostic::New(
+                &format!(
+                    "InlineData values must be literal expressions for parameter '{}'",
+                    parameter.Name
+                ),
+                SdslvSpan {
+                    Start: 0,
+                    End: 0,
+                    Line: 1,
+                    Column: 1,
+                },
+            ));
+            return;
+        }
+    };
+    let matches = match expected {
+        "i32" | "u32" => found == "i32",
+        "f32" | "float" => found == "f32" || found == "i32",
+        "bool" => found == "bool",
+        _ => false,
+    };
+    if !matches {
+        diagnostics.push(SdslvDiagnostic::New(
+            &format!(
+                "InlineData type mismatch for parameter '{}': expected {}, found {}",
+                parameter.Name, expected, found
+            ),
+            SdslvSpan {
+                Start: 0,
+                End: 0,
+                Line: 1,
+                Column: 1,
+            },
+        ));
     }
 }
 
