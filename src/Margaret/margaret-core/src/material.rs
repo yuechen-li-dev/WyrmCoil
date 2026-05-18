@@ -11,7 +11,7 @@ pub struct MaterialDescription {
 }
 
 impl MaterialDescription {
-    pub fn new(id: MaterialId, name: impl Into<String>, kind: MaterialKind) -> Self {
+    pub fn New(id: MaterialId, name: impl Into<String>, kind: MaterialKind) -> Self {
         Self {
             id,
             name: name.into(),
@@ -19,7 +19,7 @@ impl MaterialDescription {
         }
     }
 
-    pub fn diffuse_albedo(&self) -> ColorRgb {
+    pub fn DiffuseAlbedo(&self) -> ColorRgb {
         match self.kind {
             MaterialKind::Diffuse { albedo, .. } => albedo,
             MaterialKind::SpecularReflector { reflectance } => reflectance,
@@ -27,7 +27,7 @@ impl MaterialDescription {
         }
     }
 
-    pub fn emissive_radiance(&self) -> ColorRgb {
+    pub fn EmissiveRadiance(&self) -> ColorRgb {
         match self.kind {
             MaterialKind::Diffuse { emission, .. } => emission,
             MaterialKind::SpecularReflector { .. } | MaterialKind::Dielectric { .. } => {
@@ -36,11 +36,11 @@ impl MaterialDescription {
         }
     }
 
-    pub fn is_emissive(&self) -> bool {
-        self.emissive_radiance() != ColorRgb::BLACK
+    pub fn IsEmissive(&self) -> bool {
+        self.EmissiveRadiance() != ColorRgb::BLACK
     }
 
-    pub fn has_unsupported_m3a_diffuse_emission_mix(&self) -> bool {
+    pub fn HasUnsupportedM3aDiffuseEmissionMix(&self) -> bool {
         match self.kind {
             MaterialKind::Diffuse { albedo, emission } => {
                 albedo != ColorRgb::BLACK && emission != ColorRgb::BLACK

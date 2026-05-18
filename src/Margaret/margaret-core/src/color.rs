@@ -8,10 +8,10 @@ pub struct ColorRgb {
 }
 
 impl ColorRgb {
-    pub const BLACK: Self = Self::new(0.0, 0.0, 0.0);
-    pub const WHITE: Self = Self::new(1.0, 1.0, 1.0);
+    pub const BLACK: Self = Self::New(0.0, 0.0, 0.0);
+    pub const WHITE: Self = Self::New(1.0, 1.0, 1.0);
 
-    pub const fn new(r: f32, g: f32, b: f32) -> Self {
+    pub const fn New(r: f32, g: f32, b: f32) -> Self {
         Self { r, g, b }
     }
 }
@@ -20,7 +20,7 @@ impl Add for ColorRgb {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        Self::new(self.r + rhs.r, self.g + rhs.g, self.b + rhs.b)
+        Self::New(self.r + rhs.r, self.g + rhs.g, self.b + rhs.b)
     }
 }
 
@@ -36,7 +36,7 @@ impl Mul<f32> for ColorRgb {
     type Output = Self;
 
     fn mul(self, rhs: f32) -> Self::Output {
-        Self::new(self.r * rhs, self.g * rhs, self.b * rhs)
+        Self::New(self.r * rhs, self.g * rhs, self.b * rhs)
     }
 }
 
@@ -44,7 +44,7 @@ impl Mul<ColorRgb> for ColorRgb {
     type Output = Self;
 
     fn mul(self, rhs: ColorRgb) -> Self::Output {
-        Self::new(self.r * rhs.r, self.g * rhs.g, self.b * rhs.b)
+        Self::New(self.r * rhs.r, self.g * rhs.g, self.b * rhs.b)
     }
 }
 
@@ -57,10 +57,10 @@ pub struct ColorRgba8 {
 }
 
 impl ColorRgba8 {
-    pub const TRANSPARENT_BLACK: Self = Self::new(0, 0, 0, 0);
-    pub const OPAQUE_BLACK: Self = Self::new(0, 0, 0, 255);
+    pub const TRANSPARENT_BLACK: Self = Self::New(0, 0, 0, 0);
+    pub const OPAQUE_BLACK: Self = Self::New(0, 0, 0, 255);
 
-    pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+    pub const fn New(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
     }
 }

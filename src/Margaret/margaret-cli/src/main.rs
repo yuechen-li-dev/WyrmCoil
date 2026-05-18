@@ -1,3 +1,3 @@
 fn main() -> std::io::Result<()> {
-    margaret_cli::run()
+    margaret_cli::Run()
 }

@@ -12,23 +12,23 @@ pub struct OwnedImage {
 }
 
 impl OwnedImage {
-    pub fn new(size: ImageSize, fill: ColorRgba8) -> Self {
-        let pixel_count = size.pixel_count() as usize;
-        let pixels = vec![fill; pixel_count];
+    pub fn New(size: ImageSize, fill: ColorRgba8) -> Self {
+        let PixelCount = size.PixelCount() as usize;
+        let pixels = vec![fill; PixelCount];
         Self { size, pixels }
     }
 
-    pub fn get_pixel(&self, x: u32, y: u32) -> ColorRgba8 {
+    pub fn GetPixel(&self, x: u32, y: u32) -> ColorRgba8 {
         let index = (y * self.size.width + x) as usize;
         self.pixels[index]
     }
 
-    pub fn set_pixel(&mut self, x: u32, y: u32, color: ColorRgba8) {
+    pub fn SetPixel(&mut self, x: u32, y: u32, color: ColorRgba8) {
         let index = (y * self.size.width + x) as usize;
         self.pixels[index] = color;
     }
 
-    pub fn write_ppm(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
+    pub fn WritePpm(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
         let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
 

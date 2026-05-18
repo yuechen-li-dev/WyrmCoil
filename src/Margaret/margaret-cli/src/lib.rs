@@ -14,7 +14,7 @@ use margaret_cpu::CpuRendererBackend;
 const DEFAULT_DEPTH_MAX_DISTANCE: f32 = 6.0;
 const DEFAULT_OUTPUT_PATH: &str = "margaret-m3a-normals.ppm";
 
-pub fn run() -> std::io::Result<()> {
+pub fn Run() -> std::io::Result<()> {
     run_from_args(env::args_os())
 }
 
@@ -22,15 +22,15 @@ fn run_from_args<I>(args: I) -> std::io::Result<()>
 where
     I: IntoIterator<Item = OsString>,
 {
-    let config = CliConfig::parse(args)?;
+    let config = CliConfig::Parse(args)?;
     if config.show_help {
         return Ok(());
     }
 
-    let scene = hardcoded_scene();
-    let backend = CpuRendererBackend::new();
-    let metadata = backend.describe_render(&scene, config.image_size, config.render_settings);
-    let image = backend.render(&scene, config.image_size, config.render_settings);
+    let scene = HardcodedScene();
+    let backend = CpuRendererBackend::New();
+    let metadata = backend.DescribeRender(&scene, config.image_size, config.render_settings);
+    let image = backend.Render(&scene, config.image_size, config.render_settings);
 
     if let Some(parent) = config.output_path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -38,12 +38,12 @@ where
         }
     }
 
-    image.write_ppm(&config.output_path)?;
+    image.WritePpm(&config.output_path)?;
 
     println!("Margaret M3a CPU path trace");
     println!("scene: {}", metadata.scene_name);
-    println!("backend: {}", metadata.backend_name);
-    println!("mode: {}", config.render_settings.mode.as_str());
+    println!("backend: {}", metadata.BackendName);
+    println!("mode: {}", config.render_settings.mode.AsStr());
     println!(
         "image: {}x{} {:?}",
         metadata.image_size.width, metadata.image_size.height, metadata.pixel_format
@@ -67,8 +67,8 @@ struct CliConfig {
 impl Default for CliConfig {
     fn default() -> Self {
         Self {
-            image_size: ImageSize::new(320, 240),
-            render_settings: RenderSettings::new(
+            image_size: ImageSize::New(320, 240),
+            render_settings: RenderSettings::New(
                 RenderMode::Debug(margaret_core::render::RenderDebugMode::GeometricNormals),
                 DEFAULT_DEPTH_MAX_DISTANCE,
             ),
@@ -79,7 +79,7 @@ impl Default for CliConfig {
 }
 
 impl CliConfig {
-    fn parse<I>(args: I) -> std::io::Result<Self>
+    fn Parse<I>(args: I) -> std::io::Result<Self>
     where
         I: IntoIterator<Item = OsString>,
     {
@@ -94,7 +94,7 @@ impl CliConfig {
                 "--mode" => {
                     let value = next_argument(&mut arguments, "--mode")?;
                     let value_text = value.to_string_lossy();
-                    let render_mode = RenderMode::parse(value_text.as_ref()).ok_or_else(|| {
+                    let render_mode = RenderMode::Parse(value_text.as_ref()).ok_or_else(|| {
                         std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
                             format!(
@@ -105,17 +105,17 @@ impl CliConfig {
                     config.render_settings.mode = render_mode;
                     if config.output_path == Path::new(DEFAULT_OUTPUT_PATH) {
                         config.output_path =
-                            PathBuf::from(format!("margaret-m3a-{}.ppm", render_mode.as_str()));
+                            PathBuf::from(format!("margaret-m3a-{}.ppm", render_mode.AsStr()));
                     }
                 }
                 "--width" => {
                     let value = next_argument(&mut arguments, "--width")?;
-                    let width = parse_dimension(&value, "width")?;
+                    let width = ParseDimension(&value, "width")?;
                     config.image_size.width = width;
                 }
                 "--height" => {
                     let value = next_argument(&mut arguments, "--height")?;
-                    let height = parse_dimension(&value, "height")?;
+                    let height = ParseDimension(&value, "height")?;
                     config.image_size.height = height;
                 }
                 "--output" => {
@@ -123,7 +123,7 @@ impl CliConfig {
                     config.output_path = PathBuf::from(value);
                 }
                 "--help" | "-h" => {
-                    print_usage();
+                    PrintUsage();
                     config.show_help = true;
                     return Ok(config);
                 }
@@ -166,7 +166,7 @@ where
     })
 }
 
-fn parse_dimension(value: &OsString, label: &str) -> std::io::Result<u32> {
+fn ParseDimension(value: &OsString, label: &str) -> std::io::Result<u32> {
     let text = value.to_string_lossy();
     text.parse::<u32>().map_err(|_| {
         std::io::Error::new(
@@ -176,17 +176,17 @@ fn parse_dimension(value: &OsString, label: &str) -> std::io::Result<u32> {
     })
 }
 
-fn print_usage() {
+fn PrintUsage() {
     println!(
         "Usage: margaret-cli [--mode normals|albedo|depth|lit] [--width N] [--height N] [--output PATH]"
     );
 }
 
-fn hardcoded_scene() -> SceneDescription {
-    let camera = Camera::new(
+fn HardcodedScene() -> SceneDescription {
+    let camera = Camera::New(
         "main-camera",
-        Point3::new(0.0, 0.0, 3.4),
-        Vec3::new(0.0, 0.0, -1.0),
+        Point3::New(0.0, 0.0, 3.4),
+        Vec3::New(0.0, 0.0, -1.0),
         Vec3::Y,
         40.0,
     );
@@ -198,39 +198,39 @@ fn hardcoded_scene() -> SceneDescription {
     let mirror = MaterialId(4);
     let glass = MaterialId(5);
 
-    let mut scene = SceneDescription::new("m3a-hardcoded-path-scene", camera);
-    scene.materials.push(make_diffuse(
+    let mut scene = SceneDescription::New("m3a-hardcoded-path-scene", camera);
+    scene.materials.push(MakeDiffuse(
         red,
         "red",
-        ColorRgb::new(0.8, 0.2, 0.2),
+        ColorRgb::New(0.8, 0.2, 0.2),
         ColorRgb::BLACK,
     ));
-    scene.materials.push(make_diffuse(
+    scene.materials.push(MakeDiffuse(
         green,
         "green",
-        ColorRgb::new(0.2, 0.8, 0.2),
+        ColorRgb::New(0.2, 0.8, 0.2),
         ColorRgb::BLACK,
     ));
-    scene.materials.push(make_diffuse(
+    scene.materials.push(MakeDiffuse(
         white,
         "white",
-        ColorRgb::new(0.8, 0.8, 0.8),
+        ColorRgb::New(0.8, 0.8, 0.8),
         ColorRgb::BLACK,
     ));
-    scene.materials.push(make_diffuse(
+    scene.materials.push(MakeDiffuse(
         light,
         "ceiling-light",
         ColorRgb::BLACK,
-        ColorRgb::new(5.0, 4.8, 4.4),
+        ColorRgb::New(5.0, 4.8, 4.4),
     ));
-    scene.materials.push(MaterialDescription::new(
+    scene.materials.push(MaterialDescription::New(
         mirror,
         "mirror",
         MaterialKind::SpecularReflector {
-            reflectance: ColorRgb::new(0.95, 0.95, 0.95),
+            reflectance: ColorRgb::New(0.95, 0.95, 0.95),
         },
     ));
-    scene.materials.push(MaterialDescription::new(
+    scene.materials.push(MaterialDescription::New(
         glass,
         "glass",
         MaterialKind::Dielectric {
@@ -238,88 +238,88 @@ fn hardcoded_scene() -> SceneDescription {
         },
     ));
 
-    scene.objects.push(make_quad(
+    scene.objects.push(MakeQuad(
         "floor",
         white,
-        Point3::new(-1.2, -1.0, 1.2),
-        Point3::new(1.2, -1.0, 1.2),
-        Point3::new(1.2, -1.0, -1.2),
-        Point3::new(-1.2, -1.0, -1.2),
+        Point3::New(-1.2, -1.0, 1.2),
+        Point3::New(1.2, -1.0, 1.2),
+        Point3::New(1.2, -1.0, -1.2),
+        Point3::New(-1.2, -1.0, -1.2),
     ));
-    scene.objects.push(make_quad(
+    scene.objects.push(MakeQuad(
         "ceiling",
         white,
-        Point3::new(-1.2, 1.0, -1.2),
-        Point3::new(1.2, 1.0, -1.2),
-        Point3::new(1.2, 1.0, 1.2),
-        Point3::new(-1.2, 1.0, 1.2),
+        Point3::New(-1.2, 1.0, -1.2),
+        Point3::New(1.2, 1.0, -1.2),
+        Point3::New(1.2, 1.0, 1.2),
+        Point3::New(-1.2, 1.0, 1.2),
     ));
-    scene.objects.push(make_quad(
+    scene.objects.push(MakeQuad(
         "back-wall",
         white,
-        Point3::new(-1.2, -1.0, -1.2),
-        Point3::new(1.2, -1.0, -1.2),
-        Point3::new(1.2, 1.0, -1.2),
-        Point3::new(-1.2, 1.0, -1.2),
+        Point3::New(-1.2, -1.0, -1.2),
+        Point3::New(1.2, -1.0, -1.2),
+        Point3::New(1.2, 1.0, -1.2),
+        Point3::New(-1.2, 1.0, -1.2),
     ));
-    scene.objects.push(make_quad(
+    scene.objects.push(MakeQuad(
         "left-wall",
         red,
-        Point3::new(-1.2, -1.0, -1.2),
-        Point3::new(-1.2, -1.0, 1.2),
-        Point3::new(-1.2, 1.0, 1.2),
-        Point3::new(-1.2, 1.0, -1.2),
+        Point3::New(-1.2, -1.0, -1.2),
+        Point3::New(-1.2, -1.0, 1.2),
+        Point3::New(-1.2, 1.0, 1.2),
+        Point3::New(-1.2, 1.0, -1.2),
     ));
-    scene.objects.push(make_quad(
+    scene.objects.push(MakeQuad(
         "right-wall",
         green,
-        Point3::new(1.2, -1.0, 1.2),
-        Point3::new(1.2, -1.0, -1.2),
-        Point3::new(1.2, 1.0, -1.2),
-        Point3::new(1.2, 1.0, 1.2),
+        Point3::New(1.2, -1.0, 1.2),
+        Point3::New(1.2, -1.0, -1.2),
+        Point3::New(1.2, 1.0, -1.2),
+        Point3::New(1.2, 1.0, 1.2),
     ));
-    scene.objects.push(make_quad(
+    scene.objects.push(MakeQuad(
         "mirror-panel",
         mirror,
-        Point3::new(-0.9, -1.0, -0.2),
-        Point3::new(-0.15, -1.0, -0.7),
-        Point3::new(-0.15, 0.2, -0.7),
-        Point3::new(-0.9, 0.2, -0.2),
+        Point3::New(-0.9, -1.0, -0.2),
+        Point3::New(-0.15, -1.0, -0.7),
+        Point3::New(-0.15, 0.2, -0.7),
+        Point3::New(-0.9, 0.2, -0.2),
     ));
-    scene.objects.push(make_quad(
+    scene.objects.push(MakeQuad(
         "glass-panel",
         glass,
-        Point3::new(0.15, -1.0, -0.7),
-        Point3::new(0.9, -1.0, -0.2),
-        Point3::new(0.9, 0.35, -0.2),
-        Point3::new(0.15, 0.35, -0.7),
+        Point3::New(0.15, -1.0, -0.7),
+        Point3::New(0.9, -1.0, -0.2),
+        Point3::New(0.9, 0.35, -0.2),
+        Point3::New(0.15, 0.35, -0.7),
     ));
-    scene.objects.push(make_quad(
+    scene.objects.push(MakeQuad(
         "light",
         light,
-        Point3::new(-0.35, 0.99, -0.35),
-        Point3::new(0.35, 0.99, -0.35),
-        Point3::new(0.35, 0.99, 0.35),
-        Point3::new(-0.35, 0.99, 0.35),
+        Point3::New(-0.35, 0.99, -0.35),
+        Point3::New(0.35, 0.99, -0.35),
+        Point3::New(0.35, 0.99, 0.35),
+        Point3::New(-0.35, 0.99, 0.35),
     ));
 
     scene
 }
 
-fn make_diffuse(
+fn MakeDiffuse(
     material_id: MaterialId,
     name: &str,
     albedo: ColorRgb,
     emission: ColorRgb,
 ) -> MaterialDescription {
-    MaterialDescription::new(
+    MaterialDescription::New(
         material_id,
         name,
         MaterialKind::Diffuse { albedo, emission },
     )
 }
 
-fn make_quad(
+fn MakeQuad(
     name: &str,
     material_id: MaterialId,
     a: Point3,
@@ -327,10 +327,10 @@ fn make_quad(
     c: Point3,
     d: Point3,
 ) -> SceneObject {
-    SceneObject::new(
+    SceneObject::New(
         name,
         Geometry::TriangleMesh {
-            triangles: vec![Triangle::new(a, b, c), Triangle::new(a, c, d)],
+            triangles: vec![Triangle::New(a, b, c), Triangle::New(a, c, d)],
         },
         material_id,
     )
@@ -338,7 +338,7 @@ fn make_quad(
 
 #[cfg(test)]
 mod tests {
-    use super::{hardcoded_scene, run_from_args, CliConfig, DEFAULT_DEPTH_MAX_DISTANCE};
+    use super::{CliConfig, DEFAULT_DEPTH_MAX_DISTANCE, HardcodedScene, run_from_args};
     use margaret_core::material::MaterialKind;
     use margaret_core::render::{RenderDebugMode, RenderMode};
     use margaret_core::scene::Geometry;
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn hardcoded_scene_contains_room_geometry_light_and_delta_materials() {
-        let scene = hardcoded_scene();
+        let scene = HardcodedScene();
 
         assert_eq!(scene.objects.len(), 8);
         assert_eq!(scene.materials.len(), 6);
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn cli_config_parses_debug_mode_and_output() {
-        let config = CliConfig::parse(vec![
+        let config = CliConfig::Parse(vec![
             OsString::from("margaret-cli"),
             OsString::from("--mode"),
             OsString::from("albedo"),
@@ -406,7 +406,7 @@ mod tests {
 
     #[test]
     fn cli_config_parses_lit_mode() {
-        let config = CliConfig::parse(vec![
+        let config = CliConfig::Parse(vec![
             OsString::from("margaret-cli"),
             OsString::from("--mode"),
             OsString::from("lit"),
@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn cli_config_rejects_unknown_mode() {
-        let error = CliConfig::parse(vec![
+        let error = CliConfig::Parse(vec![
             OsString::from("margaret-cli"),
             OsString::from("--mode"),
             OsString::from("wireframe"),
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn cli_config_updates_default_output_name_when_mode_changes() {
-        let config = CliConfig::parse(vec![
+        let config = CliConfig::Parse(vec![
             OsString::from("margaret-cli"),
             OsString::from("--mode"),
             OsString::from("depth"),

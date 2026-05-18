@@ -6,6 +6,15 @@
 
 This pass audited the imported Margaret subtree, ran the requested build/test/style commands, and produced an evidence-based M71b+ integration plan without refactoring Margaret or changing renderer behavior.
 
+
+## M71b status update
+
+- Margaret crates are now wired into the root Cargo workspace.
+- Workspace package/dependency keys required by Margaret manifests are present at root.
+- Margaret-owned function/method naming has been mechanically converged to WyrmCoil PascalCase policy.
+- `margaret-vk` remains included as a compiling scaffold crate (GPU ray tracing still deferred).
+- No camera bridge, ray-query API, renderer-loop integration, or GPU tracing feature work was added in M71b.
+
 ## 1) Current Margaret module/crate map
 
 Observed subtree:
