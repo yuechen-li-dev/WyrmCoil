@@ -17,6 +17,7 @@ pub mod wgpu {
     pub use crate::Engine::render::headless_target::*;
     pub use crate::Engine::render::wgpu::*;
     pub use crate::Engine::render::wgpu_pipeline::*;
+    pub use crate::Engine::render::wgpu_sampler::*;
     pub use crate::Engine::render::wgpu_shader_module::*;
     pub use crate::Engine::render::wgpu_surface::*;
     pub use crate::Engine::render::wgpu_texture::*;

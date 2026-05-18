@@ -305,3 +305,17 @@ Boundary reminder:
 ## Texture upload resource follow-on seam (M86)
 
 After M85's plain-data `TextureUploadPlan`, M86 adds an optional backend adapter seam for `wgpu` texture descriptors/resources. The actuator pattern boundary remains unchanged: request/result payloads stay world-owned and mailbox completion remains id-only, while backend-specific GPU objects are created only by caller-owned backend helpers.
+
+
+## Texture sampler intent follow-on seam (M87)
+
+After M86's optional `wgpu` texture resource seam, M87 adds sampler intent planning as a separate boundary:
+
+`SamplerPlan -> optional backend sampler descriptor/resource`
+
+This keeps texture storage and sampling behavior distinct:
+
+- texture plan = bytes, dimensions, format, usage
+- sampler plan = filtering + addressing policy
+
+M87 does not add bind groups/material integration and does not implement Margaret CPU/reference sampling yet; it preserves a future path where Margaret can consume the same sampler intent.

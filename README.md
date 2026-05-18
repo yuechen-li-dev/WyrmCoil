@@ -218,3 +218,15 @@ M86 adds an optional `wgpu` texture resource seam after the M85 upload plan boun
 - `BuildWgpuTextureUploadDesc(...)` maps plan metadata to deterministic `wgpu` texture/upload descriptor data.
 - `CreateWgpuTextureResource(...)` optionally creates a `wgpu::Texture` + default `TextureView` using caller-provided `Device`/`Queue`.
 - Default tests remain GPU-free; no sampler, bind group, material system, or render-loop textured draw integration is added in M86.
+
+
+## Asset sampler plan seam status (M87)
+
+M87 adds a backend-neutral sampler intent boundary after M85/M86 texture storage/upload seams.
+
+- `SamplerPlan` captures filtering/address behavior only (mag/min/mipmap filter + U/V/W address modes).
+- `TextureUploadPlan` remains pixel storage/upload metadata; sampler intent is intentionally separate.
+- Optional `wgpu` helpers map sampler intent to descriptor data and can create caller-owned `wgpu::Sampler` resources.
+- No bind-group/material integration or textured draw-loop integration is added in M87.
+- No CPU/reference sampling implementation is added in M87, but Margaret can later consume the same sampler plan intent.
+- Color-space conversion remains texture-format-owned (`TexturePixelFormat`, e.g. sRGB); samplers do not perform color conversion.

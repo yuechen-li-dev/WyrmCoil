@@ -223,3 +223,20 @@ Boundary rules remain explicit:
 - Real texture creation/upload requires caller-provided `wgpu::Device` and `wgpu::Queue`.
 - Default test coverage for descriptor mapping remains GPU-free.
 - No sampler/bind group/material integration yet.
+
+
+## Asset sampler plan seam (M87)
+
+M87 adds a backend-neutral sampler boundary:
+
+`SamplerPlan -> BuildWgpuSamplerDesc(...) -> CreateWgpuSamplerResource(...)`
+
+Boundary rules:
+
+- `SamplerPlan` is filtering/address intent only.
+- `TextureUploadPlan` remains storage/upload data only.
+- Samplers do not own color conversion; storage/color interpretation (for example sRGB) stays with texture format metadata.
+- Mipmap filter is present as intent metadata, but mipmap generation remains future work.
+- `wgpu` sampler creation is optional and caller-owned.
+- No bind groups, material system, or textured draw-loop integration are included in M87.
+- Margaret/reference sampling may later consume the same sampler intent without changing this boundary.
