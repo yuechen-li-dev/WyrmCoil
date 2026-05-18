@@ -375,3 +375,19 @@ Scope boundary (unchanged):
 - This is not a material bridge or scene-graph bridge.
 - This is not a renderer ownership change.
 - This is not a GPU tracing pass.
+
+## M77 visible picking seed status update
+
+M77 adds a visible RenderSnapshot picking API seed over the M76 demo bridge.
+
+- New helper: `PickVisibleRenderSnapshot(...)` in `Engine::ray`.
+- Input: normalized viewport coordinates (`ScreenX`, `ScreenY`) in `[0,1]`, Margaret camera adapter, `RenderSnapshot`, and bridge options.
+- Flow: build `RenderSnapshotRayScene` from visible primitives, execute M75 pick query, resolve triangle hit id through `TriangleSources` metadata.
+- Output: `VisiblePickResult::{Hit,Miss}` where hit carries `QueryId`, `EntityId`, `RenderItemIndex`, `TriangleId`, `TriangleIndexInItem`, `Distance`, `Position`, and `Normal`.
+- Error policy: missing source metadata returns structured `VisiblePickError::MissingTriangleSource { TriangleId }`.
+
+Boundary reminder:
+
+- This is still demo/bootstrap visible-geometry picking over `RenderSnapshot`.
+- No scene graph ownership pass, no material bridge pass, and no GPU ray tracing.
+- Future true world/entity picking should introduce richer geometry ownership/registration beyond visible demo primitives.

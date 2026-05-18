@@ -220,6 +220,95 @@ pub enum RayQueryOutcome {
     Miss(RayMissResult),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VisiblePickResult {
+    Hit(VisiblePickHit),
+    Miss(VisiblePickMiss),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VisiblePickHit {
+    pub QueryId: RayQueryId,
+    pub EntityId: crate::Engine::primitives::EntityId,
+    pub RenderItemIndex: usize,
+    pub TriangleId: i32,
+    pub TriangleIndexInItem: usize,
+    pub Distance: f32,
+    pub Position: RayVec3,
+    pub Normal: RayVec3,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VisiblePickMiss {
+    pub QueryId: RayQueryId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VisiblePickError {
+    PickExecutionError(margaret::RayQueryExecutionError),
+    MissingTriangleSource { TriangleId: i32 },
+    UnexpectedCameraRayOutcome { QueryId: RayQueryId },
+}
+
+pub fn ResolveVisiblePickResult(
+    outcome: RayQueryOutcome,
+    triangle_sources: &[RayTriangleSource],
+) -> Result<VisiblePickResult, VisiblePickError> {
+    match outcome {
+        RayQueryOutcome::Hit(hit) => {
+            let source = triangle_sources
+                .iter()
+                .find(|source| source.TriangleId == hit.TriangleId)
+                .ok_or(VisiblePickError::MissingTriangleSource {
+                    TriangleId: hit.TriangleId,
+                })?;
+            Ok(VisiblePickResult::Hit(VisiblePickHit {
+                QueryId: hit.QueryId,
+                EntityId: crate::Engine::primitives::EntityId(source.EntityId),
+                RenderItemIndex: source.RenderItemIndex,
+                TriangleId: hit.TriangleId,
+                TriangleIndexInItem: source.TriangleIndexInItem,
+                Distance: hit.Distance,
+                Position: hit.Position,
+                Normal: hit.Normal,
+            }))
+        }
+        RayQueryOutcome::Miss(miss) => Ok(VisiblePickResult::Miss(VisiblePickMiss {
+            QueryId: miss.QueryId,
+        })),
+        RayQueryOutcome::CameraRay(camera_result) => {
+            Err(VisiblePickError::UnexpectedCameraRayOutcome {
+                QueryId: camera_result.QueryId,
+            })
+        }
+    }
+}
+
+pub fn PickVisibleRenderSnapshot(
+    snapshot: &RenderSnapshot,
+    camera_adapter: &margaret::MargaretCameraRayAdapter,
+    screen_x: f32,
+    screen_y: f32,
+    query_id: RayQueryId,
+    options: RenderSnapshotRaySceneOptions,
+) -> Result<VisiblePickResult, VisiblePickError> {
+    let scene = BuildVisiblePrimitiveRaySceneFromRenderSnapshot(snapshot, options);
+    let mut store = RayQueryStore::New();
+    let outcome = margaret::ExecutePickTriangleQuery(
+        PickRayQueryRequest {
+            QueryId: query_id,
+            ScreenX: screen_x,
+            ScreenY: screen_y,
+            Scene: scene.Scene,
+        },
+        camera_adapter,
+        &mut store,
+    )
+    .map_err(VisiblePickError::PickExecutionError)?;
+
+    ResolveVisiblePickResult(outcome, &scene.TriangleSources)
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RayQueryStore {
     NextQueryId: u32,
