@@ -181,3 +181,8 @@ Use this pattern when Dunewyrm control needs domain capability execution without
 - completion mailbox remains id-only and staged for next-tick visibility.
 
 Margaret world picking (M81) is the canonical worked example of this pattern.
+
+
+## Asset actuator subsystem seed (M83)
+
+M83 introduces asset byte-load as the second actuator-subsystem example. `WorldBlackboard` now includes grouped `Assets` resources with deterministic request/result stores. Asset execution is utility-planned (`ImmediateBytesLoad` vs `NoAssetExecutionFeasible`), but only immediate synchronous `std::fs::read` is implemented in M83. Mailbox completion remains request-id-only.

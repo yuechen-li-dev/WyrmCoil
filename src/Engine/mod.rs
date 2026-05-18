@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+pub mod asset;
 pub mod backend;
 pub mod primitives;
 pub mod ray;
@@ -9,6 +10,7 @@ pub mod store;
 pub mod world;
 pub mod wyrmcoil;
 
+pub use asset::*;
 pub use backend::*;
 pub use primitives::*;
 pub use ray::*;

@@ -177,3 +177,13 @@ Boundary summary:
 - Acts/mailbox messages remain small and often id-only.
 - Rich request/result payloads live in world-owned stores/resources.
 - Mailbox completion is staged and consumed on the next tick.
+
+
+## Asset subsystem status (M83)
+
+M83 adds an Engine asset actuator seed for raw file-byte loading only.
+
+- Requests/results live in `WorldBlackboard.Assets` stores.
+- Actuator execution is policy-shaped via utility planning (`ImmediateBytesLoad` implemented, deferred unsupported).
+- Completion mailbox remains id-only (`AssetRequestId` via `DwMessage::I32`).
+- No texture decode, material integration, GPU upload, hot reload, or async jobs yet.
