@@ -306,3 +306,23 @@ Non-goals still unchanged after M72:
 - No picking API.
 - No RenderSnapshot-to-Margaret scene translation.
 - No GPU ray tracing feature work.
+
+## M73 — Triangle Hit Query Bridge
+
+M73 extends the M72 actuator integration from camera-ray generation to direct triangle hit/miss ray queries using Margaret-backed math and intersection logic through `Engine::ray::margaret::ExecuteTriangleRayQuery(...)`.
+
+Boundary remains unchanged:
+
+- Brain (Dunewyrm control) requests query execution via act id.
+- Hands (Margaret bridge) execute CPU triangle intersection from a WyrmCoil-facing `TriangleRayQueryRequest` and `RayTriangleScene`.
+- Eyes (mailbox) carry completion-only `DwMessage::I32(MailKinds::RayQueryCompleted, query_id)`.
+- Memory (`RayQueryStore`) stores rich hit/miss outcomes keyed by `RayQueryId`.
+
+Scope deliberately remains bounded:
+
+- No RenderSnapshot-to-Margaret scene translation yet.
+- No picking API yet.
+- No GPU tracing path.
+- No renderer feature coupling.
+
+M73 also demonstrates that board scalar lanes are still enough for completion routing via `query_id`, while rich query payloads can live in request objects and rich results remain in `RayQueryStore`.
