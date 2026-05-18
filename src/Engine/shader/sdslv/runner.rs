@@ -318,6 +318,11 @@ fn EvalExpression(
                 .to_string(),
             Span: None,
         }),
+        SdslvExpression::WhenUtility { .. } => Err(SdslvAssertFailure {
+            Message: "when utility expression execution is not supported in SDSL-V M66 test runner"
+                .to_string(),
+            Span: None,
+        }),
         SdslvExpression::TryPropagate { .. } | SdslvExpression::Unwrap { .. } => {
             Err(SdslvAssertFailure {
                 Message: "fallible expressions are not supported in SDSL-V M58 test execution"

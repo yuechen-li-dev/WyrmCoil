@@ -857,6 +857,7 @@ impl<'a> Validator<'a> {
             SdslvExpression::ArrayLiteral { .. } => TypeRef::Unknown,
             SdslvExpression::Switch { .. } => TypeRef::Unknown,
             SdslvExpression::Match { .. } => TypeRef::Unknown,
+            SdslvExpression::WhenUtility { .. } => TypeRef::Unknown,
             SdslvExpression::TryPropagate { Expression, .. }
             | SdslvExpression::Unwrap { Expression, .. } => {
                 self.ResolveFlowExpressionType(locals, Expression)
@@ -962,6 +963,7 @@ impl<'a> Validator<'a> {
                         );
                         self.ValidateSwitchExpression(shader, locals, init);
                         self.ValidateMatchExpression(shader, locals, init);
+                        self.ValidateWhenUtilityExpression(shader, locals, init);
                         locals.insert(Name.clone(), expected);
                     } else {
                         self.ValidateTypeRefKnown(
@@ -999,6 +1001,7 @@ impl<'a> Validator<'a> {
                     self.ValidateArrayLiteralAgainstExpectedType(shader, locals, Value, &expected);
                     self.ValidateSwitchExpression(shader, locals, Value);
                     self.ValidateMatchExpression(shader, locals, Value);
+                    self.ValidateWhenUtilityExpression(shader, locals, Value);
                 }
                 SdslvStatement::Return { Value } => {
                     self.CheckExpressionCalls(shader, locals, Value, is_fallible_fn, true);
@@ -1024,6 +1027,7 @@ impl<'a> Validator<'a> {
                     }
                     self.ValidateSwitchExpression(shader, locals, Value);
                     self.ValidateMatchExpression(shader, locals, Value);
+                    self.ValidateWhenUtilityExpression(shader, locals, Value);
                 }
                 SdslvStatement::Expression { Value } => {
                     self.CheckExpressionCalls(shader, locals, Value, is_fallible_fn, false);
@@ -1032,6 +1036,7 @@ impl<'a> Validator<'a> {
                     }
                     self.ValidateSwitchExpression(shader, locals, Value);
                     self.ValidateMatchExpression(shader, locals, Value);
+                    self.ValidateWhenUtilityExpression(shader, locals, Value);
                 }
                 SdslvStatement::Empty => {}
                 SdslvStatement::If {
@@ -1396,6 +1401,27 @@ impl<'a> Validator<'a> {
                     self.CheckExpressionCalls(shader, locals, &arm.Value, is_fallible_fn, false);
                 }
             }
+            SdslvExpression::WhenUtility {
+                Options,
+                Cases,
+                ElseValue,
+                ..
+            } => {
+                if let Some(options) = Options {
+                    if let Some(hysteresis) = &options.Hysteresis {
+                        self.CheckExpressionCalls(shader, locals, hysteresis, is_fallible_fn, false);
+                    }
+                    if let Some(min_commit) = &options.MinCommit {
+                        self.CheckExpressionCalls(shader, locals, min_commit, is_fallible_fn, false);
+                    }
+                }
+                for case in Cases {
+                    self.CheckExpressionCalls(shader, locals, &case.Value, is_fallible_fn, false);
+                    self.CheckExpressionCalls(shader, locals, &case.Guard, is_fallible_fn, false);
+                    self.CheckExpressionCalls(shader, locals, &case.Score, is_fallible_fn, false);
+                }
+                self.CheckExpressionCalls(shader, locals, ElseValue, is_fallible_fn, false);
+            }
             _ => {}
         }
     }
@@ -1518,6 +1544,24 @@ impl<'a> Validator<'a> {
                     } else if current == TypeRef::Unknown {
                         current = arm_type;
                     } else if arm_type != TypeRef::Unknown {
+                        return TypeRef::Unknown;
+                    }
+                }
+                current
+            }
+            SdslvExpression::WhenUtility {
+                Cases, ElseValue, ..
+            } => {
+                let mut current = self.ResolveExpressionType(shader, locals, ElseValue);
+                for case in Cases {
+                    let case_type = self.ResolveExpressionType(shader, locals, &case.Value);
+                    if self.AreCompatible(&current, &case_type) {
+                        if current == TypeRef::Unknown {
+                            current = case_type;
+                        }
+                    } else if current == TypeRef::Unknown {
+                        current = case_type;
+                    } else if case_type != TypeRef::Unknown {
                         return TypeRef::Unknown;
                     }
                 }
@@ -1708,6 +1752,49 @@ impl<'a> Validator<'a> {
                     subject_name, variant_name
                 ));
                 break;
+            }
+        }
+    }
+    fn ValidateWhenUtilityExpression(
+        &mut self,
+        shader: &SdslvShaderDecl,
+        locals: &HashMap<String, TypeRef>,
+        expression: &SdslvExpression,
+    ) {
+        let SdslvExpression::WhenUtility { Options, Cases, ElseValue, .. } = expression else { return; };
+        if Cases.is_empty() {
+            self.Err("when utility must contain at least one case");
+            return;
+        }
+        let mut expected_type = self.ResolveExpressionType(shader, locals, ElseValue);
+        for case in Cases {
+            let guard_type = self.ResolveExpressionType(shader, locals, &case.Guard);
+            if guard_type != TypeRef::Unknown && guard_type != TypeRef::Named("bool".to_string()) {
+                self.Err(&format!("when utility guard must be bool; found {}", self.TypeName(&guard_type)));
+            }
+            let score_type = self.ResolveExpressionType(shader, locals, &case.Score);
+            if score_type != TypeRef::Unknown && !self.IsNumericScalarType(&score_type) {
+                self.Err(&format!("when utility score must be numeric scalar; found {}", self.TypeName(&score_type)));
+            }
+            let value_type = self.ResolveExpressionType(shader, locals, &case.Value);
+            if expected_type == TypeRef::Unknown {
+                expected_type = value_type;
+            } else if let Some((_, expected_name, found_name)) = self.TypeMismatch("", &expected_type, &value_type) {
+                self.Err(&format!("when utility result type mismatch: expected {}, found {}", expected_name, found_name));
+            }
+        }
+        if let Some(options) = Options {
+            if let Some(hysteresis) = &options.Hysteresis {
+                let t = self.ResolveExpressionType(shader, locals, hysteresis);
+                if t != TypeRef::Unknown && !self.IsNumericScalarType(&t) {
+                    self.Err(&format!("when utility option 'hysteresis' must be numeric scalar; found {}", self.TypeName(&t)));
+                }
+            }
+            if let Some(min_commit) = &options.MinCommit {
+                let t = self.ResolveExpressionType(shader, locals, min_commit);
+                if t != TypeRef::Unknown && !self.IsIntegerType(&t) {
+                    self.Err(&format!("when utility option 'min_commit' must be integer scalar; found {}", self.TypeName(&t)));
+                }
             }
         }
     }
@@ -2034,6 +2121,28 @@ impl<'a> Validator<'a> {
                     || Arms
                         .iter()
                         .any(|arm| self.IsFallibleExpression(shader, locals, &arm.Value))
+            }
+            SdslvExpression::WhenUtility {
+                Options,
+                Cases,
+                ElseValue,
+                ..
+            } => {
+                let options_fallible = Options.as_ref().is_some_and(|x| {
+                    x.Hysteresis
+                        .as_ref()
+                        .is_some_and(|v| self.IsFallibleExpression(shader, locals, v))
+                        || x.MinCommit
+                            .as_ref()
+                            .is_some_and(|v| self.IsFallibleExpression(shader, locals, v))
+                });
+                options_fallible
+                    || Cases.iter().any(|c| {
+                        self.IsFallibleExpression(shader, locals, &c.Value)
+                            || self.IsFallibleExpression(shader, locals, &c.Guard)
+                            || self.IsFallibleExpression(shader, locals, &c.Score)
+                    })
+                    || self.IsFallibleExpression(shader, locals, ElseValue)
             }
             _ => false,
         }
