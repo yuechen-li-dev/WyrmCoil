@@ -5,10 +5,40 @@ use margaret_core::image::ImageSize;
 use margaret_core::math::{Point3, Vec3};
 
 use super::{
-    CameraRayRequest, CameraRayResult, Ray3, RayHitResult, RayMissResult, RayQueryStore,
-    RayTriangle, RayTriangleScene, RayVec3, TriangleRayQueryRequest,
+    CameraRayRequest, CameraRayResult, Ray3, RayHitResult, RayMissResult, RayQueryRequest,
+    RayQueryRequestStore, RayQueryStore, RayTriangle, RayTriangleScene, RayVec3,
+    TriangleRayQueryRequest,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RayQueryExecutionError {
+    MissingRequest { QueryId: super::RayQueryId },
+}
+
+pub fn ExecuteRayQueryRequestById(
+    query_id: super::RayQueryId,
+    requests: &mut RayQueryRequestStore,
+    results: &mut RayQueryStore,
+    camera_ray_adapter: &MargaretCameraRayAdapter,
+    mailbox: &mut crate::DwMailbox,
+    completion_kind: u32,
+) -> Result<(), RayQueryExecutionError> {
+    let request = requests
+        .Take(query_id)
+        .ok_or(RayQueryExecutionError::MissingRequest { QueryId: query_id })?;
+
+    match request {
+        RayQueryRequest::CameraRay(camera_request) => {
+            camera_ray_adapter.BuildCameraRay(camera_request, results);
+        }
+        RayQueryRequest::TriangleRay { Request, Scene } => {
+            ExecuteTriangleRayQuery(Request, &Scene, results);
+        }
+    }
+
+    mailbox.Enqueue(crate::DwMessage::I32(completion_kind, query_id.0 as i32));
+    Ok(())
+}
 #[derive(Clone, Debug)]
 pub struct MargaretCameraRayAdapter {
     pub Camera: Camera,
