@@ -391,3 +391,26 @@ Boundary reminder:
 - This is still demo/bootstrap visible-geometry picking over `RenderSnapshot`.
 - No scene graph ownership pass, no material bridge pass, and no GPU ray tracing.
 - Future true world/entity picking should introduce richer geometry ownership/registration beyond visible demo primitives.
+
+## M78 world-resource follow-up
+
+M78 introduces an engine-owned `WorldBlackboard` seed (`src/Engine/world.rs`) to hold world/subsystem resources used by ray-query flows.
+
+Current M78 placement:
+
+- `WorldGeometryRegistry` for pickable triangle registration (entity id + stable triangle id + triangle points).
+- `RayQueryRequestStore` and `RayQueryStore` owned as world resources.
+
+Boundary reminder:
+
+- Dunewyrm board remains control working memory (TTL/dirty decision facts).
+- WorldBlackboard remains world-owned typed resources and subsystem stores.
+
+Non-goals unchanged:
+
+- no ECS/archetype work,
+- no scene graph or hierarchy transforms,
+- no renderer pipeline coupling,
+- no full picking/world-entity integration yet.
+
+M79 can now consume `WorldGeometryRegistry` as a world-picking source instead of relying on the temporary RenderSnapshot visible-primitive bridge.
