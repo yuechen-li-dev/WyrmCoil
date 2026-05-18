@@ -359,3 +359,19 @@ Coordinate convention:
 - `ScreenX` and `ScreenY` are normalized viewport coordinates
 - M75 validates both coordinates are finite and inside `[0, 1]`
 - Y-axis mapping remains inherited from the M72 Margaret camera adapter path
+
+## M76 status update
+
+M76 adds a narrow demo/bootstrap geometry bridge from `RenderSnapshot` visible primitives into `Engine::ray::RayTriangleScene`:
+
+- Path used: `RenderSnapshot -> BuildVisiblePrimitiveDemoBatch(...) -> RayTriangleScene`.
+- Coordinate bridge convention: 2D visible primitive vertices `(x, y)` are projected to a fixed ray-query plane `z = -1.0` (configurable option).
+- Deterministic triangle ids are assigned as `triangle_id = render_item_index * 2 + triangle_index_in_item`.
+- Bridge emits deterministic source mappings (`TriangleId -> RenderItemIndex + EntityId + TriangleIndexInItem`) so pick hits can be interpreted back to source render/demo data.
+
+Scope boundary (unchanged):
+
+- This is not a full world/entity picking system.
+- This is not a material bridge or scene-graph bridge.
+- This is not a renderer ownership change.
+- This is not a GPU tracing pass.
