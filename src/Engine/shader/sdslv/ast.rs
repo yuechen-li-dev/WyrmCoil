@@ -311,6 +311,12 @@ pub enum SdslvExpression {
         Arms: Vec<SdslvMatchArm>,
         Span: SdslvSpan,
     },
+    WhenUtility {
+        Options: Option<Box<SdslvUtilityOptions>>,
+        Cases: Vec<SdslvUtilityCase>,
+        ElseValue: Box<SdslvExpression>,
+        Span: SdslvSpan,
+    },
     TryPropagate {
         Expression: Box<SdslvExpression>,
         Span: SdslvSpan,
@@ -325,6 +331,21 @@ pub enum SdslvExpression {
 pub struct SdslvSwitchCase {
     pub Condition: SdslvExpression,
     pub Value: SdslvExpression,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvUtilityOptions {
+    pub Hysteresis: Option<SdslvExpression>,
+    pub MinCommit: Option<SdslvExpression>,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvUtilityCase {
+    pub Value: SdslvExpression,
+    pub Guard: SdslvExpression,
+    pub Score: SdslvExpression,
     pub Span: SdslvSpan,
 }
 

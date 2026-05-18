@@ -282,6 +282,11 @@ impl<'a> HlslEmitter<'a> {
                     })
                     || Self::ExpressionContainsFallibility(ElseValue)
             }
+            SdslvExpression::WhenUtility { Options, Cases, ElseValue, .. } => {
+                Options.as_ref().is_some_and(|x| x.Hysteresis.as_ref().is_some_and(Self::ExpressionContainsFallibility) || x.MinCommit.as_ref().is_some_and(Self::ExpressionContainsFallibility))
+                    || Cases.iter().any(|c| Self::ExpressionContainsFallibility(&c.Value) || Self::ExpressionContainsFallibility(&c.Guard) || Self::ExpressionContainsFallibility(&c.Score))
+                    || Self::ExpressionContainsFallibility(ElseValue)
+            }
             _ => false,
         }
     }
@@ -320,6 +325,10 @@ impl<'a> HlslEmitter<'a> {
             }
             SdslvExpression::Index { Base, Index, .. } => {
                 Self::ExpressionContainsMatch(Base) || Self::ExpressionContainsMatch(Index)
+            }
+            SdslvExpression::WhenUtility { Cases, ElseValue, .. } => {
+                Cases.iter().any(|c| Self::ExpressionContainsMatch(&c.Value) || Self::ExpressionContainsMatch(&c.Guard) || Self::ExpressionContainsMatch(&c.Score))
+                    || Self::ExpressionContainsMatch(ElseValue)
             }
             SdslvExpression::TryPropagate { Expression, .. }
             | SdslvExpression::Unwrap { Expression, .. } => {
@@ -905,6 +914,7 @@ impl<'a> HlslEmitter<'a> {
                 "/* match expression is not supported in this expression context in SDSL-V M64c */"
                     .to_string()
             }
+            SdslvExpression::WhenUtility { .. } => {"/* when utility expression is not supported in this expression context in SDSL-V M66 */".to_string()}
             SdslvExpression::TryPropagate { .. } | SdslvExpression::Unwrap { .. } => {
                 "/* fallible function emission is not implemented in SDSL-V M58 */".to_string()
             }

@@ -1239,6 +1239,9 @@ impl<'a> Parser<'a> {
     }
 
     fn ParsePrimary(&mut self) -> Option<SdslvExpression> {
+        if self.MatchKw(SdslvTokenKind::KeywordWhen) {
+            return self.ParseWhenExpression();
+        }
         if self.MatchKw(SdslvTokenKind::KeywordSwitch) {
             return self.ParseSwitchExpression();
         }
@@ -1321,6 +1324,112 @@ impl<'a> Parser<'a> {
                 None
             }
         }
+    }
+    fn ParseWhenExpression(&mut self) -> Option<SdslvExpression> {
+        let start = self.PrevSpan();
+        if self.MatchKw(SdslvTokenKind::KeywordPolicy) {
+            self.ErrHere("when policy is only valid inside flow/state bodies; use when utility for standalone ranked expressions");
+            return None;
+        }
+        if !self.MatchKw(SdslvTokenKind::KeywordUtility) {
+            self.ErrHere("missing 'utility' after 'when'");
+            return None;
+        }
+        if !self.MatchKw(SdslvTokenKind::LeftBrace) {
+            self.ErrHere("when utility expression missing '{'");
+            return None;
+        }
+        let mut options = None;
+        if !self.Check(SdslvTokenKind::KeywordCase) {
+            options = Some(self.ParseWhenUtilityOptionsFromOpenBrace(start)?);
+            if !self.MatchKw(SdslvTokenKind::LeftBrace) {
+                self.ErrHere("when utility expression missing '{' before cases");
+                return None;
+            }
+        }
+        let mut cases = vec![];
+        let mut else_value = None;
+        while !self.Check(SdslvTokenKind::RightBrace) && self.I < self.Tokens.len() {
+            if self.MatchKw(SdslvTokenKind::KeywordCase) {
+                let case_span = self.PrevSpan();
+                let value = self.ParseExpression().or_else(|| {
+                    self.ErrHere("when utility case missing result expression");
+                    None
+                })?;
+                if !self.MatchKw(SdslvTokenKind::KeywordWhen) {
+                    self.ErrHere("when utility case missing when guard");
+                    return None;
+                }
+                let guard = self.ParseExpression().or_else(|| {
+                    self.ErrHere("when utility case missing guard expression");
+                    None
+                })?;
+                if !self.MatchKw(SdslvTokenKind::KeywordScore) {
+                    self.ErrHere("when utility case missing score");
+                    return None;
+                }
+                let score = self.ParseExpression().or_else(|| {
+                    self.ErrHere("when utility case missing score expression");
+                    None
+                })?;
+                cases.push(SdslvUtilityCase { Value: value, Guard: guard, Score: score, Span: case_span });
+                continue;
+            }
+            if self.MatchKw(SdslvTokenKind::KeywordElse) {
+                else_value = self.ParseExpression().or_else(|| {
+                    self.ErrHere("when utility missing else value expression");
+                    None
+                });
+                continue;
+            }
+            self.ErrHere("expected case or else in when utility expression");
+            return None;
+        }
+        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after when utility expression");
+        if cases.is_empty() {
+            self.ErrHere("when utility expression requires at least one case");
+            return None;
+        }
+        let Some(else_expr) = else_value else {
+            self.ErrHere("when utility expression requires else arm");
+            return None;
+        };
+        let end = self.PrevSpan();
+        Some(SdslvExpression::WhenUtility {
+            Options: options.map(Box::new),
+            Cases: cases,
+            ElseValue: Box::new(else_expr),
+            Span: SdslvSpan { Start: start.Start, End: end.End, Line: start.Line, Column: start.Column },
+        })
+    }
+    fn ParseWhenUtilityOptionsFromOpenBrace(&mut self, start: SdslvSpan) -> Option<SdslvUtilityOptions> {
+        let mut hysteresis = None;
+        let mut min_commit = None;
+        loop {
+            if self.MatchKw(SdslvTokenKind::KeywordHysteresis) {
+                if hysteresis.is_some() {
+                    self.ErrHere("duplicate when utility option 'hysteresis'");
+                    return None;
+                }
+                self.Expect(SdslvTokenKind::Colon, "expected ':' after hysteresis option name");
+                hysteresis = Some(self.ParseExpression()?);
+            } else if self.MatchKw(SdslvTokenKind::KeywordMinCommit) {
+                if min_commit.is_some() {
+                    self.ErrHere("duplicate when utility option 'min_commit'");
+                    return None;
+                }
+                self.Expect(SdslvTokenKind::Colon, "expected ':' after min_commit option name");
+                min_commit = Some(self.ParseExpression()?);
+            } else {
+                self.ErrHere("unknown utility option name");
+                return None;
+            }
+            if self.Check(SdslvTokenKind::RightBrace) {
+                break;
+            }
+        }
+        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after when utility options");
+        Some(SdslvUtilityOptions { Hysteresis: hysteresis, MinCommit: min_commit, Span: SdslvSpan { Start: start.Start, End: self.PrevSpan().End, Line: start.Line, Column: start.Column } })
     }
     fn RecoverStatement(&mut self) {
         while self.I < self.Tokens.len()
@@ -1467,6 +1576,12 @@ impl<'a> Parser<'a> {
             SdslvTokenKind::KeywordSwitch => Some("switch"),
             SdslvTokenKind::KeywordCase => Some("case"),
             SdslvTokenKind::KeywordElse => Some("else"),
+            SdslvTokenKind::KeywordWhen => Some("when"),
+            SdslvTokenKind::KeywordUtility => Some("utility"),
+            SdslvTokenKind::KeywordPolicy => Some("policy"),
+            SdslvTokenKind::KeywordScore => Some("score"),
+            SdslvTokenKind::KeywordHysteresis => Some("hysteresis"),
+            SdslvTokenKind::KeywordMinCommit => Some("min_commit"),
             SdslvTokenKind::KeywordIf => Some("if"),
             SdslvTokenKind::KeywordRecord => Some("record"),
             SdslvTokenKind::KeywordStream => Some("stream"),
