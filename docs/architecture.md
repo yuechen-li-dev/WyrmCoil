@@ -145,3 +145,18 @@ This split is intentional:
 ### Forward seam
 
 M78 prepares the M79 bridge where world geometry can be translated into a ray-query scene. Camera/input resources remain future work.
+
+## WorldBlackboard picking resources (M80)
+
+M80 extends `WorldBlackboard` with minimal picking resources:
+
+- `Camera: Option<WorldCameraResource>`
+- `Input: WorldInputResource`
+
+These resources are world-owned picking inputs only. This is not a full camera system, not window-loop input integration, and not renderer camera ownership.
+
+`PickWorldBlackboard(...)` composes:
+
+`WorldBlackboard.Camera + WorldBlackboard.Input + WorldBlackboard.Geometry -> WorldPickResult`
+
+`WorldBlackboard::Clear()` currently resets all blackboard resources, including camera/input, as a seed-level full reset helper.
