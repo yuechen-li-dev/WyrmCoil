@@ -300,3 +300,8 @@ Boundary reminder:
 - This is not GPU texture creation yet.
 - This is not sampler/bind-group/material wiring yet.
 - Completion mailbox remains id-only; rich payload remains in stores/plans.
+
+
+## Texture upload resource follow-on seam (M86)
+
+After M85's plain-data `TextureUploadPlan`, M86 adds an optional backend adapter seam for `wgpu` texture descriptors/resources. The actuator pattern boundary remains unchanged: request/result payloads stay world-owned and mailbox completion remains id-only, while backend-specific GPU objects are created only by caller-owned backend helpers.

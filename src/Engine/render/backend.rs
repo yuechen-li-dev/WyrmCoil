@@ -19,6 +19,7 @@ pub mod wgpu {
     pub use crate::Engine::render::wgpu_pipeline::*;
     pub use crate::Engine::render::wgpu_shader_module::*;
     pub use crate::Engine::render::wgpu_surface::*;
+    pub use crate::Engine::render::wgpu_texture::*;
     pub use crate::Engine::render::wgpu_wgsl_pipeline::*;
 }
 
