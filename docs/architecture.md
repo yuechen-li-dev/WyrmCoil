@@ -208,3 +208,18 @@ M85 adds a deterministic CPU-to-upload boundary for images after M84 decode:
 Current M85 scope uses `TexturePixelFormat::Rgba8UnormSrgb` with `TextureUsageIntent::SampledColor` for decoded color textures.
 
 Non-goals in M85 remain unchanged: no GPU texture resource creation, no sampler/bind-group/material path, and no async/deferred upload jobs.
+
+
+## Asset `wgpu` texture resource seam (M86)
+
+M86 extends the staged asset texture path with an optional backend-specific helper:
+
+`TextureUploadPlan -> BuildWgpuTextureUploadDesc(...) -> CreateWgpuTextureResource(...)`
+
+Boundary rules remain explicit:
+
+- `TextureUploadPlan` stays backend-neutral and plain data.
+- `wgpu` types are isolated in backend module seams.
+- Real texture creation/upload requires caller-provided `wgpu::Device` and `wgpu::Queue`.
+- Default test coverage for descriptor mapping remains GPU-free.
+- No sampler/bind group/material integration yet.

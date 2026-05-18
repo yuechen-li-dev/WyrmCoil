@@ -208,3 +208,13 @@ M85 adds the CPU-image-to-texture upload boundary as a deterministic plain-data 
 - Current format choice is `Rgba8UnormSrgb` for decoded color textures.
 - Optional helper accepts `AssetResult` and rejects non-decoded variants with structured error.
 - No GPU texture creation, sampler policy, bind groups, material integration, async jobs, or hot reload in M85.
+
+
+## Asset texture resource seam status (M86)
+
+M86 adds an optional `wgpu` texture resource seam after the M85 upload plan boundary.
+
+- `TextureUploadPlan` remains backend-neutral plain data.
+- `BuildWgpuTextureUploadDesc(...)` maps plan metadata to deterministic `wgpu` texture/upload descriptor data.
+- `CreateWgpuTextureResource(...)` optionally creates a `wgpu::Texture` + default `TextureView` using caller-provided `Device`/`Queue`.
+- Default tests remain GPU-free; no sampler, bind group, material system, or render-loop textured draw integration is added in M86.
