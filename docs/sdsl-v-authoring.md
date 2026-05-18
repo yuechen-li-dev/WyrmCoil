@@ -742,3 +742,13 @@ Still not available in M64c:
 - Payload-carrying enum variants.
 - Fallible `match ok/err` forms.
 - fallible match lowering
+
+
+### M66b when utility HLSL lowering
+
+- Optionless `when utility` now lowers in bounded statement contexts: local initializer, assignment RHS, and return expression.
+- Lowering initializes the result from `else`, tracks `__utility_hasN` + `__utility_scoreN`, and updates only when an eligible case score is strictly greater than the current best score.
+- Strict `>` preserves first-tie-wins behavior by source order.
+- Stateful utility options (`hysteresis`, `min_commit`) remain parsed/validated but are rejected during HLSL emission with: `stateful when utility options are not lowered in SDSL-V M66b`.
+- `when policy` remains flow/state-only and is not part of shader-expression lowering.
+- Nested/general expression contexts for `when utility` remain unsupported in M66b and emit the bounded-context unsupported diagnostic.
