@@ -2,6 +2,29 @@
 name = "wyrmcoil"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+
+[workspace]
+members = [
+    ".",
+    "src/Margaret/margaret-core",
+    "src/Margaret/margaret-image",
+    "src/Margaret/margaret-testutil",
+    "src/Margaret/margaret-cpu",
+    "src/Margaret/margaret-cli",
+    "src/Margaret/margaret-vk",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+margaret-core = { path = "src/Margaret/margaret-core" }
+margaret-image = { path = "src/Margaret/margaret-image" }
+margaret-testutil = { path = "src/Margaret/margaret-testutil" }
+margaret-cpu = { path = "src/Margaret/margaret-cpu" }
 
 [dependencies]
 winit = "0.30"

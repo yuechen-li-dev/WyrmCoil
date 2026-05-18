@@ -5,11 +5,11 @@ pub struct ImageSize {
 }
 
 impl ImageSize {
-    pub const fn new(width: u32, height: u32) -> Self {
+    pub const fn New(width: u32, height: u32) -> Self {
         Self { width, height }
     }
 
-    pub const fn pixel_count(self) -> u64 {
+    pub const fn PixelCount(self) -> u64 {
         self.width as u64 * self.height as u64
     }
 }
@@ -21,7 +21,7 @@ pub enum OutputPixelFormat {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderMetadata {
-    pub backend_name: String,
+    pub BackendName: String,
     pub scene_name: String,
     pub image_size: ImageSize,
     pub pixel_format: OutputPixelFormat,

@@ -144,3 +144,22 @@ let artifact = BuildHlslShaderArtifact(
     ],
 )?;
 ```
+
+
+## Margaret subsystem status (M71b)
+
+Margaret is now included as a Cargo workspace subsystem under `src/Margaret/`:
+
+- `margaret-core`
+- `margaret-image`
+- `margaret-testutil`
+- `margaret-cpu`
+- `margaret-cli`
+- `margaret-vk` (scaffold)
+
+Boundary reminder:
+
+- `Engine::render` remains the raster/window/backend path.
+- Margaret is the ray/reference/query subsystem seed.
+- Camera/ray-query feature bridges are not integrated yet.
+- GPU ray tracing remains deferred; `margaret-vk` is currently scaffold-level.

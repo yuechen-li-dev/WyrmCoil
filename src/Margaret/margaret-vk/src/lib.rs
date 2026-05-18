@@ -4,15 +4,15 @@ use margaret_core::image::ImageSize;
 pub struct VulkanRendererBackend;
 
 impl VulkanRendererBackend {
-    pub const fn new() -> Self {
+    pub const fn New() -> Self {
         Self
     }
 
-    pub const fn backend_name(&self) -> &'static str {
+    pub const fn BackendName(&self) -> &'static str {
         "vulkan"
     }
 
-    pub fn supports_size(&self, image_size: ImageSize) -> bool {
+    pub fn SupportsSize(&self, image_size: ImageSize) -> bool {
         image_size.width > 0 && image_size.height > 0
     }
 }
@@ -24,9 +24,9 @@ mod tests {
 
     #[test]
     fn scaffold_accepts_non_zero_image_sizes() {
-        let backend = VulkanRendererBackend::new();
+        let backend = VulkanRendererBackend::New();
 
-        assert!(backend.supports_size(ImageSize::new(640, 480)));
-        assert!(!backend.supports_size(ImageSize::new(0, 480)));
+        assert!(backend.SupportsSize(ImageSize::New(640, 480)));
+        assert!(!backend.SupportsSize(ImageSize::New(0, 480)));
     }
 }

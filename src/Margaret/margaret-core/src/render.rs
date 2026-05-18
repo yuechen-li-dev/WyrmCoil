@@ -5,19 +5,19 @@ pub enum RenderMode {
 }
 
 impl RenderMode {
-    pub const fn as_str(self) -> &'static str {
+    pub const fn AsStr(self) -> &'static str {
         match self {
-            Self::Debug(mode) => mode.as_str(),
+            Self::Debug(mode) => mode.AsStr(),
             Self::Lit => "lit",
         }
     }
 
-    pub fn parse(name: &str) -> Option<Self> {
+    pub fn Parse(name: &str) -> Option<Self> {
         if name == "lit" {
             return Some(Self::Lit);
         }
 
-        RenderDebugMode::parse(name).map(Self::Debug)
+        RenderDebugMode::Parse(name).map(Self::Debug)
     }
 }
 
@@ -29,7 +29,7 @@ pub enum RenderDebugMode {
 }
 
 impl RenderDebugMode {
-    pub const fn as_str(self) -> &'static str {
+    pub const fn AsStr(self) -> &'static str {
         match self {
             Self::GeometricNormals => "normals",
             Self::FlatAlbedo => "albedo",
@@ -37,7 +37,7 @@ impl RenderDebugMode {
         }
     }
 
-    pub fn parse(name: &str) -> Option<Self> {
+    pub fn Parse(name: &str) -> Option<Self> {
         match name {
             "normals" => Some(Self::GeometricNormals),
             "albedo" => Some(Self::FlatAlbedo),
@@ -54,7 +54,7 @@ pub struct RenderSettings {
 }
 
 impl RenderSettings {
-    pub const fn new(mode: RenderMode, depth_max_distance: f32) -> Self {
+    pub const fn New(mode: RenderMode, depth_max_distance: f32) -> Self {
         Self {
             mode,
             depth_max_distance,

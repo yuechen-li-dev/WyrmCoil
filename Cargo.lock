@@ -743,6 +743,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "margaret-cli"
+version = "0.1.0"
+dependencies = [
+ "margaret-core",
+ "margaret-cpu",
+ "margaret-image",
+]
+
+[[package]]
+name = "margaret-core"
+version = "0.1.0"
+
+[[package]]
+name = "margaret-cpu"
+version = "0.1.0"
+dependencies = [
+ "margaret-core",
+ "margaret-image",
+ "margaret-testutil",
+]
+
+[[package]]
+name = "margaret-image"
+version = "0.1.0"
+dependencies = [
+ "margaret-core",
+]
+
+[[package]]
+name = "margaret-testutil"
+version = "0.1.0"
+dependencies = [
+ "margaret-core",
+]
+
+[[package]]
+name = "margaret-vk"
+version = "0.1.0"
+dependencies = [
+ "margaret-core",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

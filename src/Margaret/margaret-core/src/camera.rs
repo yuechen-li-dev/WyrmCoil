@@ -14,7 +14,7 @@ pub struct Camera {
 }
 
 impl Camera {
-    pub fn new(
+    pub fn New(
         name: impl Into<String>,
         position: Point3,
         forward: Vec3,
@@ -30,11 +30,11 @@ impl Camera {
         }
     }
 
-    pub fn ray_for_pixel(&self, image_size: ImageSize, pixel_x: u32, pixel_y: u32) -> Ray {
-        self.ray_for_subpixel(image_size, pixel_x, pixel_y, 0.5, 0.5)
+    pub fn RayForPixel(&self, image_size: ImageSize, pixel_x: u32, pixel_y: u32) -> Ray {
+        self.RayForSubpixel(image_size, pixel_x, pixel_y, 0.5, 0.5)
     }
 
-    pub fn ray_for_subpixel(
+    pub fn RayForSubpixel(
         &self,
         image_size: ImageSize,
         pixel_x: u32,
@@ -56,23 +56,23 @@ impl Camera {
             "camera pixel_y must be in bounds"
         );
         assert!(
-            self.forward.length_squared() > CAMERA_EPSILON,
+            self.forward.LengthSquared() > CAMERA_EPSILON,
             "camera forward vector must be non-zero"
         );
         assert!(
-            self.up.length_squared() > CAMERA_EPSILON,
+            self.up.LengthSquared() > CAMERA_EPSILON,
             "camera up vector must be non-zero"
         );
 
-        let forward = self.forward.normalized();
-        let right_unnormalized = forward.cross(self.up);
+        let forward = self.forward.Normalized();
+        let right_unnormalized = forward.Cross(self.up);
         assert!(
-            right_unnormalized.length_squared() > CAMERA_EPSILON,
+            right_unnormalized.LengthSquared() > CAMERA_EPSILON,
             "camera forward and up vectors must not be parallel"
         );
 
-        let right = right_unnormalized.normalized();
-        let camera_up = right.cross(forward).normalized();
+        let right = right_unnormalized.Normalized();
+        let camera_up = right.Cross(forward).Normalized();
 
         let aspect_ratio = image_size.width as f32 / image_size.height as f32;
         let half_height = (self.vertical_fov_degrees.to_radians() * 0.5).tan();
@@ -93,8 +93,8 @@ impl Camera {
         let screen_x = (2.0 * pixel_center_x - 1.0) * half_width;
         let screen_y = (1.0 - 2.0 * pixel_center_y) * half_height;
 
-        let direction = (forward + right * screen_x + camera_up * screen_y).normalized();
-        Ray::new(self.position, direction)
+        let direction = (forward + right * screen_x + camera_up * screen_y).Normalized();
+        Ray::New(self.position, direction)
     }
 }
 
@@ -107,16 +107,16 @@ mod tests {
     #[test]
     #[should_panic(expected = "camera image width must be non-zero")]
     fn ray_for_pixel_rejects_zero_width() {
-        let camera = Camera::new("main", Point3::ORIGIN, -Vec3::Z, Vec3::Y, 45.0);
+        let camera = Camera::New("main", Point3::ORIGIN, -Vec3::Z, Vec3::Y, 45.0);
 
-        let _ = camera.ray_for_pixel(ImageSize::new(0, 1), 0, 0);
+        let _ = camera.RayForPixel(ImageSize::New(0, 1), 0, 0);
     }
 
     #[test]
     #[should_panic(expected = "camera forward and up vectors must not be parallel")]
     fn ray_for_pixel_rejects_parallel_forward_and_up() {
-        let camera = Camera::new("main", Point3::ORIGIN, Vec3::Y, Vec3::Y, 45.0);
+        let camera = Camera::New("main", Point3::ORIGIN, Vec3::Y, Vec3::Y, 45.0);
 
-        let _ = camera.ray_for_pixel(ImageSize::new(1, 1), 0, 0);
+        let _ = camera.RayForPixel(ImageSize::New(1, 1), 0, 0);
     }
 }

@@ -13,7 +13,7 @@ pub struct SceneDescription {
 }
 
 impl SceneDescription {
-    pub fn new(name: impl Into<String>, camera: Camera) -> Self {
+    pub fn New(name: impl Into<String>, camera: Camera) -> Self {
         Self {
             name: name.into(),
             camera,
@@ -32,7 +32,7 @@ pub struct SceneObject {
 }
 
 impl SceneObject {
-    pub fn new(name: impl Into<String>, geometry: Geometry, material_id: MaterialId) -> Self {
+    pub fn New(name: impl Into<String>, geometry: Geometry, material_id: MaterialId) -> Self {
         Self {
             name: name.into(),
             geometry,
@@ -52,31 +52,31 @@ pub struct Triangle {
 }
 
 impl Triangle {
-    pub const fn new(a: Point3, b: Point3, c: Point3) -> Self {
+    pub const fn New(a: Point3, b: Point3, c: Point3) -> Self {
         Self {
             vertices: [a, b, c],
         }
     }
 
-    pub fn geometric_normal(&self) -> Vec3 {
+    pub fn GeometricNormal(&self) -> Vec3 {
         let edge_ab = self.vertices[1] - self.vertices[0];
         let edge_ac = self.vertices[2] - self.vertices[0];
-        edge_ab.cross(edge_ac).normalized()
+        edge_ab.Cross(edge_ac).Normalized()
     }
 
-    pub fn area(&self) -> f32 {
+    pub fn Area(&self) -> f32 {
         let edge_ab = self.vertices[1] - self.vertices[0];
         let edge_ac = self.vertices[2] - self.vertices[0];
-        edge_ab.cross(edge_ac).length() * 0.5
+        edge_ab.Cross(edge_ac).Length() * 0.5
     }
 
-    pub fn centroid(&self) -> Point3 {
-        let sum = Vec3::new(
+    pub fn Centroid(&self) -> Point3 {
+        let sum = Vec3::New(
             self.vertices[0].x + self.vertices[1].x + self.vertices[2].x,
             self.vertices[0].y + self.vertices[1].y + self.vertices[2].y,
             self.vertices[0].z + self.vertices[1].z + self.vertices[2].z,
         );
 
-        Point3::new(sum.x / 3.0, sum.y / 3.0, sum.z / 3.0)
+        Point3::New(sum.x / 3.0, sum.y / 3.0, sum.z / 3.0)
     }
 }
