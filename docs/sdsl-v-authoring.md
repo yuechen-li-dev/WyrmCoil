@@ -297,14 +297,18 @@ Current limitations:
 `.sdslvtest` is the SDSL-V test-file extension.
 
 Current syntax/validation:
-- `[Fact]` attribute is supported.
-- `[Theory]` / `[Case]` are not supported.
+- `[Fact]` single-case attribute is supported.
+- `[Theory]` with one or more `[InlineData(...)]` rows is supported.
 - assertions currently supported:
   - `Assert.True(condition, "message")`
   - `Assert.Equals(actual, expected, "message")`
   - `Assert.Near(actual, expected, tolerance, "message")`
 - custom string message is mandatory for supported assert calls.
 - non-assert expression statements are rejected by validation.
+- `[Fact]` and `[Theory]` cannot be combined on the same test function.
+- `[InlineData]` is only valid on `[Theory]` tests.
+- theory rows require arity/type compatibility with test parameters.
+- supported inline literal kinds for `[InlineData(...)]`: `i32`, `f32`/`float`, `bool` (string literals are rejected for parameter binding in current runner rules).
 
 Small runnable test example:
 
@@ -322,6 +326,7 @@ fn BasicArithmeticAndAsserts() {
 
 Harness note:
 - compiler development harness remains Rust `cargo test`; there is no reflection-based file discovery runtime for `.sdslvtest` yet.
+- theory row execution is CPU-side only and runs each row as an independent case (`TestName[0]`, `TestName[1]`, ...).
 
 ## 9) Test runner execution subset
 

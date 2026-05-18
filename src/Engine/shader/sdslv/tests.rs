@@ -1456,6 +1456,32 @@ fn ParseTestSourceInvalidCases() {
     assert!(ParseTestSource("[Fact fn A() {}").is_err());
     assert!(ParseTestSource("[Fact]").is_err());
     assert!(ParseTestSource("[Fact] fn A() { Assert.True(, \"x\"); }").is_err());
+    assert!(
+        ParseTestSource(
+            "[Theory][InlineData(1,2] fn A(a: i32, b: i32) { Assert.True(true, \"x\"); }"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn ParseTestSourceTheoryAndInlineDataRows() {
+    let src = r#"
+[Theory]
+[InlineData(1, 2, 3)]
+[InlineData(4, 5, 9)]
+[InlineData(1.5, 1.0)]
+[InlineData(true, false)]
+fn Mixed(a: i32, b: i32, expected: i32) {
+    Assert.Equals(a + b, expected, "sum should match");
+}
+"#;
+    let module = ParseTestSource(src).unwrap();
+    assert_eq!(module.Tests.len(), 1);
+    let attributes = &module.Tests[0].Attributes;
+    assert_eq!(attributes[0].Name, "Theory");
+    assert_eq!(attributes[1].Name, "InlineData");
+    assert_eq!(attributes[1].Arguments.len(), 3);
 }
 
 #[test]
@@ -1525,6 +1551,70 @@ fn A() { Assert.True(true, "ok"); }
         d.iter()
             .any(|x| x.Message.contains("non-assert expression statement"))
     );
+}
+
+#[test]
+fn ValidateTestSourceTheoryRules() {
+    let valid = r#"
+[Theory]
+[InlineData(0.0, 0.0)]
+[InlineData(1.5, 1.0)]
+fn ClampWorks(input: f32, expected: f32) {
+    Assert.Near(clamp(input, 0.0, 1.0), expected, 0.0001, "clamp should saturate the input");
+}
+"#;
+    assert!(ValidateTestSource(valid).is_ok());
+
+    let missing_data =
+        ValidateTestSource("[Theory] fn MissingData(a: i32) { Assert.True(true, \"x\"); }")
+            .unwrap_err();
+    assert!(missing_data.iter().any(|x| {
+        x.Message
+            .contains("[Theory] requires at least one [InlineData(...)] row")
+    }));
+
+    let no_params =
+        ValidateTestSource("[Theory][InlineData(1)] fn NoParams() { Assert.True(true, \"x\"); }")
+            .unwrap_err();
+    assert!(no_params.iter().any(|x| {
+        x.Message
+            .contains("[Theory] test must declare parameters matching InlineData rows")
+    }));
+
+    let inline_on_fact =
+        ValidateTestSource("[Fact][InlineData(1)] fn Bad() { Assert.True(true, \"x\"); }")
+            .unwrap_err();
+    assert!(inline_on_fact.iter().any(|x| {
+        x.Message
+            .contains("[InlineData] is only valid on [Theory] tests")
+    }));
+
+    let both = ValidateTestSource(
+        "[Fact][Theory][InlineData(1)] fn Bad(a: i32) { Assert.True(true, \"x\"); }",
+    )
+    .unwrap_err();
+    assert!(both.iter().any(|x| {
+        x.Message
+            .contains("test function cannot have both [Fact] and [Theory]")
+    }));
+
+    let arity = ValidateTestSource(
+        "[Theory][InlineData(1,2)] fn Bad(a: i32) { Assert.True(true, \"x\"); }",
+    )
+    .unwrap_err();
+    assert!(arity.iter().any(|x| {
+        x.Message
+            .contains("InlineData arity mismatch: expected 1 values, found 2")
+    }));
+
+    let type_mismatch = ValidateTestSource(
+        "[Theory][InlineData(true)] fn Bad(a: i32) { Assert.True(true, \"x\"); }",
+    )
+    .unwrap_err();
+    assert!(type_mismatch.iter().any(|x| {
+        x.Message
+            .contains("InlineData type mismatch for parameter 'a': expected i32, found bool")
+    }));
 }
 
 #[test]
@@ -1626,6 +1716,54 @@ fn UnsupportedCall() {
             .Message
             .contains("unsupported function call")
     );
+}
+
+#[test]
+fn RunTestSourceExecutesTheoryRowsAndReportsPerRowFailures() {
+    let src = r#"
+[Theory]
+[InlineData(1, 2, 3)]
+[InlineData(2, 2, 5)]
+[InlineData(3, 3, 6)]
+fn AddWorks(a: i32, b: i32, expected: i32) {
+    Assert.Equals(a + b, expected, "sum should match expected value");
+}
+"#;
+    let result = RunTestSource(src);
+    assert!(!result.Passed);
+    assert_eq!(
+        result.Tests.len(),
+        3,
+        "expected one result per InlineData row"
+    );
+    assert_eq!(result.Tests[0].Name, "AddWorks[0]");
+    assert!(result.Tests[0].Passed);
+    assert_eq!(result.Tests[1].Name, "AddWorks[1]");
+    assert!(!result.Tests[1].Passed);
+    assert!(result.Tests[1].Failures[0].Message.contains("row 1"));
+    assert!(
+        result.Tests[2].Passed,
+        "later rows should continue executing"
+    );
+}
+
+#[test]
+fn RunTestSourceTheoryBindsParameterValues() {
+    let src = r#"
+[Theory]
+[InlineData(0.0, 0.0)]
+[InlineData(0.5, 0.5)]
+[InlineData(1.5, 1.0)]
+fn SaturateClampsToUnit(input: f32, expected: f32) {
+    Assert.Near(saturate(input), expected, 0.0001, "saturate should clamp into [0, 1]");
+}
+"#;
+    let result = RunTestSource(src);
+    assert!(
+        result.Passed,
+        "theory rows should bind parameters for evaluation"
+    );
+    assert_eq!(result.Tests.len(), 3);
 }
 
 #[test]
