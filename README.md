@@ -165,3 +165,15 @@ Boundary reminder:
 - Margaret is the ray/reference/query subsystem seed.
 - Camera/ray-query feature bridges are not integrated yet.
 - GPU ray tracing remains deferred; `margaret-vk` is currently scaffold-level.
+
+
+## Actuator subsystem pattern status (M82)
+
+WyrmCoil now documents the reusable actuator-subsystem pattern at `docs/actuator-subsystems.md`, with Margaret world picking (M81) as the canonical worked example.
+
+Boundary summary:
+
+- Dunewyrm remains the control brain.
+- Acts/mailbox messages remain small and often id-only.
+- Rich request/result payloads live in world-owned stores/resources.
+- Mailbox completion is staged and consumed on the next tick.
