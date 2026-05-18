@@ -270,3 +270,16 @@ M83 adds the second worked actuator-subsystem example after Margaret world picki
 - Missing request is an execution error with no completion staged.
 - Existing request with invalid path, missing file, or IO failure stores `AssetResult::LoadFailed(...)` and stages completion.
 - M83 supports immediate synchronous byte loading only; no decode, no upload, no hot reload, no async/deferred execution.
+
+
+## Asset image decode stage (M84)
+
+M84 extends the M83 asset actuator seed with decode requests/results.
+
+- `WorldBlackboard.Assets.Requests` now supports `AssetRequest::DecodeImage` with owned bytes.
+- Utility planning now includes `ImmediateImageDecode` in addition to byte-load planning.
+- Execution stores either `AssetResult::ImageDecoded` (CPU RGBA8 payload) or `AssetResult::DecodeFailed` (structured kind).
+- Completion mailbox remains id-only: `DwMessage::I32(AssetRequestCompleted, request_id)`.
+- Deterministic decode surface in M84 is P6 PPM only (8-bit max value 255).
+
+Scope boundaries remain unchanged: no GPU texture upload, no texture/material integration, no async jobs, and no hot reload.
