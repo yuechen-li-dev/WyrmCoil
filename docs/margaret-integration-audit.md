@@ -1,0 +1,275 @@
+# M71a — Margaret Integration Audit / Plan Pass
+
+## Milestone outcome
+
+**Outcome A — success.**
+
+This pass audited the imported Margaret subtree, ran the requested build/test/style commands, and produced an evidence-based M71b+ integration plan without refactoring Margaret or changing renderer behavior.
+
+## 1) Current Margaret module/crate map
+
+Observed subtree:
+
+```text
+src/Margaret/
+  margaret-cli/
+  margaret-core/
+  margaret-cpu/
+  margaret-image/
+  margaret-testutil/
+  margaret-vk/
+```
+
+### `margaret-core`
+
+- Manifest: present at `src/Margaret/margaret-core/Cargo.toml`.
+- Purpose: shared ray/camera/scene/material/image/render math/types.
+- Public module exports in `src/lib.rs`: `camera`, `color`, `image`, `light`, `material`, `math`, `ray`, `render`, `scene`.
+- Key public types:
+  - Camera: `Camera` + `ray_for_pixel` / `ray_for_subpixel`.
+  - Rays/hits: `Ray`, `HitRecord`.
+  - Scene: `SceneDescription`, `SceneObject`, `Geometry::TriangleMesh`, `Triangle`.
+  - Materials/lights: `MaterialDescription`, `MaterialKind`, `Light`.
+  - Render config: `RenderMode`, `RenderDebugMode`, `RenderSettings`.
+- Dependencies in manifest: none listed explicitly (std + workspace metadata only).
+- Build status: source is present and appears complete, but crate is **not currently included in root workspace**.
+- Tests: has inline tests (e.g., camera panic guards).
+
+### `margaret-cpu`
+
+- Manifest: present at `src/Margaret/margaret-cpu/Cargo.toml`.
+- Purpose: CPU ray/path tracing backend and triangle intersection/shading path.
+- Main API: `CpuRendererBackend` (`new`, `backend_name`, `describe_render`, `render`).
+- Uses `margaret-core`, `margaret-image`, dev-dep `margaret-testutil`.
+- Build status: implementation appears substantial and self-contained, but **not in root workspace build graph** yet.
+- Tests: very large inline test section in `src/lib.rs` (regression scenes and shading checks).
+
+### `margaret-image`
+
+- Manifest: present.
+- Purpose: owned image buffer and PPM output helper.
+- Main API: `OwnedImage` with `new`, `get_pixel`, `set_pixel`, `write_ppm`.
+- Dependency: `margaret-core`.
+- Build status: not included in root workspace.
+- Tests: no inline tests seen in this file.
+
+### `margaret-testutil`
+
+- Manifest: present.
+- Purpose: sample scene/image helpers for tests.
+- Main API: `sample_image_size`, `sample_scene`.
+- Dependency: `margaret-core`.
+- Build status: not included in root workspace.
+- Tests: no inline tests in this file.
+
+### `margaret-vk`
+
+- Manifest: present.
+- Purpose: Vulkan backend scaffold placeholder.
+- Main API: `VulkanRendererBackend` with `new`, `backend_name`, `supports_size`.
+- Dependency: `margaret-core` only.
+- Build status: not included in root workspace.
+- Tests: inline scaffold test validates non-zero size behavior.
+
+### `margaret-cli`
+
+- Manifest: present.
+- Purpose: executable integration path for hardcoded scene rendering to PPM.
+- Entry points: `run()` in `src/lib.rs` and binary `main()` in `src/main.rs`.
+- Dependencies: `margaret-core`, `margaret-cpu`, `margaret-image`.
+- Build status: not included in root workspace.
+- Tests: no separate test module observed in CLI file.
+
+## 2) Workspace integration status
+
+### Root workspace state (current)
+
+Root `Cargo.toml` defines a single package (`wyrmcoil`) and does **not** declare a `[workspace]` table nor Margaret members.
+
+### Evidence from metadata/check/test
+
+- `cargo metadata --no-deps` reports only `wyrmcoil` as workspace member.
+- `cargo check -q --workspace` succeeds but only checks the existing single-crate workspace (WyrmCoil).
+- `cargo test -q --workspace` succeeds but only runs WyrmCoil tests/examples/doc-test units.
+
+### Integration implications
+
+- Margaret crate manifests rely on `*.workspace = true` keys (`version.workspace`, `edition.workspace`, `license.workspace`, and workspace dependency links), so enabling them as members will require adding a real workspace root configuration that provides these fields.
+- At M71a time, Margaret paths/manifests are present but not wired into the active build graph.
+
+## 3) Margaret capability inventory
+
+### Present capabilities (evidence-based)
+
+- **Camera ray generation**: pixel/subpixel ray creation with FOV/aspect and forward/up basis (`Camera::ray_for_pixel`, `ray_for_subpixel`).
+- **Ray + hit data model**: `Ray`, `HitRecord`.
+- **Geometry**: triangle meshes (`Geometry::TriangleMesh`, `Triangle`).
+- **Materials**: diffuse, specular reflector, dielectric (`MaterialKind`).
+- **Lighting model**: directional light type in core plus emissive-surface handling in CPU renderer.
+- **CPU rendering**:
+  - debug modes (normals, albedo, depth),
+  - lit path tracing mode with sampling/bounces,
+  - triangle intersection path,
+  - direct + indirect contributions.
+- **Image output**: in-memory RGBA8 image and `.ppm` writer.
+- **CLI behavior**: argument parsing, mode/size/output selection, hardcoded Cornell-style scene generation, prints render metadata summary.
+- **Test utilities**: sample scene + size helpers.
+- **Vulkan seam**: scaffold backend type with trivial capability check.
+
+### Not observed in current imported code
+
+- BVH / acceleration structure module or explicit spatial index in Margaret subtree.
+- Sphere primitives in scene geometry enum.
+- GPU ray tracing implementation in `margaret-vk` (only scaffold currently).
+
+## 4) Camera audit
+
+Current Margaret camera API:
+
+- Constructor inputs are **position + forward + up + vertical FOV**, not explicit look-at target.
+- Aspect is derived from requested image size at ray-generation time.
+- Rays are generated for integer pixel centers and subpixel offsets (`subpixel_x/y` in `[0,1]`).
+- Screen mapping uses:
+  - `screen_x = (2u - 1) * half_width`
+  - `screen_y = (1 - 2v) * half_height`
+  which implies image-space Y-down input (pixel_y increases downward) remapped into camera-up positive Y in view space.
+- Basis construction uses `right = forward.cross(up)` and `camera_up = right.cross(forward)`.
+
+Handedness inference:
+
+- With default-style values (`forward = -Z`, `up = +Y`), computed right becomes `+X`; this is consistent with a right-handed world/camera convention in practice.
+
+Compatibility assessment with WyrmCoil now:
+
+- WyrmCoil raster path currently has no integrated camera/projection system in golden path docs; Margaret camera is therefore not directly conflicting yet.
+- Recommendation: keep Margaret camera Margaret-owned in M71b/M72 and add a bridge adapter later (avoid immediate Engine camera promotion).
+
+## 5) Ray-query integration seam (proposed, not implemented)
+
+Recommended near-term seam:
+
+```text
+Engine/Demo RenderSnapshot or primitive set
+  -> Margaret bridge translator
+  -> Margaret scene + camera ray query
+  -> query hit/debug outputs consumed by Demo/editor tooling
+```
+
+Suggested first bridge-owned types (in WyrmCoil layer, not Margaret core rewrite):
+
+- `MargaretRayQueryRequest` (camera parameters + screen coord).
+- `MargaretRayQueryHit` (hit/miss + distance + position + normal + object/material ids).
+- `MargaretSceneBridge` / `BuildMargaretSceneFromRenderSnapshot`.
+- `MargaretCameraBridge` for mapping WyrmCoil camera inputs to Margaret `Camera`.
+
+## 6) Relationship to WyrmCoil renderer
+
+Boundary recommendation:
+
+- `Engine::render` remains raster/window/backend flow.
+- Margaret remains ray/reference/query subsystem.
+- Do not route WyrmCoil present loop through Margaret CPU renderer.
+- Use Margaret as supplemental subsystem for picking, debug probes, and reference validation.
+
+## 7) Future Vulkan/GPU ray seam (`margaret-vk`)
+
+Findings:
+
+- `margaret-vk` is currently a **placeholder scaffold**, not a Vulkan ray tracing backend.
+- No `ash`/`wgpu`/`vulkano` dependency usage appears in this crate manifest.
+- Current code compiles in principle as plain Rust if wired, but provides no GPU ray features.
+
+Recommendation:
+
+- Keep GPU ray tracing deferred.
+- If Margaret enters workspace in M71b, `margaret-vk` can remain included only as scaffold **or** be gated as optional member until real backend work begins, to avoid milestone confusion.
+
+## 8) `wyrmfmt` style audit
+
+Commands run:
+
+- `cargo run --bin wyrmfmt -- check --lang rust src tests examples`
+- `cargo run --bin wyrmfmt -- check --lang rust src/Margaret`
+
+Results summary:
+
+- Both commands fail with the same naming-policy violations concentrated in Margaret code.
+- Violation pattern: project-owned function/method names in snake_case across core/cpu/image/testutil/cli/vk.
+- Count observed in tool output: ~100+ findings (heavy concentration in `margaret-cpu/src/lib.rs`, then `margaret-core`, then CLI/image/testutil/vk).
+- Trait method exemptions were not a dominant issue in this report; most flags are ordinary inherent/free functions.
+- Test function names are currently being flagged in Margaret CPU tests as well, which may require confirming `wyrmfmt` test-exclusion behavior for this subtree.
+
+M71b rename strategy recommendation:
+
+1. Perform crate-by-crate mechanical rename guided by `wyrmfmt` suggestions.
+2. Start `margaret-core` APIs first, then dependent crates (`margaret-image`, `margaret-testutil`, `margaret-cpu`, `margaret-cli`, `margaret-vk`).
+3. Keep behavior unchanged; run crate-local tests after each step.
+4. Handle public API breakage in one coordinated pass with compile-first ordering.
+
+## 9) Naming/style conversion risk audit
+
+High-risk rename areas for M71b:
+
+- Public API methods used across Margaret crates (core->cpu->cli chain).
+- Test helper function renames in huge `margaret-cpu` test block.
+- Any trait impl methods (keep trait-contract spelling unchanged where applicable).
+- CLI entry/argument parser helpers referenced across file.
+- Potential false positives around tests depending on current `wyrmfmt` behavior.
+
+Lower-risk areas:
+
+- Local variables/parameters are already snake_case and should remain unchanged.
+- No heavy macro/serde API surface observed in Margaret files reviewed.
+
+## 10) Proposed staged integration plan
+
+### M71b — Workspace + style integration (no feature bridge yet)
+
+- Add true workspace root configuration and include Margaret crates as members.
+- Provide required `[workspace.package]` and `[workspace.dependencies]` values used by Margaret manifests.
+- Ensure `cargo check/test --workspace` genuinely includes Margaret crates.
+- Apply `wyrmfmt`-guided PascalCase renames for Margaret-owned functions/methods only.
+- Add crate-boundary docs (what remains Margaret-owned vs WyrmCoil bridge-owned).
+
+### M72 — Camera/ray query bridge (no raster camera takeover)
+
+- Introduce bridge API translating WyrmCoil camera/query inputs into Margaret camera/rays.
+- Add unit tests for center/corner ray direction expectations and Y-axis convention mapping.
+- Keep Margaret camera in Margaret; expose adapter in WyrmCoil integration module.
+
+### M73 — RenderSnapshot/primitive to Margaret scene bridge
+
+- Implement translation from selected WyrmCoil primitive snapshots into Margaret triangle scene.
+- Add deterministic intersection tests (known geometry + expected hit distance/normal).
+
+### M74 — Picking/query API consumer layer
+
+- Expose screen coordinate -> ray -> hit query entry point usable by editor/demo gameplay.
+- Return stable hit payload (entity/material/object identifiers where available).
+
+### M75+ — GPU ray seam activation (deferred)
+
+- Expand `margaret-vk` only after CPU bridge path is stable and validated.
+- Keep this independent from WyrmCoil raster present-loop ownership.
+
+## Command log summary (M71a)
+
+Executed:
+
+- `cargo fmt -- --check` ✅
+- `cargo test -q --lib` ✅ (passes; warnings only)
+- `cargo test -q` ✅ (passes; warnings + ignored optional GPU/window probes)
+- `cargo check --examples` ✅ (passes; warnings only)
+- `cargo run --bin wyrmfmt -- check --lang rust src tests examples` ❌ (expected style violations in Margaret naming)
+- `cargo metadata --no-deps` ✅ (shows workspace currently contains only `wyrmcoil`)
+- `cargo check -q --workspace` ✅ (checks only current single-member workspace)
+- `cargo test -q --workspace` ✅ (tests only current single-member workspace)
+- `cargo run --bin wyrmfmt -- check --lang rust src/Margaret` ❌ (same Margaret naming violations)
+
+## Concise final assessment
+
+- **What was audited:** Margaret crate structure, APIs, camera/ray/scene capabilities, workspace inclusion state, style debt via `wyrmfmt`, and integration seams.
+- **What works now:** WyrmCoil root checks/tests pass; Margaret source tree is coherent and appears implementation-complete for CPU reference tracing path.
+- **What fails now:** `wyrmfmt` naming policy for Margaret (large violation set). Margaret is not in active root workspace graph.
+- **What should happen next:** M71b should first establish real workspace membership + style convergence, then M72/M73 bridge/query integration.
+- **Milestone result:** **Outcome A (success)** for M71a audit/plan scope.
