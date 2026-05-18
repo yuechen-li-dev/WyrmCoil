@@ -195,3 +195,16 @@ M84 extends the asset actuator subsystem with an image decode stage. Decode requ
 Current decode scope is intentionally narrow and deterministic: **P6 PPM (max value 255)** only. Mailbox completion remains request-id-only (`DwMessage::I32`).
 
 Non-goals remain unchanged in M84: no GPU upload, no texture resources, no material system integration, no async/deferred asset jobs, and no hot reload/import database path.
+
+
+## Asset texture upload plan seed (M85)
+
+M85 adds a deterministic CPU-to-upload boundary for images after M84 decode:
+
+`DecodedImageAsset -> TextureUploadPlan`
+
+`TextureUploadPlan` is plain data only (label, source name, dimensions, pixel format, bytes, usage intent) and validates width/height/byte-length consistency with overflow-safe checks.
+
+Current M85 scope uses `TexturePixelFormat::Rgba8UnormSrgb` with `TextureUsageIntent::SampledColor` for decoded color textures.
+
+Non-goals in M85 remain unchanged: no GPU texture resource creation, no sampler/bind-group/material path, and no async/deferred upload jobs.

@@ -283,3 +283,20 @@ M84 extends the M83 asset actuator seed with decode requests/results.
 - Deterministic decode surface in M84 is P6 PPM only (8-bit max value 255).
 
 Scope boundaries remain unchanged: no GPU texture upload, no texture/material integration, no async jobs, and no hot reload.
+
+
+## Asset texture upload mapping (M85)
+
+M85 extends the asset actuator trajectory with a CPU image to texture-upload-plan seam:
+
+```text
+AssetResult::ImageDecoded(DecodedImageAsset)
+  -> BuildTextureUploadPlan(...)
+  -> TextureUploadPlan (plain data, validated RGBA8 payload)
+```
+
+Boundary reminder:
+
+- This is not GPU texture creation yet.
+- This is not sampler/bind-group/material wiring yet.
+- Completion mailbox remains id-only; rich payload remains in stores/plans.
