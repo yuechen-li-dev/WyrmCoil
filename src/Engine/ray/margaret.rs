@@ -2,8 +2,12 @@
 
 use margaret_core::camera::Camera;
 use margaret_core::image::ImageSize;
+use margaret_core::math::{Point3, Vec3};
 
-use super::{CameraRayRequest, CameraRayResult, RayQueryStore, RayVec3};
+use super::{
+    CameraRayRequest, CameraRayResult, Ray3, RayHitResult, RayMissResult, RayQueryStore,
+    RayTriangle, RayTriangleScene, RayVec3, TriangleRayQueryRequest,
+};
 
 #[derive(Clone, Debug)]
 pub struct MargaretCameraRayAdapter {
@@ -51,6 +55,99 @@ impl MargaretCameraRayAdapter {
 
         store.StoreCompleted(result);
         result
+    }
+}
+
+pub fn ExecuteTriangleRayQuery(
+    request: TriangleRayQueryRequest,
+    scene: &RayTriangleScene,
+    store: &mut RayQueryStore,
+) {
+    let mut best_hit: Option<RayHitResult> = None;
+    for triangle in &scene.Triangles {
+        if let Some(hit) = IntersectTriangle(request.QueryId, request.Ray, *triangle) {
+            match best_hit {
+                Some(existing) if existing.Distance <= hit.Distance => {}
+                _ => best_hit = Some(hit),
+            }
+        }
+    }
+
+    match best_hit {
+        Some(hit) => store.StoreHitResult(hit),
+        None => store.StoreMissResult(RayMissResult {
+            QueryId: request.QueryId,
+        }),
+    }
+}
+
+fn IntersectTriangle(
+    query_id: super::RayQueryId,
+    ray: Ray3,
+    triangle: RayTriangle,
+) -> Option<RayHitResult> {
+    let epsilon = 0.000001_f32;
+    let origin = ToPoint3(ray.Origin);
+    let direction = ToVec3(ray.Direction);
+    let a = ToPoint3(triangle.A);
+    let b = ToPoint3(triangle.B);
+    let c = ToPoint3(triangle.C);
+
+    let edge1 = b - a;
+    let edge2 = c - a;
+    let pvec = direction.Cross(edge2);
+    let determinant = edge1.Dot(pvec);
+    if determinant.abs() < epsilon {
+        return None;
+    }
+
+    let inverse_det = 1.0 / determinant;
+    let tvec = origin - a;
+    let u = tvec.Dot(pvec) * inverse_det;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+
+    let qvec = tvec.Cross(edge1);
+    let v = direction.Dot(qvec) * inverse_det;
+    if v < 0.0 || (u + v) > 1.0 {
+        return None;
+    }
+
+    let distance = edge2.Dot(qvec) * inverse_det;
+    if distance <= epsilon {
+        return None;
+    }
+
+    let position = origin + direction * distance;
+    let normal = edge1.Cross(edge2).Normalized();
+    Some(RayHitResult {
+        QueryId: query_id,
+        TriangleId: triangle.Id,
+        Distance: distance,
+        Position: ToRayVec3FromPoint(position),
+        Normal: ToRayVec3(normal),
+    })
+}
+
+fn ToPoint3(value: RayVec3) -> Point3 {
+    Point3::New(value.X, value.Y, value.Z)
+}
+fn ToVec3(value: RayVec3) -> Vec3 {
+    Vec3::New(value.X, value.Y, value.Z)
+}
+fn ToRayVec3(value: Vec3) -> RayVec3 {
+    RayVec3 {
+        X: value.x,
+        Y: value.y,
+        Z: value.z,
+    }
+}
+fn ToRayVec3FromPoint(value: Point3) -> RayVec3 {
+    RayVec3 {
+        X: value.x,
+        Y: value.y,
+        Z: value.z,
     }
 }
 
