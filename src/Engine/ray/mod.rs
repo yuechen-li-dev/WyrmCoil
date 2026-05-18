@@ -2,6 +2,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::Engine::primitives::RenderSnapshot;
+use crate::Engine::render::extract::BuildVisiblePrimitiveDemoBatch;
+
 pub mod margaret;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -45,6 +48,79 @@ pub struct RayTriangle {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RayTriangleScene {
     pub Triangles: Vec<RayTriangle>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderSnapshotRaySceneOptions {
+    pub PlaneZ: f32,
+}
+
+impl Default for RenderSnapshotRaySceneOptions {
+    fn default() -> Self {
+        Self { PlaneZ: -1.0 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RayTriangleSource {
+    pub TriangleId: i32,
+    pub RenderItemIndex: usize,
+    pub EntityId: usize,
+    pub TriangleIndexInItem: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderSnapshotRayScene {
+    pub Scene: RayTriangleScene,
+    pub TriangleSources: Vec<RayTriangleSource>,
+}
+
+pub fn BuildVisiblePrimitiveRaySceneFromRenderSnapshot(
+    snapshot: &RenderSnapshot,
+    options: RenderSnapshotRaySceneOptions,
+) -> RenderSnapshotRayScene {
+    let batch = BuildVisiblePrimitiveDemoBatch(snapshot);
+    let mut triangles = Vec::with_capacity(batch.Vertices.len() / 3);
+    let mut sources = Vec::with_capacity(batch.Vertices.len() / 3);
+
+    for (item_index, chunk) in batch.Vertices.chunks_exact(6).enumerate() {
+        let entity_id = snapshot.Items[item_index].Entity.0;
+        for triangle_index_in_item in 0..2usize {
+            let base = triangle_index_in_item * 3;
+            let triangle_id = (item_index as i32) * 2 + triangle_index_in_item as i32;
+            triangles.push(RayTriangle {
+                Id: triangle_id,
+                A: RayVec3 {
+                    X: chunk[base].X,
+                    Y: chunk[base].Y,
+                    Z: options.PlaneZ,
+                },
+                B: RayVec3 {
+                    X: chunk[base + 1].X,
+                    Y: chunk[base + 1].Y,
+                    Z: options.PlaneZ,
+                },
+                C: RayVec3 {
+                    X: chunk[base + 2].X,
+                    Y: chunk[base + 2].Y,
+                    Z: options.PlaneZ,
+                },
+            });
+            sources.push(RayTriangleSource {
+                TriangleId: triangle_id,
+                RenderItemIndex: item_index,
+                EntityId: entity_id,
+                TriangleIndexInItem: triangle_index_in_item,
+            });
+        }
+    }
+
+    RenderSnapshotRayScene {
+        Scene: RayTriangleScene {
+            Triangles: triangles,
+        },
+        TriangleSources: sources,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
