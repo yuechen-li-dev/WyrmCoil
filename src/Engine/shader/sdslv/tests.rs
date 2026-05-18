@@ -3059,6 +3059,19 @@ fn EmitHlslM66bWhenUtilityLowersInBoundedContexts() {
 }
 
 #[test]
+fn ParseWhenPolicyRejectedOutsideFlowStateBodies() {
+    let src = "shader S { fn Bad(a: i32) -> i32 { return when policy { hysteresis: 2 min_commit: 3 } { case 1 when a > 0 score a else 0 }; } }";
+    let diagnostics = ParseSource(src)
+        .expect_err("when policy must be rejected in ordinary shader/helper function bodies");
+    assert!(
+        diagnostics.iter().any(|d| d.Message.contains(
+            "when policy is only valid inside flow/state bodies; use when utility for standalone ranked expressions"
+        )),
+        "expected flow/state-only when policy diagnostic"
+    );
+}
+
+#[test]
 fn EmitHlslM66bWhenUtilityRejectsOptionsAndNestedContext() {
     let with_options = CompileSourceToHlsl("shader S { fn F(a: i32) -> i32 { return when utility { hysteresis: 2 min_commit: 3 } { case 100 when a > 0 score a else -1 }; } }")
         .expect_err("stateful when utility options must not silently lower in M66b");

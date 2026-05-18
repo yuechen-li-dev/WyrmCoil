@@ -1088,3 +1088,15 @@ match Parse(raw) {
 - Stateful utility options (`hysteresis`, `min_commit`) remain parsed/validated but are rejected during HLSL emission with: `stateful when utility options are not lowered in SDSL-V M66b`.
 - `when policy` remains flow/state-only and is not part of shader-expression lowering.
 - Nested/general expression contexts for `when utility` remain unsupported in M66b and emit the bounded-context unsupported diagnostic.
+
+
+### M67 authoring/docs alignment: `when utility` vs `when policy`
+
+M67 is a language-contract clarification pass, not a renderer/runtime expansion pass.
+
+- `when utility` is the standalone scored-choice expression for ordinary shader/helper function bodies.
+- Optionless `when utility` lowers in bounded contexts: local initializer, assignment RHS, and return expression.
+- Highest eligible score wins; ties remain first-wins by strict `>` update behavior.
+- `when policy` is flow/state-only and is not accepted in ordinary shader/helper function bodies.
+- Ordinary function/helper usage of `when policy` is diagnosed with: `when policy is only valid inside flow/state bodies; use when utility for standalone ranked expressions`.
+- Persistent/stateful policy semantics (`hysteresis`, `min_commit`) stay in the flow-policy surface, not ordinary shader-expression lowering.

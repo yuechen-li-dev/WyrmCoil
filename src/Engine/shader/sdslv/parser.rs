@@ -1372,7 +1372,12 @@ impl<'a> Parser<'a> {
                     self.ErrHere("when utility case missing score expression");
                     None
                 })?;
-                cases.push(SdslvUtilityCase { Value: value, Guard: guard, Score: score, Span: case_span });
+                cases.push(SdslvUtilityCase {
+                    Value: value,
+                    Guard: guard,
+                    Score: score,
+                    Span: case_span,
+                });
                 continue;
             }
             if self.MatchKw(SdslvTokenKind::KeywordElse) {
@@ -1385,7 +1390,10 @@ impl<'a> Parser<'a> {
             self.ErrHere("expected case or else in when utility expression");
             return None;
         }
-        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after when utility expression");
+        self.Expect(
+            SdslvTokenKind::RightBrace,
+            "expected '}' after when utility expression",
+        );
         if cases.is_empty() {
             self.ErrHere("when utility expression requires at least one case");
             return None;
@@ -1399,10 +1407,18 @@ impl<'a> Parser<'a> {
             Options: options.map(Box::new),
             Cases: cases,
             ElseValue: Box::new(else_expr),
-            Span: SdslvSpan { Start: start.Start, End: end.End, Line: start.Line, Column: start.Column },
+            Span: SdslvSpan {
+                Start: start.Start,
+                End: end.End,
+                Line: start.Line,
+                Column: start.Column,
+            },
         })
     }
-    fn ParseWhenUtilityOptionsFromOpenBrace(&mut self, start: SdslvSpan) -> Option<SdslvUtilityOptions> {
+    fn ParseWhenUtilityOptionsFromOpenBrace(
+        &mut self,
+        start: SdslvSpan,
+    ) -> Option<SdslvUtilityOptions> {
         let mut hysteresis = None;
         let mut min_commit = None;
         loop {
@@ -1411,14 +1427,20 @@ impl<'a> Parser<'a> {
                     self.ErrHere("duplicate when utility option 'hysteresis'");
                     return None;
                 }
-                self.Expect(SdslvTokenKind::Colon, "expected ':' after hysteresis option name");
+                self.Expect(
+                    SdslvTokenKind::Colon,
+                    "expected ':' after hysteresis option name",
+                );
                 hysteresis = Some(self.ParseExpression()?);
             } else if self.MatchKw(SdslvTokenKind::KeywordMinCommit) {
                 if min_commit.is_some() {
                     self.ErrHere("duplicate when utility option 'min_commit'");
                     return None;
                 }
-                self.Expect(SdslvTokenKind::Colon, "expected ':' after min_commit option name");
+                self.Expect(
+                    SdslvTokenKind::Colon,
+                    "expected ':' after min_commit option name",
+                );
                 min_commit = Some(self.ParseExpression()?);
             } else {
                 self.ErrHere("unknown utility option name");
@@ -1428,8 +1450,20 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        self.Expect(SdslvTokenKind::RightBrace, "expected '}' after when utility options");
-        Some(SdslvUtilityOptions { Hysteresis: hysteresis, MinCommit: min_commit, Span: SdslvSpan { Start: start.Start, End: self.PrevSpan().End, Line: start.Line, Column: start.Column } })
+        self.Expect(
+            SdslvTokenKind::RightBrace,
+            "expected '}' after when utility options",
+        );
+        Some(SdslvUtilityOptions {
+            Hysteresis: hysteresis,
+            MinCommit: min_commit,
+            Span: SdslvSpan {
+                Start: start.Start,
+                End: self.PrevSpan().End,
+                Line: start.Line,
+                Column: start.Column,
+            },
+        })
     }
     fn RecoverStatement(&mut self) {
         while self.I < self.Tokens.len()
