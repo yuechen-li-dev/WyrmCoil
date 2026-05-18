@@ -1,4 +1,5 @@
 #![allow(non_snake_case)]
+#![allow(non_upper_case_globals)]
 
 use margaret_core::camera::Camera;
 use margaret_core::math::{Point3, Vec3};

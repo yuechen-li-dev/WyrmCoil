@@ -27,8 +27,8 @@ pub struct Engine<W: World, I: Copy> {
     pub Guard: crate::Engine::EntityId,
     pub Clock: EngineClock,
     pub InputQueue: Vec<I>,
-    root_frame: DwFrameId,
-    build_registry: fn() -> crate::DwFrameRegistry,
+    _root_frame: DwFrameId,
+    _build_registry: fn() -> crate::DwFrameRegistry,
     input_to_message: fn(I) -> DwMessage,
 }
 
@@ -65,8 +65,8 @@ impl<W: World, I: Copy> Engine<W, I> {
             Guard: crate::Engine::EntityId(1),
             Clock: EngineClock::default(),
             InputQueue: Vec::new(),
-            root_frame,
-            build_registry,
+            _root_frame: root_frame,
+            _build_registry: build_registry,
             input_to_message,
         }
     }
@@ -148,8 +148,8 @@ impl<W: World, I: Copy> Engine<W, I> {
             Guard: chunk.Guard,
             Clock: chunk.Clock,
             InputQueue: chunk.InputQueue,
-            root_frame,
-            build_registry,
+            _root_frame: root_frame,
+            _build_registry: build_registry,
             input_to_message,
         }
     }

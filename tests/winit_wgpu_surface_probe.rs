@@ -25,8 +25,10 @@ fn BlockOnReady<F: Future>(future: F) -> F::Output {
 }
 
 #[test]
+#[allow(deprecated)]
 #[ignore = "M40 optional real window+surface probe; set WYRMCOIL_RUN_WGPU_TESTS=1"]
 fn WinitWgpuSurfaceCanBeConfiguredWhenEnabled() {
+    // TODO(M72b): migrate probe creation to ActiveEventLoop once this optional probe adopts run_app lifecycle.
     if std::env::var("WYRMCOIL_RUN_WGPU_TESTS").ok().as_deref() != Some("1") {
         eprintln!("M40 surface probe skipped: set WYRMCOIL_RUN_WGPU_TESTS=1 to enable");
         return;
