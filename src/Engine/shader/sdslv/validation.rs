@@ -1409,10 +1409,22 @@ impl<'a> Validator<'a> {
             } => {
                 if let Some(options) = Options {
                     if let Some(hysteresis) = &options.Hysteresis {
-                        self.CheckExpressionCalls(shader, locals, hysteresis, is_fallible_fn, false);
+                        self.CheckExpressionCalls(
+                            shader,
+                            locals,
+                            hysteresis,
+                            is_fallible_fn,
+                            false,
+                        );
                     }
                     if let Some(min_commit) = &options.MinCommit {
-                        self.CheckExpressionCalls(shader, locals, min_commit, is_fallible_fn, false);
+                        self.CheckExpressionCalls(
+                            shader,
+                            locals,
+                            min_commit,
+                            is_fallible_fn,
+                            false,
+                        );
                     }
                 }
                 for case in Cases {
@@ -1761,7 +1773,15 @@ impl<'a> Validator<'a> {
         locals: &HashMap<String, TypeRef>,
         expression: &SdslvExpression,
     ) {
-        let SdslvExpression::WhenUtility { Options, Cases, ElseValue, .. } = expression else { return; };
+        let SdslvExpression::WhenUtility {
+            Options,
+            Cases,
+            ElseValue,
+            ..
+        } = expression
+        else {
+            return;
+        };
         if Cases.is_empty() {
             self.Err("when utility must contain at least one case");
             return;
@@ -1770,30 +1790,47 @@ impl<'a> Validator<'a> {
         for case in Cases {
             let guard_type = self.ResolveExpressionType(shader, locals, &case.Guard);
             if guard_type != TypeRef::Unknown && guard_type != TypeRef::Named("bool".to_string()) {
-                self.Err(&format!("when utility guard must be bool; found {}", self.TypeName(&guard_type)));
+                self.Err(&format!(
+                    "when utility guard must be bool; found {}",
+                    self.TypeName(&guard_type)
+                ));
             }
             let score_type = self.ResolveExpressionType(shader, locals, &case.Score);
             if score_type != TypeRef::Unknown && !self.IsNumericScalarType(&score_type) {
-                self.Err(&format!("when utility score must be numeric scalar; found {}", self.TypeName(&score_type)));
+                self.Err(&format!(
+                    "when utility score must be numeric scalar; found {}",
+                    self.TypeName(&score_type)
+                ));
             }
             let value_type = self.ResolveExpressionType(shader, locals, &case.Value);
             if expected_type == TypeRef::Unknown {
                 expected_type = value_type;
-            } else if let Some((_, expected_name, found_name)) = self.TypeMismatch("", &expected_type, &value_type) {
-                self.Err(&format!("when utility result type mismatch: expected {}, found {}", expected_name, found_name));
+            } else if let Some((_, expected_name, found_name)) =
+                self.TypeMismatch("", &expected_type, &value_type)
+            {
+                self.Err(&format!(
+                    "when utility result type mismatch: expected {}, found {}",
+                    expected_name, found_name
+                ));
             }
         }
         if let Some(options) = Options {
             if let Some(hysteresis) = &options.Hysteresis {
                 let t = self.ResolveExpressionType(shader, locals, hysteresis);
                 if t != TypeRef::Unknown && !self.IsNumericScalarType(&t) {
-                    self.Err(&format!("when utility option 'hysteresis' must be numeric scalar; found {}", self.TypeName(&t)));
+                    self.Err(&format!(
+                        "when utility option 'hysteresis' must be numeric scalar; found {}",
+                        self.TypeName(&t)
+                    ));
                 }
             }
             if let Some(min_commit) = &options.MinCommit {
                 let t = self.ResolveExpressionType(shader, locals, min_commit);
                 if t != TypeRef::Unknown && !self.IsIntegerType(&t) {
-                    self.Err(&format!("when utility option 'min_commit' must be integer scalar; found {}", self.TypeName(&t)));
+                    self.Err(&format!(
+                        "when utility option 'min_commit' must be integer scalar; found {}",
+                        self.TypeName(&t)
+                    ));
                 }
             }
         }

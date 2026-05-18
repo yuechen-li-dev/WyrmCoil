@@ -7,6 +7,11 @@ Use this alongside `docs/sdsl-v.md`:
 - M35 shader source policy selects between SDSL-V and WGSL source inputs with Dunewyrm utility scoring; this pass is policy-only and does not compile either path.
 - this file is the practical “what works right now” checkpoint.
 
+Language philosophy:
+- SDSL-V is HLSL-targeting, not HLSL-compatible.
+- SDSL-V is the preferred WyrmCoil shader authoring path.
+- WGSL/raw HLSL can exist as backend/source escape paths, but they are not SDSL-V.
+
 ## 1) Current pipeline
 
 Current implemented compiler path for `.sdslv`:
@@ -360,29 +365,62 @@ Current validation includes:
 - board must be declared before states
 
 Current non-goals (still true):
-- bounded acyclic value-flow lowering to HLSL helper functions (M13 subset)
 - no flow execution/runtime state machine
-- no utility `when`
 - no `suspend`, `remember`, `resume`
+
+`when` role split in current authoring:
+- `when utility`: standalone one-shot scored-choice expression for ordinary shader/helper function bodies.
+- `when policy`: persistent flow/state policy surface; not accepted in ordinary shader/helper function bodies.
+
+Current `when utility` usage:
+```sdslv
+return when utility {
+    case 100 when a > 0 score a
+    case 200 when b > 0 score b
+    else -1
+};
+```
+
+`when utility` behavior:
+- highest eligible score wins;
+- ties are first-wins (strict `>` update rule);
+- `else` is required fallback;
+- optionless form lowers to HLSL only in local initializer, assignment RHS, and return expression contexts;
+- stateful options (`hysteresis`, `min_commit`) are validated but not lowered for ordinary shader/helper function emission in M66b.
+
+`when policy` status in M67:
+- ordinary function/helper usage is rejected with: `when policy is only valid inside flow/state bodies; use when utility for standalone ranked expressions`;
+- flow/state `when policy` parsing/validation is reserved for a future flow-policy milestone (do not assume persistent policy lowering in current runtime/emitter paths).
 
 ## 11) Feature status table
 
 | Feature | Status |
 |---|---|
-| Lexer/parser | Implemented |
-| Declaration validation | Implemented |
-| HLSL stream/stage emission | Implemented (bounded deterministic lowering) |
-| Function body subset | Implemented (bounded subset) |
-| Interfaces / generic `compile` | Implemented (monomorphization pattern, bounded rewrite) |
-| Coordinate-space checking | Implemented (bounded body validation) |
-| `.sdslvtest` `[Fact]` syntax | Implemented |
-| `.sdslvtest` execution | Implemented (scalar subset runner) |
-| Shader flows | Parse/validate only |
-| Flow boards + board reads/writes | Parse/validate only (no lowering/execution) |
-| Flow lowering | Implemented for acyclic value-returning subset (M13) |
-| DXC/SPIR-V boundary | Implemented (optional DXC probe, non-mandatory) |
-| Renderer artifact intake / pipeline plan contract | Implemented (metadata-only) |
-| Plan-level optional DXC compile from pipeline plan | Implemented (optional boundary; non-mandatory) |
+| record | implemented |
+| stream | implemented |
+| `with` | implemented (bounded contexts) |
+| record/stream parameter immutability | implemented |
+| `array<T, N>` | implemented |
+| array literals | implemented in explicit array contexts |
+| array indexing/assignment | implemented |
+| `float2`/`float3`/`float4` constructors | validated |
+| `float4x4` constructor | validated conservatively (16 numeric scalars) |
+| `if` | implemented |
+| condition-switch | implemented |
+| subject-switch | implemented |
+| bounded `for` | implemented |
+| `while` | reserved/future |
+| tag enum | implemented |
+| enum `match` | implemented |
+| fallible `?` / `!` | implemented |
+| fallible `match ok/err` | validation implemented, HLSL lowering unsupported |
+| `when utility` | implemented, optionless HLSL lowering in local init / assignment RHS / return |
+| `when policy` | flow/state-only; rejected in ordinary function/helper bodies |
+| flow + board | implemented for parse/validate and bounded acyclic value-returning lowering subset |
+| interfaces + generics | implemented (bounded compile/monomorphization path) |
+| coordinate-space typing | implemented (bounded checks) |
+| tensor/Einstein notation | future design |
+| batch/concurrency surface | future / not SDSL-V ordinary shader body yet |
 
 ## 12) Non-goals / future work
 
@@ -390,8 +428,8 @@ Known future work items:
 - renderer pipeline integration for compiled shader artifacts
 - fuller expression/type checking
 - shader-body control flow (`if`/loops) expansion as scoped milestones
-- flow lowering
-- utility `when`
+- full flow-policy lowering/runtime behavior
+- stateful `when utility` lowering
 - `[Theory]` / `[Case]`
 - richer `.sdslvtest` runner surface
 - shader function execution from test runner
