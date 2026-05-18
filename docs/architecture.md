@@ -240,3 +240,18 @@ Boundary rules:
 - `wgpu` sampler creation is optional and caller-owned.
 - No bind groups, material system, or textured draw-loop integration are included in M87.
 - Margaret/reference sampling may later consume the same sampler intent without changing this boundary.
+
+
+## Asset texture+sampler binding layout seam status (M88)
+
+M88 adds a backend-neutral texture+sampler binding layout planning boundary after M85/M86/M87:
+
+- `TextureUploadPlan` remains pixel-storage/upload metadata.
+- `SamplerPlan` remains filtering/address intent.
+- `TextureSamplerBindingLayoutPlan` now owns shader binding slots (`TextureBinding`, `SamplerBinding`) and stage visibility.
+- `DefaultSampledColor2D(label)` provides a convenience default of texture binding `0`, sampler binding `1`, and `Pixel` visibility.
+- Optional `wgpu` mapping builds a deterministic two-entry bind-group-layout descriptor plan:
+  - texture entry: D2, filterable float, non-multisampled;
+  - sampler entry: filtering sampler.
+- No shader reflection is used; bindings are explicit author-chosen metadata.
+- No actual bind-group creation/material ownership/textured draw integration is added in M88.
