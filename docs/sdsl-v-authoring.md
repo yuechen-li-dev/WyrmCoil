@@ -790,3 +790,23 @@ Still not available in M64c:
 - Stateful utility options (`hysteresis`, `min_commit`) remain parsed/validated but are rejected during HLSL emission with: `stateful when utility options are not lowered in SDSL-V M66b`.
 - `when policy` remains flow/state-only and is not part of shader-expression lowering.
 - Nested/general expression contexts for `when utility` remain unsupported in M66b and emit the bounded-context unsupported diagnostic.
+
+
+## Raw HLSL compatibility path (M68)
+
+SDSL-V remains WyrmCoil's reference shader authoring language. WGSL remains a native backend source path. Raw HLSL is also supported as a compatibility/escape-hatch source path for legacy or direct-DXC workflows.
+
+SDSL-V is HLSL-targeting, not HLSL-compatible, and it is not an HLSL superset. Raw HLSL wrappers require explicit entry metadata (name, stage, target profile). WyrmCoil validates this wrapper metadata only; HLSL parse/semantic diagnostics are owned by DXC.
+
+Example:
+
+```rust
+let artifact = BuildHlslShaderArtifact(
+    "legacy_flat.hlsl",
+    hlsl_source,
+    vec![
+        HlslEntryPoint::Vertex("VSMain"),
+        HlslEntryPoint::Pixel("PSMain"),
+    ],
+)?;
+```

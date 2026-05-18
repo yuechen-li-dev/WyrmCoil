@@ -180,6 +180,7 @@ fn fs_main() -> @location(0) vec4<f32> {
             Label: "ShaderStrategyRequest".to_string(),
             SdslVSource: Some("shader S {}".to_string()),
             WgslSource: Some(TEST_WGSL_SOURCE.to_string()),
+            HlslSource: None,
             Constraints: ShaderSourceStrategyConstraints {
                 PreferWgsl: true,
                 ..ShaderSourceStrategyConstraints::default()
@@ -213,6 +214,7 @@ fn fs_main() -> @location(0) vec4<f32> {
             Label: "ShaderStrategyRequest".to_string(),
             SdslVSource: Some("shader S {}".to_string()),
             WgslSource: Some(TEST_WGSL_SOURCE.to_string()),
+            HlslSource: None,
             Constraints: ShaderSourceStrategyConstraints::default(),
         };
         let decision = SelectShaderSourceStrategy(&request);
