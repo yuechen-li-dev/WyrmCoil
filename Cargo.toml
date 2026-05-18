@@ -34,3 +34,9 @@ margaret-core.workspace = true
 [lib]
 name = "wyrmcoil"
 path = "src/lib.rs"
+
+[workspace.lints.rust]
+non_snake_case = "allow"
+
+[lints]
+workspace = true

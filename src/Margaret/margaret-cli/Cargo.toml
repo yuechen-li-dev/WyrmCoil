@@ -8,3 +8,6 @@ license.workspace = true
 margaret-core.workspace = true
 margaret-cpu.workspace = true
 margaret-image.workspace = true
+
+[lints]
+workspace = true

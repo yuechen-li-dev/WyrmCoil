@@ -10,3 +10,6 @@ margaret-image.workspace = true
 
 [dev-dependencies]
 margaret-testutil.workspace = true
+
+[lints]
+workspace = true

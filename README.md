@@ -109,6 +109,8 @@ Default `cargo test` remains GPU/window-free.
 cargo run --bin wyrmfmt -- check --lang rust src tests examples
 ```
 
+Rust's `non_snake_case` lint is intentionally disabled workspace-wide; `wyrmfmt` is the naming-policy authority for WyrmCoil.
+
 ## Run tests
 
 ```bash

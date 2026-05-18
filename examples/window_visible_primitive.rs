@@ -37,7 +37,9 @@ fn BlockOnReady<F: Future>(future: F) -> F::Output {
     }
 }
 
+#[allow(deprecated)]
 fn main() {
+    // TODO(M72b): migrate to EventLoop::run_app/ActiveEventLoop once example loop scaffolds are redesigned.
     let mut engine = Engine::New();
 
     let event_loop = EventLoop::new().expect("event loop should create");
