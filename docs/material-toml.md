@@ -424,3 +424,14 @@ Unknown node-kind policy in M92:
 - unknown kinds that are reachable from `material.output` are rejected.
 
 M92 remains parse/validation-only and still does not implement SDSL-V material codegen, MaterialX import/export implementation, or runtime material binding ownership.
+
+
+## Native material TOML codegen seed status (M93)
+
+M93 adds deterministic native material graph -> SDSL-V source generation after M92 semantic validation.
+
+- Generated output emits a `MaterialSurface` record and `GeneratedMaterial::EvaluateMaterial()` function.
+- Supported lowering remains the M92 subset (`constant_f32`, `constant_float4`, `texture2d`, `multiply`, `add`, `lerp`, `standard_surface`).
+- `texture2d` currently lowers to deterministic placeholder white sample helper stubs (no real texture binding/sampling yet).
+- Output is deterministic (stable topological order, stable identifier sanitization, no timestamps).
+- No material runtime object ownership, bind-group integration, textured draw integration, or MaterialX import implementation is added in M93.
