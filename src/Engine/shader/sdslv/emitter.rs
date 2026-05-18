@@ -282,10 +282,24 @@ impl<'a> HlslEmitter<'a> {
                     })
                     || Self::ExpressionContainsFallibility(ElseValue)
             }
-            SdslvExpression::WhenUtility { Options, Cases, ElseValue, .. } => {
-                Options.as_ref().is_some_and(|x| x.Hysteresis.as_ref().is_some_and(Self::ExpressionContainsFallibility) || x.MinCommit.as_ref().is_some_and(Self::ExpressionContainsFallibility))
-                    || Cases.iter().any(|c| Self::ExpressionContainsFallibility(&c.Value) || Self::ExpressionContainsFallibility(&c.Guard) || Self::ExpressionContainsFallibility(&c.Score))
-                    || Self::ExpressionContainsFallibility(ElseValue)
+            SdslvExpression::WhenUtility {
+                Options,
+                Cases,
+                ElseValue,
+                ..
+            } => {
+                Options.as_ref().is_some_and(|x| {
+                    x.Hysteresis
+                        .as_ref()
+                        .is_some_and(Self::ExpressionContainsFallibility)
+                        || x.MinCommit
+                            .as_ref()
+                            .is_some_and(Self::ExpressionContainsFallibility)
+                }) || Cases.iter().any(|c| {
+                    Self::ExpressionContainsFallibility(&c.Value)
+                        || Self::ExpressionContainsFallibility(&c.Guard)
+                        || Self::ExpressionContainsFallibility(&c.Score)
+                }) || Self::ExpressionContainsFallibility(ElseValue)
             }
             _ => false,
         }
@@ -326,9 +340,14 @@ impl<'a> HlslEmitter<'a> {
             SdslvExpression::Index { Base, Index, .. } => {
                 Self::ExpressionContainsMatch(Base) || Self::ExpressionContainsMatch(Index)
             }
-            SdslvExpression::WhenUtility { Cases, ElseValue, .. } => {
-                Cases.iter().any(|c| Self::ExpressionContainsMatch(&c.Value) || Self::ExpressionContainsMatch(&c.Guard) || Self::ExpressionContainsMatch(&c.Score))
-                    || Self::ExpressionContainsMatch(ElseValue)
+            SdslvExpression::WhenUtility {
+                Cases, ElseValue, ..
+            } => {
+                Cases.iter().any(|c| {
+                    Self::ExpressionContainsMatch(&c.Value)
+                        || Self::ExpressionContainsMatch(&c.Guard)
+                        || Self::ExpressionContainsMatch(&c.Score)
+                }) || Self::ExpressionContainsMatch(ElseValue)
             }
             SdslvExpression::TryPropagate { Expression, .. }
             | SdslvExpression::Unwrap { Expression, .. } => {
@@ -360,8 +379,11 @@ impl<'a> HlslEmitter<'a> {
         ));
         if let Some(body) = &method.Body {
             let mut with_counter = 0usize;
+            let mut utility_counter = 0usize;
             for statement in &body.Statements {
-                for line in self.EmitStatementLines(statement, &mut with_counter) {
+                for line in
+                    self.EmitStatementLines(statement, &mut with_counter, &mut utility_counter)
+                {
                     self.Lines.push(format!("    {}", line));
                 }
             }
@@ -409,8 +431,11 @@ impl<'a> HlslEmitter<'a> {
         self.Lines.push(signature);
         if let Some(body) = &local_method.Body {
             let mut with_counter = 0usize;
+            let mut utility_counter = 0usize;
             for statement in &body.Statements {
-                for line in self.EmitStatementLines(statement, &mut with_counter) {
+                for line in
+                    self.EmitStatementLines(statement, &mut with_counter, &mut utility_counter)
+                {
                     let mut text = line;
                     if text.contains("mat.BaseColor(")
                         && let Some(first) = compile.TypeArguments.first()
@@ -464,8 +489,11 @@ impl<'a> HlslEmitter<'a> {
 
         if let Some(body) = &method.Body {
             let mut with_counter = 0usize;
+            let mut utility_counter = 0usize;
             for statement in &body.Statements {
-                for line in self.EmitStatementLines(statement, &mut with_counter) {
+                for line in
+                    self.EmitStatementLines(statement, &mut with_counter, &mut utility_counter)
+                {
                     self.Lines.push(format!("    {}", line));
                 }
             }
@@ -483,6 +511,7 @@ impl<'a> HlslEmitter<'a> {
         &mut self,
         statement: &SdslvStatement,
         with_counter: &mut usize,
+        utility_counter: &mut usize,
     ) -> Vec<String> {
         match statement {
             SdslvStatement::Let {
@@ -532,6 +561,22 @@ impl<'a> HlslEmitter<'a> {
                         ));
                         return lines;
                     }
+                    if let SdslvExpression::WhenUtility {
+                        Options,
+                        Cases,
+                        ElseValue,
+                        ..
+                    } = init
+                    {
+                        return self.EmitWhenUtilityLines(
+                            Options.as_deref(),
+                            Cases,
+                            ElseValue,
+                            Name,
+                            Some(rendered.as_str()),
+                            utility_counter,
+                        );
+                    }
                     if let SdslvExpression::With { Base, Updates } = init {
                         let mut lines = vec![format!(
                             "{} {} = {};",
@@ -549,6 +594,9 @@ impl<'a> HlslEmitter<'a> {
                         }
                         lines
                     } else {
+                        if Self::ExpressionContainsWhenUtility(init) {
+                            self.Err("when utility expression is not supported in this expression context in SDSL-V M66b");
+                        }
                         if Self::ExpressionContainsMatch(init) {
                             self.Err("match expression is not supported in this expression context in SDSL-V M64c");
                         }
@@ -601,6 +649,23 @@ impl<'a> HlslEmitter<'a> {
                         &format!("{target_text} = {{value}};"),
                     );
                 }
+                if let SdslvExpression::WhenUtility {
+                    Options,
+                    Cases,
+                    ElseValue,
+                    ..
+                } = Value
+                {
+                    let target_text = self.EmitExpression(Target, 0);
+                    return self.EmitWhenUtilityLines(
+                        Options.as_deref(),
+                        Cases,
+                        ElseValue,
+                        &target_text,
+                        None,
+                        utility_counter,
+                    );
+                }
                 if let SdslvExpression::With { Base, Updates } = Value {
                     let target_text = self.EmitExpression(Target, 0);
                     let mut lines = vec![format!(
@@ -618,6 +683,9 @@ impl<'a> HlslEmitter<'a> {
                     }
                     lines
                 } else {
+                    if Self::ExpressionContainsWhenUtility(Value) {
+                        self.Err("when utility expression is not supported in this expression context in SDSL-V M66b");
+                    }
                     if Self::ExpressionContainsMatch(Value) {
                         self.Err("match expression is not supported in this expression context in SDSL-V M64c");
                     }
@@ -647,6 +715,25 @@ impl<'a> HlslEmitter<'a> {
                 if let SdslvExpression::Match { Subject, Arms, .. } = Value {
                     return self.EmitMatchChainLines(Subject, Arms, "return {value};");
                 }
+                if let SdslvExpression::WhenUtility {
+                    Options,
+                    Cases,
+                    ElseValue,
+                    ..
+                } = Value
+                {
+                    let temp_name = format!("__utility_result{}", *utility_counter);
+                    let mut lines = self.EmitWhenUtilityLines(
+                        Options.as_deref(),
+                        Cases,
+                        ElseValue,
+                        &temp_name,
+                        Some("int"),
+                        utility_counter,
+                    );
+                    lines.push(format!("return {};", temp_name));
+                    return lines;
+                }
                 if let SdslvExpression::With { Base, Updates } = Value {
                     let temp_name = format!("__with{}", *with_counter);
                     *with_counter += 1;
@@ -666,6 +753,9 @@ impl<'a> HlslEmitter<'a> {
                     lines.push(format!("return {};", temp_name));
                     lines
                 } else {
+                    if Self::ExpressionContainsWhenUtility(Value) {
+                        self.Err("when utility expression is not supported in this expression context in SDSL-V M66b");
+                    }
                     if Self::ExpressionContainsMatch(Value) {
                         self.Err("match expression is not supported in this expression context in SDSL-V M64c");
                     }
@@ -684,7 +774,9 @@ impl<'a> HlslEmitter<'a> {
             } => {
                 let mut lines = vec![format!("if ({}) {{", self.EmitExpression(Condition, 0))];
                 for nested in ThenBody {
-                    for nested_line in self.EmitStatementLines(nested, with_counter) {
+                    for nested_line in
+                        self.EmitStatementLines(nested, with_counter, utility_counter)
+                    {
                         lines.push(format!("    {}", nested_line));
                     }
                 }
@@ -692,7 +784,9 @@ impl<'a> HlslEmitter<'a> {
                 if let Some(else_body) = ElseBody {
                     lines.push("else {".to_string());
                     for nested in else_body {
-                        for nested_line in self.EmitStatementLines(nested, with_counter) {
+                        for nested_line in
+                            self.EmitStatementLines(nested, with_counter, utility_counter)
+                        {
                             lines.push(format!("    {}", nested_line));
                         }
                     }
@@ -723,7 +817,9 @@ impl<'a> HlslEmitter<'a> {
                     step_text
                 )];
                 for nested in Body {
-                    for nested_line in self.EmitStatementLines(nested, with_counter) {
+                    for nested_line in
+                        self.EmitStatementLines(nested, with_counter, utility_counter)
+                    {
                         lines.push(format!("    {}", nested_line));
                     }
                 }
@@ -732,6 +828,132 @@ impl<'a> HlslEmitter<'a> {
             }
         }
     }
+    fn EmitWhenUtilityLines(
+        &mut self,
+        options: Option<&SdslvUtilityOptions>,
+        cases: &[SdslvUtilityCase],
+        else_value: &SdslvExpression,
+        result_target: &str,
+        result_decl_type: Option<&str>,
+        utility_counter: &mut usize,
+    ) -> Vec<String> {
+        if options.is_some() {
+            self.Err("stateful when utility options are not lowered in SDSL-V M66b");
+            return vec![
+                "/* stateful when utility options are not lowered in SDSL-V M66b */".to_string(),
+            ];
+        }
+        if Self::ExpressionContainsWhenUtility(else_value)
+            || cases.iter().any(|c| {
+                Self::ExpressionContainsWhenUtility(&c.Guard)
+                    || Self::ExpressionContainsWhenUtility(&c.Score)
+                    || Self::ExpressionContainsWhenUtility(&c.Value)
+            })
+        {
+            self.Err("when utility expression is not supported in this expression context in SDSL-V M66b");
+            return vec!["/* when utility expression is not supported in this expression context in SDSL-V M66b */".to_string()];
+        }
+        let id = *utility_counter;
+        *utility_counter += 1;
+        let mut lines = vec![];
+        if let Some(t) = result_decl_type {
+            lines.push(format!(
+                "{} {} = {};",
+                t,
+                result_target,
+                self.EmitExpression(else_value, 0)
+            ));
+        } else {
+            lines.push(format!(
+                "{} = {};",
+                result_target,
+                self.EmitExpression(else_value, 0)
+            ));
+        }
+        lines.push(format!("bool __utility_has{} = false;", id));
+        lines.push(format!("float __utility_score{} = 0.0;", id));
+        for (index, case) in cases.iter().enumerate() {
+            lines.push(format!("if ({}) {{", self.EmitExpression(&case.Guard, 0)));
+            lines.push(format!(
+                "    float __utility_case_score{} = {};",
+                index,
+                self.EmitExpression(&case.Score, 0)
+            ));
+            lines.push(format!(
+                "    if (!__utility_has{} || __utility_case_score{} > __utility_score{}) {{",
+                id, index, id
+            ));
+            lines.push(format!("        __utility_has{} = true;", id));
+            lines.push(format!(
+                "        __utility_score{} = __utility_case_score{};",
+                id, index
+            ));
+            lines.push(format!(
+                "        {} = {};",
+                result_target,
+                self.EmitExpression(&case.Value, 0)
+            ));
+            lines.push("    }".to_string());
+            lines.push("}".to_string());
+        }
+        lines
+    }
+
+    fn ExpressionContainsWhenUtility(expression: &SdslvExpression) -> bool {
+        match expression {
+            SdslvExpression::WhenUtility { .. } => true,
+            SdslvExpression::FieldAccess { Base, .. } => Self::ExpressionContainsWhenUtility(Base),
+            SdslvExpression::Index { Base, Index, .. } => {
+                Self::ExpressionContainsWhenUtility(Base)
+                    || Self::ExpressionContainsWhenUtility(Index)
+            }
+            SdslvExpression::Call { Callee, Arguments } => {
+                Self::ExpressionContainsWhenUtility(Callee)
+                    || Arguments.iter().any(Self::ExpressionContainsWhenUtility)
+            }
+            SdslvExpression::Unary { Operand, .. } => Self::ExpressionContainsWhenUtility(Operand),
+            SdslvExpression::Binary { Left, Right, .. } => {
+                Self::ExpressionContainsWhenUtility(Left)
+                    || Self::ExpressionContainsWhenUtility(Right)
+            }
+            SdslvExpression::With { Base, Updates } => {
+                Self::ExpressionContainsWhenUtility(Base)
+                    || Updates
+                        .iter()
+                        .any(|u| Self::ExpressionContainsWhenUtility(&u.Value))
+            }
+            SdslvExpression::Switch {
+                Subject,
+                Cases,
+                ElseValue,
+                ..
+            } => {
+                Subject
+                    .as_ref()
+                    .is_some_and(|s| Self::ExpressionContainsWhenUtility(s))
+                    || Cases.iter().any(|c| {
+                        Self::ExpressionContainsWhenUtility(&c.Condition)
+                            || Self::ExpressionContainsWhenUtility(&c.Value)
+                    })
+                    || Self::ExpressionContainsWhenUtility(ElseValue)
+            }
+            SdslvExpression::Match { Subject, Arms, .. } => {
+                Self::ExpressionContainsWhenUtility(Subject)
+                    || Arms
+                        .iter()
+                        .any(|a| Self::ExpressionContainsWhenUtility(&a.Value))
+            }
+            SdslvExpression::TryPropagate { Expression, .. }
+            | SdslvExpression::Unwrap { Expression, .. } => {
+                Self::ExpressionContainsWhenUtility(Expression)
+            }
+            SdslvExpression::ArrayLiteral { Elements, .. } => {
+                Elements.iter().any(Self::ExpressionContainsWhenUtility)
+            }
+            _ => false,
+        }
+    }
+
     fn EmitMatchChainLines(
         &mut self,
         subject: &SdslvExpression,
@@ -914,7 +1136,7 @@ impl<'a> HlslEmitter<'a> {
                 "/* match expression is not supported in this expression context in SDSL-V M64c */"
                     .to_string()
             }
-            SdslvExpression::WhenUtility { .. } => {"/* when utility expression is not supported in this expression context in SDSL-V M66 */".to_string()}
+            SdslvExpression::WhenUtility { .. } => {"/* when utility expression is not supported in this expression context in SDSL-V M66b */".to_string()}
             SdslvExpression::TryPropagate { .. } | SdslvExpression::Unwrap { .. } => {
                 "/* fallible function emission is not implemented in SDSL-V M58 */".to_string()
             }

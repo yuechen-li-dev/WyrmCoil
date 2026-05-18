@@ -3010,3 +3010,71 @@ fn MatchM65FallibleDiagnostics() {
         "expected duplicate ok diagnostic"
     );
 }
+
+#[test]
+fn EmitHlslM66bWhenUtilityLowersInBoundedContexts() {
+    let src = "shader S { fn Choose(a: i32, b: i32) -> i32 { let result: i32 = when utility { case 100 when a > 0 score a case 200 when b > 0 score b else -1 }; result = when utility { case 300 when a > b score a case 400 when b > a score b else -2 }; return when utility { case 500 when a > b score a case 600 when b > a score b else -3 }; } }";
+    let hlsl =
+        CompileSourceToHlsl(src).expect("when utility in let/assign/return should lower in M66b");
+    assert!(
+        hlsl.contains("int result = -1;"),
+        "local initializer should start from else fallback"
+    );
+    assert!(
+        hlsl.contains("bool __utility_has0 = false;"),
+        "first utility should declare deterministic has-choice temp"
+    );
+    assert!(
+        hlsl.contains("float __utility_score0 = 0.0;"),
+        "first utility should declare deterministic best-score temp"
+    );
+    assert!(
+        hlsl.contains("float __utility_case_score0 = a;"),
+        "first case score temp should lower"
+    );
+    assert!(
+        hlsl.contains("__utility_case_score0 > __utility_score0"),
+        "comparison must be strict > to preserve first-tie wins"
+    );
+    assert!(
+        !hlsl.contains(">="),
+        "utility lowering must not use >= tie-breaking"
+    );
+    assert!(
+        hlsl.contains("result = 100;"),
+        "first utility should assign winning case value"
+    );
+    assert!(
+        hlsl.contains("result = -2;"),
+        "assignment RHS should initialize target to else fallback"
+    );
+    assert!(
+        hlsl.contains("int __utility_result2 = -3;"),
+        "return utility should lower through deterministic temp result variable"
+    );
+    assert!(
+        hlsl.contains("return __utility_result2;"),
+        "return utility should return lowered temp result"
+    );
+}
+
+#[test]
+fn EmitHlslM66bWhenUtilityRejectsOptionsAndNestedContext() {
+    let with_options = CompileSourceToHlsl("shader S { fn F(a: i32) -> i32 { return when utility { hysteresis: 2 min_commit: 3 } { case 100 when a > 0 score a else -1 }; } }")
+        .expect_err("stateful when utility options must not silently lower in M66b");
+    assert!(
+        with_options.iter().any(|d| d
+            .Message
+            .contains("stateful when utility options are not lowered in SDSL-V M66b")),
+        "stateful option form should produce explicit M66b unsupported diagnostic"
+    );
+
+    let nested = CompileSourceToHlsl("shader S { fn F(a: i32) -> i32 { let x: i32 = 1 + when utility { case 100 when a > 0 score a else -1 }; return x; } }")
+        .expect_err("nested when utility expression should fail bounded-context lowering");
+    assert!(
+        nested.iter().any(|d| d.Message.contains(
+            "when utility expression is not supported in this expression context in SDSL-V M66b"
+        )),
+        "nested utility expression should report clear bounded-context unsupported diagnostic"
+    );
+}

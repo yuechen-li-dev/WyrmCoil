@@ -1078,3 +1078,13 @@ match Parse(raw) {
 - Fallible `match` handles the subject and yields an infallible result expression.
 - Enum `match` remains a separate form (`Enum.Variant` arms) and enum payload matching is still future work.
 - HLSL lowering for fallible match is intentionally not implemented in M65.
+
+
+### M66b when utility HLSL lowering
+
+- Optionless `when utility` now lowers in bounded statement contexts: local initializer, assignment RHS, and return expression.
+- Lowering initializes the result from `else`, tracks `__utility_hasN` + `__utility_scoreN`, and updates only when an eligible case score is strictly greater than the current best score.
+- Strict `>` preserves first-tie-wins behavior by source order.
+- Stateful utility options (`hysteresis`, `min_commit`) remain parsed/validated but are rejected during HLSL emission with: `stateful when utility options are not lowered in SDSL-V M66b`.
+- `when policy` remains flow/state-only and is not part of shader-expression lowering.
+- Nested/general expression contexts for `when utility` remain unsupported in M66b and emit the bounded-context unsupported diagnostic.
