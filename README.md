@@ -230,3 +230,18 @@ M87 adds a backend-neutral sampler intent boundary after M85/M86 texture storage
 - No bind-group/material integration or textured draw-loop integration is added in M87.
 - No CPU/reference sampling implementation is added in M87, but Margaret can later consume the same sampler plan intent.
 - Color-space conversion remains texture-format-owned (`TexturePixelFormat`, e.g. sRGB); samplers do not perform color conversion.
+
+
+## Asset texture+sampler binding layout seam status (M88)
+
+M88 adds a backend-neutral texture+sampler binding layout planning boundary after M85/M86/M87:
+
+- `TextureUploadPlan` remains pixel-storage/upload metadata.
+- `SamplerPlan` remains filtering/address intent.
+- `TextureSamplerBindingLayoutPlan` now owns shader binding slots (`TextureBinding`, `SamplerBinding`) and stage visibility.
+- `DefaultSampledColor2D(label)` provides a convenience default of texture binding `0`, sampler binding `1`, and `Pixel` visibility.
+- Optional `wgpu` mapping builds a deterministic two-entry bind-group-layout descriptor plan:
+  - texture entry: D2, filterable float, non-multisampled;
+  - sampler entry: filtering sampler.
+- No shader reflection is used; bindings are explicit author-chosen metadata.
+- No actual bind-group creation/material ownership/textured draw integration is added in M88.
