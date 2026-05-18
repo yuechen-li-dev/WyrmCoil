@@ -114,3 +114,34 @@ let artifact = BuildHlslShaderArtifact(
     ],
 )?;
 ```
+
+## WorldBlackboard seed (M78)
+
+M78 adds a typed world-level resource layer in `Engine::world`.
+
+### Boundary: `DwBoard` vs `WorldBlackboard`
+
+| Layer | Purpose | Typical data |
+|---|---|---|
+| Dunewyrm `DwBoard` | control memory for decisions | small typed control facts, TTL/dirty state, decision inputs |
+| `Engine::WorldBlackboard` | world-owned subsystem resources | geometry registries, ray query request/result stores, future camera/input resources |
+
+This split is intentional:
+
+- Geometry registries and ray query stores live in world resources, not in `DwBoard`.
+- `WorldBlackboard` is not an ECS and not a scene graph.
+- `WorldBlackboard` is a typed resource owner for simulation/world subsystems.
+
+### M78 seed contents
+
+`WorldBlackboard` currently owns:
+
+- `Geometry: WorldGeometryRegistry`
+- `RayRequests: RayQueryRequestStore`
+- `RayResults: RayQueryStore`
+
+`WorldGeometryRegistry` is a deterministic triangle registry keyed by triangle id with explicit duplicate-id rejection.
+
+### Forward seam
+
+M78 prepares the M79 bridge where world geometry can be translated into a ray-query scene. Camera/input resources remain future work.
