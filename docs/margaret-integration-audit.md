@@ -440,3 +440,14 @@ WorldBlackboard relation:
 - `WorldBlackboard.Geometry` is the intended world-owned geometry source for this bridge.
 - Request-store ownership of full world geometry is intentionally deferred.
 - Future milestones can add camera/input world resources and request/actuator wiring around this helper.
+
+
+## M80 status update
+
+M80 adds a minimal world-resource picking seam in `Engine::world` + `Engine::ray`:
+
+- World-owned camera resource (config shape) that builds a `MargaretCameraRayAdapter` on demand.
+- World-owned input cursor resource with normalized `[0, 1]` finite validation.
+- `PickWorldBlackboard(...)` helper that composes blackboard camera/input/geometry into existing M79 world-geometry picking.
+
+This remains a helper-level ergonomic pass only. It does not integrate a window event loop, does not replace render camera ownership, and does not introduce scene-graph/ECS or GPU tracing features.

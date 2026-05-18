@@ -373,6 +373,42 @@ pub fn PickWorldGeometryRegistry(
     ResolveWorldPickResult(outcome, &scene.Sources)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WorldBlackboardPickError {
+    MissingCamera,
+    MissingCursor,
+    InvalidCursor { ScreenX: f32, ScreenY: f32 },
+    Pick(WorldPickError),
+}
+
+pub fn PickWorldBlackboard(
+    blackboard: &crate::Engine::world::WorldBlackboard,
+    query_id: RayQueryId,
+) -> Result<WorldPickResult, WorldBlackboardPickError> {
+    let camera = blackboard
+        .Camera
+        .ok_or(WorldBlackboardPickError::MissingCamera)?;
+
+    let (screen_x, screen_y) = blackboard
+        .Input
+        .CursorScreen()
+        .ok_or(WorldBlackboardPickError::MissingCursor)?;
+
+    if !screen_x.is_finite()
+        || !screen_y.is_finite()
+        || !(0.0..=1.0).contains(&screen_x)
+        || !(0.0..=1.0).contains(&screen_y)
+    {
+        return Err(WorldBlackboardPickError::InvalidCursor {
+            ScreenX: screen_x,
+            ScreenY: screen_y,
+        });
+    }
+
+    let adapter = camera.BuildMargaretCameraRayAdapter();
+    PickWorldGeometryRegistry(&blackboard.Geometry, &adapter, screen_x, screen_y, query_id)
+        .map_err(WorldBlackboardPickError::Pick)
+}
 pub fn ResolveVisiblePickResult(
     outcome: RayQueryOutcome,
     triangle_sources: &[RayTriangleSource],
