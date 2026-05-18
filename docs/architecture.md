@@ -169,3 +169,15 @@ M81 adds an actuatorized world-pick request path:
 Scope boundaries remain unchanged: no editor UI, no window event-loop integration, no scene graph/ECS, and no GPU ray tracing.
 
 `WorldBlackboard::Clear()` currently resets all blackboard resources, including camera/input, as a seed-level full reset helper.
+
+## Actuator subsystem pattern (M82)
+
+M82 documents the reusable actuator-subsystem architecture in `docs/actuator-subsystems.md`.
+
+Use this pattern when Dunewyrm control needs domain capability execution without moving rich payloads into acts/mailbox:
+
+- act carries id-only intent,
+- request/result payloads live in world-owned stores,
+- completion mailbox remains id-only and staged for next-tick visibility.
+
+Margaret world picking (M81) is the canonical worked example of this pattern.

@@ -460,3 +460,19 @@ M80 adds a minimal world-resource picking seam in `Engine::world` + `Engine::ray
 - This pass does not add editor UI, winit wiring, ECS/scene graph, or GPU tracing.
 
 This remains a helper-level ergonomic pass only. It does not integrate a window event loop, does not replace render camera ownership, and does not introduce scene-graph/ECS or GPU tracing features.
+
+
+## M82 status update
+
+M82 records Margaret world picking (M81) as the first full WyrmCoil actuator-subsystem worked example.
+
+Reference document: `docs/actuator-subsystems.md`.
+
+Pattern reminder:
+
+- Dunewyrm emits id-only act intent.
+- Rich request payload is stored in `WorldBlackboard.RayRequests`.
+- Actuator executes by id (`ExecuteWorldPickRequestById(...)`).
+- Rich hit/miss/failure outcome is stored in `WorldBlackboard.RayResults`.
+- Mailbox completion is id-only and staged (`DwMessage::I32(kind, query_id)`).
+- Control consumes completion next tick and resolves rich result from store.
