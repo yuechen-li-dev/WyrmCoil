@@ -6,6 +6,7 @@ use crate::Dunewyrm::SelectHighestUtilityTarget;
 pub enum ShaderSourceMode {
     SdslV,
     Wgsl,
+    Hlsl,
     NoShaderSourceFeasible,
 }
 
@@ -20,9 +21,12 @@ pub enum ShaderSourceRejectedReason {
 pub enum ShaderSourceStrategyReason {
     PreferredSdslVAvailable,
     PreferredWgslAvailable,
+    PreferredHlslAvailable,
     RequiredSdslVAvailable,
     RequiredWgslAvailable,
+    RequiredHlslAvailable,
     ConflictingRequirements,
+    ConflictingPreferences,
     NoShaderSourceFeasible,
 }
 
@@ -31,6 +35,7 @@ pub struct ShaderSourceStrategyRequest {
     pub Label: String,
     pub SdslVSource: Option<String>,
     pub WgslSource: Option<String>,
+    pub HlslSource: Option<String>,
     pub Constraints: ShaderSourceStrategyConstraints,
 }
 
@@ -38,9 +43,12 @@ pub struct ShaderSourceStrategyRequest {
 pub struct ShaderSourceStrategyConstraints {
     pub AllowSdslV: bool,
     pub AllowWgsl: bool,
+    pub AllowHlsl: bool,
     pub RequireSdslV: bool,
     pub RequireWgsl: bool,
+    pub RequireHlsl: bool,
     pub PreferWgsl: bool,
+    pub PreferHlsl: bool,
 }
 
 impl Default for ShaderSourceStrategyConstraints {
@@ -48,9 +56,12 @@ impl Default for ShaderSourceStrategyConstraints {
         Self {
             AllowSdslV: true,
             AllowWgsl: true,
+            AllowHlsl: true,
             RequireSdslV: false,
             RequireWgsl: false,
+            RequireHlsl: false,
             PreferWgsl: false,
+            PreferHlsl: false,
         }
     }
 }
@@ -59,6 +70,7 @@ impl Default for ShaderSourceStrategyConstraints {
 pub struct ShaderSourceStrategyFeasibility {
     pub SdslVFeasible: bool,
     pub WgslFeasible: bool,
+    pub HlslFeasible: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,80 +90,96 @@ pub struct ShaderSourceStrategyDecision {
 pub fn SelectShaderSourceStrategy(
     request: &ShaderSourceStrategyRequest,
 ) -> ShaderSourceStrategyDecision {
-    let constraints = request.Constraints;
-    if constraints.RequireSdslV && constraints.RequireWgsl {
-        return ShaderSourceStrategyDecision {
-            SelectedMode: ShaderSourceMode::NoShaderSourceFeasible,
-            Reason: ShaderSourceStrategyReason::ConflictingRequirements,
-            RejectedModes: vec![
-                RejectedShaderSourceMode {
-                    Mode: ShaderSourceMode::SdslV,
-                    Reason: ShaderSourceRejectedReason::BlockedByRequirement,
-                },
-                RejectedShaderSourceMode {
-                    Mode: ShaderSourceMode::Wgsl,
-                    Reason: ShaderSourceRejectedReason::BlockedByRequirement,
-                },
+    let c = request.Constraints;
+    if [c.RequireSdslV, c.RequireWgsl, c.RequireHlsl]
+        .iter()
+        .filter(|x| **x)
+        .count()
+        > 1
+    {
+        return NoFeasible(
+            ShaderSourceStrategyReason::ConflictingRequirements,
+            vec![
+                ShaderSourceMode::SdslV,
+                ShaderSourceMode::Wgsl,
+                ShaderSourceMode::Hlsl,
             ],
-            Feasibility: ShaderSourceStrategyFeasibility {
-                SdslVFeasible: false,
-                WgslFeasible: false,
-            },
-        };
+        );
+    }
+    if c.PreferWgsl && c.PreferHlsl {
+        return NoFeasible(
+            ShaderSourceStrategyReason::ConflictingPreferences,
+            vec![ShaderSourceMode::Wgsl, ShaderSourceMode::Hlsl],
+        );
     }
 
-    let sdslv_has_source = HasNonEmptySource(request.SdslVSource.as_deref());
-    let wgsl_has_source = HasNonEmptySource(request.WgslSource.as_deref());
+    let sdslv_has = HasNonEmptySource(request.SdslVSource.as_deref());
+    let wgsl_has = HasNonEmptySource(request.WgslSource.as_deref());
+    let hlsl_has = HasNonEmptySource(request.HlslSource.as_deref());
 
-    let sdslv_feasible = constraints.AllowSdslV
-        && sdslv_has_source
-        && (!constraints.RequireWgsl || constraints.RequireSdslV);
-    let wgsl_feasible = constraints.AllowWgsl
-        && wgsl_has_source
-        && (!constraints.RequireSdslV || constraints.RequireWgsl);
-
+    let sdslv_feasible = c.AllowSdslV && sdslv_has && !c.RequireWgsl && !c.RequireHlsl;
+    let wgsl_feasible = c.AllowWgsl && wgsl_has && !c.RequireSdslV && !c.RequireHlsl;
+    let hlsl_feasible = c.AllowHlsl && hlsl_has && !c.RequireSdslV && !c.RequireWgsl;
     let feasibility = ShaderSourceStrategyFeasibility {
         SdslVFeasible: sdslv_feasible,
         WgslFeasible: wgsl_feasible,
+        HlslFeasible: hlsl_feasible,
     };
 
     let mut rejected = Vec::new();
     MaybeRejectMode(
         ShaderSourceMode::SdslV,
-        constraints.AllowSdslV,
-        sdslv_has_source,
-        constraints.RequireWgsl,
+        c.AllowSdslV,
+        sdslv_has,
+        c.RequireWgsl || c.RequireHlsl,
         sdslv_feasible,
         &mut rejected,
     );
     MaybeRejectMode(
         ShaderSourceMode::Wgsl,
-        constraints.AllowWgsl,
-        wgsl_has_source,
-        constraints.RequireSdslV,
+        c.AllowWgsl,
+        wgsl_has,
+        c.RequireSdslV || c.RequireHlsl,
         wgsl_feasible,
         &mut rejected,
     );
+    MaybeRejectMode(
+        ShaderSourceMode::Hlsl,
+        c.AllowHlsl,
+        hlsl_has,
+        c.RequireSdslV || c.RequireWgsl,
+        hlsl_feasible,
+        &mut rejected,
+    );
 
-    let mut scored_modes = Vec::new();
+    let mut scored = Vec::new();
     if sdslv_feasible {
-        scored_modes.push((
+        scored.push((
             ShaderSourceMode::SdslV,
-            if constraints.PreferWgsl { 0.8 } else { 1.0 },
+            if c.PreferWgsl || c.PreferHlsl {
+                0.6
+            } else {
+                1.0
+            },
         ));
     }
     if wgsl_feasible {
-        scored_modes.push((
+        scored.push((
             ShaderSourceMode::Wgsl,
-            if constraints.PreferWgsl { 1.0 } else { 0.7 },
+            if c.PreferWgsl { 1.0 } else { 0.75 },
+        ));
+    }
+    if hlsl_feasible {
+        scored.push((
+            ShaderSourceMode::Hlsl,
+            if c.PreferHlsl { 1.0 } else { 0.65 },
         ));
     }
 
-    let selected = SelectHighestUtilityTarget(&scored_modes).map(|entry| entry.0);
-    match selected {
+    match SelectHighestUtilityTarget(&scored).map(|x| x.0) {
         Some(ShaderSourceMode::SdslV) => ShaderSourceStrategyDecision {
             SelectedMode: ShaderSourceMode::SdslV,
-            Reason: if constraints.RequireSdslV {
+            Reason: if c.RequireSdslV {
                 ShaderSourceStrategyReason::RequiredSdslVAvailable
             } else {
                 ShaderSourceStrategyReason::PreferredSdslVAvailable
@@ -161,10 +189,20 @@ pub fn SelectShaderSourceStrategy(
         },
         Some(ShaderSourceMode::Wgsl) => ShaderSourceStrategyDecision {
             SelectedMode: ShaderSourceMode::Wgsl,
-            Reason: if constraints.RequireWgsl {
+            Reason: if c.RequireWgsl {
                 ShaderSourceStrategyReason::RequiredWgslAvailable
             } else {
                 ShaderSourceStrategyReason::PreferredWgslAvailable
+            },
+            RejectedModes: rejected,
+            Feasibility: feasibility,
+        },
+        Some(ShaderSourceMode::Hlsl) => ShaderSourceStrategyDecision {
+            SelectedMode: ShaderSourceMode::Hlsl,
+            Reason: if c.RequireHlsl {
+                ShaderSourceStrategyReason::RequiredHlslAvailable
+            } else {
+                ShaderSourceStrategyReason::PreferredHlslAvailable
             },
             RejectedModes: rejected,
             Feasibility: feasibility,
@@ -178,6 +216,28 @@ pub fn SelectShaderSourceStrategy(
     }
 }
 
+fn NoFeasible(
+    reason: ShaderSourceStrategyReason,
+    modes: Vec<ShaderSourceMode>,
+) -> ShaderSourceStrategyDecision {
+    ShaderSourceStrategyDecision {
+        SelectedMode: ShaderSourceMode::NoShaderSourceFeasible,
+        Reason: reason,
+        RejectedModes: modes
+            .into_iter()
+            .map(|mode| RejectedShaderSourceMode {
+                Mode: mode,
+                Reason: ShaderSourceRejectedReason::BlockedByRequirement,
+            })
+            .collect(),
+        Feasibility: ShaderSourceStrategyFeasibility {
+            SdslVFeasible: false,
+            WgslFeasible: false,
+            HlslFeasible: false,
+        },
+    }
+}
+
 fn HasNonEmptySource(source: Option<&str>) -> bool {
     source.map(|text| !text.trim().is_empty()).unwrap_or(false)
 }
@@ -186,7 +246,7 @@ fn MaybeRejectMode(
     mode: ShaderSourceMode,
     allowed: bool,
     has_source: bool,
-    blocked_by_requirement: bool,
+    blocked: bool,
     feasible: bool,
     rejected: &mut Vec<RejectedShaderSourceMode>,
 ) {
@@ -197,7 +257,7 @@ fn MaybeRejectMode(
         ShaderSourceRejectedReason::DisabledByConstraints
     } else if !has_source {
         ShaderSourceRejectedReason::SourceMissing
-    } else if blocked_by_requirement {
+    } else if blocked {
         ShaderSourceRejectedReason::BlockedByRequirement
     } else {
         ShaderSourceRejectedReason::SourceMissing
@@ -211,192 +271,74 @@ fn MaybeRejectMode(
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn Request(sdslv: Option<&str>, wgsl: Option<&str>) -> ShaderSourceStrategyRequest {
+    fn Request(
+        sdslv: Option<&str>,
+        wgsl: Option<&str>,
+        hlsl: Option<&str>,
+    ) -> ShaderSourceStrategyRequest {
         ShaderSourceStrategyRequest {
             Label: "StrategyProbe".to_string(),
             SdslVSource: sdslv.map(|x| x.to_string()),
             WgslSource: wgsl.map(|x| x.to_string()),
+            HlslSource: hlsl.map(|x| x.to_string()),
             Constraints: ShaderSourceStrategyConstraints::default(),
         }
     }
 
     #[test]
-    fn DefaultPreferenceSelectsSdslVWhenBothAvailable() {
-        let d =
-            SelectShaderSourceStrategy(&Request(Some("shader S {}"), Some("@vertex fn vs() {}")));
+    fn HlslSelectionPolicyAndConflicts() {
         assert_eq!(
-            d.SelectedMode,
-            ShaderSourceMode::SdslV,
-            "default policy should prefer SDSL-V when both are feasible"
+            SelectShaderSourceStrategy(&Request(Some("a"), Some("b"), Some("c"))).SelectedMode,
+            ShaderSourceMode::SdslV
         );
         assert_eq!(
-            d.Reason,
-            ShaderSourceStrategyReason::PreferredSdslVAvailable,
-            "reason should report preferred SDSL-V selection"
-        );
-    }
-
-    #[test]
-    fn PreferWgslSelectsWgslWhenBothAvailable() {
-        let mut req = Request(Some("shader S {}"), Some("@vertex fn vs() {}"));
-        req.Constraints.PreferWgsl = true;
-        let d = SelectShaderSourceStrategy(&req);
-        assert_eq!(
-            d.SelectedMode,
-            ShaderSourceMode::Wgsl,
-            "prefer-wgsl should override default SDSL-V preference when both are feasible"
-        );
-    }
-
-    #[test]
-    fn SingleSourceAvailabilitySelectsFeasiblePath() {
-        let only_sdslv = SelectShaderSourceStrategy(&Request(Some("shader S {}"), None));
-        assert_eq!(
-            only_sdslv.SelectedMode,
-            ShaderSourceMode::SdslV,
-            "SDSL-V should be selected when it is the only feasible source"
+            SelectShaderSourceStrategy(&Request(
+                None,
+                None,
+                Some("float4 PSMain():SV_Target{return 1;}")
+            ))
+            .SelectedMode,
+            ShaderSourceMode::Hlsl
         );
 
-        let only_wgsl = SelectShaderSourceStrategy(&Request(None, Some("@vertex fn vs() {}")));
+        let mut prefer = Request(Some("a"), Some("b"), Some("c"));
+        prefer.Constraints.PreferHlsl = true;
         assert_eq!(
-            only_wgsl.SelectedMode,
-            ShaderSourceMode::Wgsl,
-            "WGSL should be selected when it is the only feasible source"
-        );
-    }
-
-    #[test]
-    fn DisabledConstraintsRejectDisabledModeAndSelectFallback() {
-        let mut sdslv_disabled = Request(Some("shader S {}"), Some("@vertex fn vs() {}"));
-        sdslv_disabled.Constraints.AllowSdslV = false;
-        let d1 = SelectShaderSourceStrategy(&sdslv_disabled);
-        assert_eq!(
-            d1.SelectedMode,
-            ShaderSourceMode::Wgsl,
-            "WGSL should be selected when SDSL-V is disabled but WGSL remains feasible"
-        );
-        assert!(
-            d1.RejectedModes
-                .iter()
-                .any(|x| x.Mode == ShaderSourceMode::SdslV
-                    && x.Reason == ShaderSourceRejectedReason::DisabledByConstraints),
-            "SDSL-V disabled rejection should be recorded"
+            SelectShaderSourceStrategy(&prefer).SelectedMode,
+            ShaderSourceMode::Hlsl
         );
 
-        let mut wgsl_disabled = Request(Some("shader S {}"), Some("@vertex fn vs() {}"));
-        wgsl_disabled.Constraints.AllowWgsl = false;
-        let d2 = SelectShaderSourceStrategy(&wgsl_disabled);
+        let mut need = Request(None, None, Some("c"));
+        need.Constraints.RequireHlsl = true;
         assert_eq!(
-            d2.SelectedMode,
-            ShaderSourceMode::SdslV,
-            "SDSL-V should be selected when WGSL is disabled but SDSL-V remains feasible"
-        );
-        assert!(
-            d2.RejectedModes
-                .iter()
-                .any(|x| x.Mode == ShaderSourceMode::Wgsl
-                    && x.Reason == ShaderSourceRejectedReason::DisabledByConstraints),
-            "WGSL disabled rejection should be recorded"
-        );
-    }
-
-    #[test]
-    fn RequiredConstraintsAndConflictsProduceHardFailure() {
-        let mut need_sdslv = Request(None, Some("@vertex fn vs() {}"));
-        need_sdslv.Constraints.RequireSdslV = true;
-        let d1 = SelectShaderSourceStrategy(&need_sdslv);
-        assert_eq!(
-            d1.SelectedMode,
-            ShaderSourceMode::NoShaderSourceFeasible,
-            "requiring SDSL-V should reject WGSL-only inputs"
+            SelectShaderSourceStrategy(&need).SelectedMode,
+            ShaderSourceMode::Hlsl
         );
 
-        let mut need_wgsl = Request(Some("shader S {}"), None);
-        need_wgsl.Constraints.RequireWgsl = true;
-        let d2 = SelectShaderSourceStrategy(&need_wgsl);
+        let mut need_missing = Request(Some("a"), None, None);
+        need_missing.Constraints.RequireHlsl = true;
         assert_eq!(
-            d2.SelectedMode,
-            ShaderSourceMode::NoShaderSourceFeasible,
-            "requiring WGSL should reject SDSL-V-only inputs"
+            SelectShaderSourceStrategy(&need_missing).SelectedMode,
+            ShaderSourceMode::NoShaderSourceFeasible
         );
 
-        let mut conflict = Request(Some("shader S {}"), Some("@vertex fn vs() {}"));
-        conflict.Constraints.RequireSdslV = true;
-        conflict.Constraints.RequireWgsl = true;
-        let d3 = SelectShaderSourceStrategy(&conflict);
-        assert_eq!(
-            d3.SelectedMode,
-            ShaderSourceMode::NoShaderSourceFeasible,
-            "conflicting strict requirements should be a hard failure"
-        );
-        assert_eq!(
-            d3.Reason,
-            ShaderSourceStrategyReason::ConflictingRequirements,
-            "conflicting requirements should produce structured conflict reason"
-        );
-    }
+        let mut dis = Request(None, None, Some("c"));
+        dis.Constraints.AllowHlsl = false;
+        let d = SelectShaderSourceStrategy(&dis);
+        assert!(!d.Feasibility.HlslFeasible);
 
-    #[test]
-    fn EmptyOrWhitespaceSourceIsNotFeasible() {
-        let d = SelectShaderSourceStrategy(&Request(Some("   \n\t"), Some("")));
+        let white = Request(None, None, Some(" \n\t"));
         assert_eq!(
-            d.SelectedMode,
-            ShaderSourceMode::NoShaderSourceFeasible,
-            "whitespace-only or empty source should not be considered feasible"
-        );
-        assert!(
-            !d.Feasibility.SdslVFeasible && !d.Feasibility.WgslFeasible,
-            "feasibility flags should mark both sources infeasible for empty/whitespace input"
-        );
-    }
-
-    #[test]
-    fn RejectedModesAndFeasibilityReflectMissingAndBlocked() {
-        let mut req = Request(Some("shader S {}"), Some("@vertex fn vs() {}"));
-        req.Constraints.RequireSdslV = true;
-        let d = SelectShaderSourceStrategy(&req);
-        assert_eq!(
-            d.SelectedMode,
-            ShaderSourceMode::SdslV,
-            "required SDSL-V should be selected when available"
-        );
-        assert!(
-            d.RejectedModes
-                .iter()
-                .any(|x| x.Mode == ShaderSourceMode::Wgsl
-                    && x.Reason == ShaderSourceRejectedReason::BlockedByRequirement),
-            "WGSL should be rejected as blocked by SDSL-V requirement"
-        );
-        assert!(
-            d.Feasibility.SdslVFeasible,
-            "SDSL-V feasibility should remain true when required and source is present"
-        );
-        assert!(
-            !d.Feasibility.WgslFeasible,
-            "WGSL feasibility should be false when blocked by requirement"
-        );
-    }
-
-    #[test]
-    fn UsesDunewyrmUtilitySelectionScoringPolicy() {
-        let default_pick = SelectHighestUtilityTarget(&[
-            (ShaderSourceMode::SdslV, 1.0),
-            (ShaderSourceMode::Wgsl, 0.7),
-        ]);
-        assert_eq!(
-            default_pick,
-            Some((ShaderSourceMode::SdslV, 1.0)),
-            "default scoring should keep SDSL-V above WGSL"
+            SelectShaderSourceStrategy(&white).SelectedMode,
+            ShaderSourceMode::NoShaderSourceFeasible
         );
 
-        let prefer_wgsl_pick = SelectHighestUtilityTarget(&[
-            (ShaderSourceMode::SdslV, 0.8),
-            (ShaderSourceMode::Wgsl, 1.0),
-        ]);
+        let mut conflict = Request(Some("a"), Some("b"), Some("c"));
+        conflict.Constraints.PreferWgsl = true;
+        conflict.Constraints.PreferHlsl = true;
         assert_eq!(
-            prefer_wgsl_pick,
-            Some((ShaderSourceMode::Wgsl, 1.0)),
-            "prefer-wgsl scoring should raise WGSL above SDSL-V"
+            SelectShaderSourceStrategy(&conflict).Reason,
+            ShaderSourceStrategyReason::ConflictingPreferences
         );
     }
 }

@@ -248,6 +248,7 @@ mod tests {
             Label: "ShaderStrategyRequest".to_string(),
             SdslVSource: Some("shader S {}".to_string()),
             WgslSource: Some(MINIMAL_SPRITE_WGSL_FIXTURE.to_string()),
+            HlslSource: None,
             Constraints: ShaderSourceStrategyConstraints {
                 PreferWgsl: true,
                 ..ShaderSourceStrategyConstraints::default()

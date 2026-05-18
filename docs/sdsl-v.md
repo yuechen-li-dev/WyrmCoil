@@ -1100,3 +1100,23 @@ M67 is a language-contract clarification pass, not a renderer/runtime expansion 
 - `when policy` is flow/state-only and is not accepted in ordinary shader/helper function bodies.
 - Ordinary function/helper usage of `when policy` is diagnosed with: `when policy is only valid inside flow/state bodies; use when utility for standalone ranked expressions`.
 - Persistent/stateful policy semantics (`hysteresis`, `min_commit`) stay in the flow-policy surface, not ordinary shader-expression lowering.
+
+
+## Raw HLSL compatibility path (M68)
+
+SDSL-V remains WyrmCoil's reference shader authoring language. WGSL remains a native backend source path. Raw HLSL is also supported as a compatibility/escape-hatch source path for legacy or direct-DXC workflows.
+
+SDSL-V is HLSL-targeting, not HLSL-compatible, and it is not an HLSL superset. Raw HLSL wrappers require explicit entry metadata (name, stage, target profile). WyrmCoil validates this wrapper metadata only; HLSL parse/semantic diagnostics are owned by DXC.
+
+Example:
+
+```rust
+let artifact = BuildHlslShaderArtifact(
+    "legacy_flat.hlsl",
+    hlsl_source,
+    vec![
+        HlslEntryPoint::Vertex("VSMain"),
+        HlslEntryPoint::Pixel("PSMain"),
+    ],
+)?;
+```

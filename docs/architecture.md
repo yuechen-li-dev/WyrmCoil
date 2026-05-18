@@ -94,3 +94,23 @@ Dunewyrm mailbox remains a deterministic two-queue model:
 Messages now carry a bounded typed payload enum (`None`, `Bool`, `I32`, `F32`, `PairI32`) while preserving `Kind: u32` routing. Mailbox helpers support filtered cursor operations on the visible queue (`HasKind`, `PeekFirstKind`, `ConsumeFirstKind`, `ConsumeAllKind`).
 
 Non-goals remain unchanged: no async event bus, no dynamic/object payload transport, and no arbitrary reflection-driven message channel.
+
+
+## Raw HLSL compatibility path (M68)
+
+SDSL-V remains WyrmCoil's reference shader authoring language. WGSL remains a native backend source path. Raw HLSL is also supported as a compatibility/escape-hatch source path for legacy or direct-DXC workflows.
+
+SDSL-V is HLSL-targeting, not HLSL-compatible, and it is not an HLSL superset. Raw HLSL wrappers require explicit entry metadata (name, stage, target profile). WyrmCoil validates this wrapper metadata only; HLSL parse/semantic diagnostics are owned by DXC.
+
+Example:
+
+```rust
+let artifact = BuildHlslShaderArtifact(
+    "legacy_flat.hlsl",
+    hlsl_source,
+    vec![
+        HlslEntryPoint::Vertex("VSMain"),
+        HlslEntryPoint::Pixel("PSMain"),
+    ],
+)?;
+```

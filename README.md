@@ -124,3 +124,23 @@ cargo test
 - typed mailbox alert (`DwMessage::I32`) is consumed with `ConsumeFirstKind(...)`
 - board state is written with TTL helpers and deterministic expiry
 - root pushes a tiny child frame, child emits begin/complete acts, then root resumes steady
+
+
+## Raw HLSL compatibility path (M68)
+
+SDSL-V remains WyrmCoil's reference shader authoring language. WGSL remains a native backend source path. Raw HLSL is also supported as a compatibility/escape-hatch source path for legacy or direct-DXC workflows.
+
+SDSL-V is HLSL-targeting, not HLSL-compatible, and it is not an HLSL superset. Raw HLSL wrappers require explicit entry metadata (name, stage, target profile). WyrmCoil validates this wrapper metadata only; HLSL parse/semantic diagnostics are owned by DXC.
+
+Example:
+
+```rust
+let artifact = BuildHlslShaderArtifact(
+    "legacy_flat.hlsl",
+    hlsl_source,
+    vec![
+        HlslEntryPoint::Vertex("VSMain"),
+        HlslEntryPoint::Pixel("PSMain"),
+    ],
+)?;
+```
