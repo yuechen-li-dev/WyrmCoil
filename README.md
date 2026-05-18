@@ -260,6 +260,15 @@ M89 adds an optional backend-specific `wgpu` bind-group resource seam for one sa
 - No textured draw integration is added in M89.
 - No shader reflection is added in M89.
 
+## Native material TOML schema seed (M90)
+
+M90 defines the first native material asset schema as a flat TOML graph in `docs/material-toml.md`.
+
+- Native editable material source of truth is ordinary `.toml` with `[asset] type = "material"`.
+- MaterialX is a compatibility import/export path, not native internal source of truth.
+- SDSL-V remains the planned generated/reference shader target for material lowering.
+- M90 is docs/schema only: no parser, no material compiler/runtime, and no draw integration changes.
+
 Current staged texture path:
 
 `Decoded image -> TextureUploadPlan -> WgpuTextureResource + SamplerPlan -> WgpuSamplerResource + TextureSamplerBindingLayoutPlan -> WgpuTextureSamplerBindGroupLayoutResource -> WgpuTextureSamplerBindGroupResource`
