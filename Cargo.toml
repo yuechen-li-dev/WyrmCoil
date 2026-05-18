@@ -30,6 +30,8 @@ margaret-cpu = { path = "src/Margaret/margaret-cpu" }
 winit = "0.30"
 wgpu = "24"
 margaret-core.workspace = true
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 [lib]
 name = "wyrmcoil"

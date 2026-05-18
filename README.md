@@ -272,3 +272,15 @@ M90 defines the first native material asset schema as a flat TOML graph in `docs
 Current staged texture path:
 
 `Decoded image -> TextureUploadPlan -> WgpuTextureResource + SamplerPlan -> WgpuSamplerResource + TextureSamplerBindingLayoutPlan -> WgpuTextureSamplerBindGroupLayoutResource -> WgpuTextureSamplerBindGroupResource`
+
+## Material TOML parser/validator status (M91)
+
+WyrmCoil now includes a native material TOML parser/validator seed in `Engine::material`.
+
+Scope in M91:
+
+- parse `.toml` material assets into typed graph structures,
+- validate headers, node identity, edge references, output references, and cycle freedom,
+- preserve literal params/editor metadata for future compiler/runtime work.
+
+Out of scope in M91: MaterialX import, SDSL-V codegen, and runtime material binding integration.

@@ -1,0 +1,21 @@
+[asset]
+type = "material"
+version = 1
+
+[material]
+name = "FlatMagenta"
+output = "surface"
+
+[[node]]
+id = "color"
+kind = "constant_float4"
+
+[node.params]
+value = [1.0, 0.0, 1.0, 1.0]
+
+[[node]]
+id = "surface"
+kind = "output"
+
+[node.inputs]
+color = "color"

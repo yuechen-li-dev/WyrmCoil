@@ -1,0 +1,37 @@
+[asset]
+type = "material"
+version = 1
+
+[material]
+name = "TextureTint"
+output = "surface"
+
+[[node]]
+id = "base_color_tex"
+kind = "texture2d"
+
+[node.params]
+path = "textures/albedo.ppm"
+color_space = "srgb"
+
+[[node]]
+id = "tint"
+kind = "constant_float4"
+
+[node.params]
+value = [1.0, 0.9, 0.85, 1.0]
+
+[[node]]
+id = "base_color"
+kind = "multiply"
+
+[node.inputs]
+a = "base_color_tex"
+b = "tint"
+
+[[node]]
+id = "surface"
+kind = "standard_surface"
+
+[node.inputs]
+base_color = "base_color"

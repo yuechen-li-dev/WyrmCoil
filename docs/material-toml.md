@@ -366,3 +366,30 @@ metallic = "metallic"
 M90 target outcome: **Outcome A (success)** for design seed.
 
 The native material TOML shape, relation to MaterialX, relation to SDSL-V, and explicit non-goal boundaries are now documented without adding runtime/compiler implementation.
+
+## M91 parser/validator seed status
+
+M91 implements native `.toml` material parsing and flat-graph validation in `Engine::material`.
+
+Current enforced validation:
+
+- `[asset]` must be `type = "material"` and `version = 1`.
+- `[material]` requires non-empty `name` and `output`.
+- `output` must reference an existing node id.
+- At least one `[[node]]` is required.
+- Node ids must be unique, non-empty, and simple ASCII graph-local ids.
+- Node kinds must be non-empty.
+- Input names must be non-empty.
+- Input references must resolve to existing nodes.
+- Self-input is rejected.
+- Graph cycles are rejected.
+
+M91 preserves optional `[node.editor]` values as untyped literal metadata and does not enforce node-kind semantic contracts yet.
+
+Unknown node kinds are currently allowed; M91 validates graph shape, not full semantic node contracts.
+
+Non-goals remain unchanged for M91:
+
+- no SDSL-V material codegen,
+- no MaterialX import/export implementation,
+- no runtime material object/bind-group integration.

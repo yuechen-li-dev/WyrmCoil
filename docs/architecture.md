@@ -282,3 +282,11 @@ M90 defines the first native material asset schema as a flat TOML graph in `docs
 Current staged texture path:
 
 `Decoded image -> TextureUploadPlan -> WgpuTextureResource + SamplerPlan -> WgpuSamplerResource + TextureSamplerBindingLayoutPlan -> WgpuTextureSamplerBindGroupLayoutResource -> WgpuTextureSamplerBindGroupResource`
+
+## Native material TOML parser/validator seed (M91)
+
+M91 adds `Engine::material` as a native material asset parser/validator seed:
+
+`material.toml -> MaterialTomlAsset -> validation diagnostics`
+
+The M91 boundary is parse+validation only. It does not include shader generation, MaterialX import, or runtime material binding integration.
