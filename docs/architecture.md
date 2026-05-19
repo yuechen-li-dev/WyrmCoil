@@ -321,3 +321,14 @@ M93 adds deterministic native material graph -> SDSL-V source generation after M
 - `texture2d` currently lowers to deterministic placeholder white sample helper stubs (no real texture binding/sampling yet).
 - Output is deterministic (stable topological order, stable identifier sanitization, no timestamps).
 - No material runtime object ownership, bind-group integration, textured draw integration, or MaterialX import implementation is added in M93.
+
+
+## Native material resource metadata seed (M94)
+
+M94 adds a deterministic metadata bridge after M92/M93 material graph validation:
+
+`validated material graph -> MaterialResourceRequirements`
+
+The extractor currently collects output-reachable `texture2d` requirements only (in semantic topological order), including asset path, declared/default color space, default sampler plan intent, and deterministic future binding names for texture/sampler slots.
+
+Boundary in M94 remains strict: no material runtime object ownership, no texture loading/upload integration, no bind-group creation, and no real texture sampling implementation in generated SDSL-V.
