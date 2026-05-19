@@ -121,6 +121,23 @@ cargo test
 
 Native `.toml` material assets now include parse + structural validation (M91) and an initial semantic validation seed (M92) for core node kinds (`constant_f32`, `constant_float4`, `texture2d`, `multiply`, `add`, `lerp`, `standard_surface`). Semantic validation is still pre-codegen: no SDSL-V generation, no MaterialX import implementation, and no runtime material binding integration yet.
 
+
+## Native material resource metadata seed (M94)
+
+M94 adds deterministic material resource-requirement extraction after M92 semantic validation:
+
+`material.toml -> validated graph semantics -> MaterialResourceRequirements`
+
+Current M94 output is plain metadata only:
+
+- output-reachable `texture2d` node requirements (node id + deterministic sanitized name),
+- texture asset path,
+- texture color space (`srgb` default when omitted, or `linear`),
+- default sampler requirement (`SamplerPlan::DefaultColor`),
+- deterministic future binding names (`tex_<sanitized>` and `samp_<sanitized>`).
+
+No runtime material object ownership, no texture loading, no `wgpu` bind-group creation, and no real texture sampling codegen are added in M94.
+
 ## Persistent controller sample (M52)
 
 `Demo::persistent_controller` is a copyable authoring pattern for persistent root-controller flows:

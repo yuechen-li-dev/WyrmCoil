@@ -435,3 +435,25 @@ M93 adds deterministic native material graph -> SDSL-V source generation after M
 - `texture2d` currently lowers to deterministic placeholder white sample helper stubs (no real texture binding/sampling yet).
 - Output is deterministic (stable topological order, stable identifier sanitization, no timestamps).
 - No material runtime object ownership, bind-group integration, textured draw integration, or MaterialX import implementation is added in M93.
+
+
+## Material resource metadata seed status (M94)
+
+M94 adds deterministic material resource requirement extraction from the semantically validated, output-reachable graph:
+
+- `texture2d` nodes now produce metadata requirements with node id, sanitized name, texture asset path, color space, sampler requirement, and deterministic binding names.
+- Texture color-space default is `srgb` when `color_space` is omitted; explicit `linear` is preserved.
+- Sampler requirement uses the backend-neutral sampler seam (`SamplerPlan::DefaultColor`) for now.
+- Binding names are metadata only in M94:
+  - texture binding: `tex_<sanitized_node_id>`
+  - sampler binding: `samp_<sanitized_node_id>`
+
+Example mapping:
+
+`texture2d node: base_color_tex`
+`-> tex_base_color_tex / samp_base_color_tex`
+`-> path: textures/base.ppm`
+`-> color_space: srgb (default)`
+`-> sampler: SamplerPlan::DefaultColor`
+
+M94 does not add texture loading, runtime material objects, bind-group creation, or real texture sampling codegen.

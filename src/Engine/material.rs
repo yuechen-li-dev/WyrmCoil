@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use crate::Engine::render::sampler::SamplerPlan;
 use serde::Deserialize;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -831,6 +832,130 @@ pub enum MaterialSdslvCodegenError {
     UnsupportedType { NodeId: String, TypeName: String },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaterialResourceRequirements {
+    pub MaterialName: String,
+    pub Textures: Vec<MaterialTextureRequirement>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaterialTextureRequirement {
+    pub NodeId: String,
+    pub SanitizedName: String,
+    pub AssetPath: String,
+    pub ColorSpace: MaterialTextureColorSpace,
+    pub Sampler: MaterialSamplerRequirement,
+    pub BindingName: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaterialTextureColorSpace {
+    Srgb,
+    Linear,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaterialSamplerRequirement {
+    pub SamplerName: String,
+    pub Plan: SamplerPlan,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum MaterialResourceRequirementError {
+    Structural(MaterialTomlValidationError),
+    Semantic(MaterialSemanticError),
+    MissingTexturePath { NodeId: String },
+    InvalidTextureColorSpace { NodeId: String, Value: String },
+    SamplerPlanBuildFailed { NodeId: String, SamplerName: String },
+}
+
+pub fn CollectMaterialResourceRequirements(
+    asset: &MaterialTomlAsset,
+) -> Result<MaterialResourceRequirements, MaterialResourceRequirementError> {
+    let semantics = ValidateMaterialTomlSemantics(asset).map_err(|error| match error {
+        MaterialSemanticError::Structural(validation) => {
+            MaterialResourceRequirementError::Structural(validation)
+        }
+        semantic => MaterialResourceRequirementError::Semantic(semantic),
+    })?;
+    CollectMaterialResourceRequirementsFromSemantics(asset, &semantics)
+}
+
+pub fn CollectMaterialResourceRequirementsFromSemantics(
+    asset: &MaterialTomlAsset,
+    semantics: &MaterialGraphSemantics,
+) -> Result<MaterialResourceRequirements, MaterialResourceRequirementError> {
+    ValidateMaterialTomlAsset(asset).map_err(MaterialResourceRequirementError::Structural)?;
+    let mut used_sanitized_names = BTreeSet::new();
+    let mut textures = Vec::new();
+    for node_id in &semantics.TopologicalNodeIds {
+        let node = asset.NodeById(node_id).expect("semantic node should exist");
+        if node.Kind != "texture2d" {
+            continue;
+        }
+        let sanitized_name = SanitizeSdslvIdentifier(node_id, &mut used_sanitized_names);
+        let asset_path = TexturePath(node)?;
+        let color_space = TextureColorSpace(node)?;
+        let binding_name = format!("tex_{sanitized_name}");
+        let sampler_name = format!("samp_{sanitized_name}");
+        let plan = SamplerPlan::DefaultColor(&sampler_name).map_err(|_| {
+            MaterialResourceRequirementError::SamplerPlanBuildFailed {
+                NodeId: node_id.clone(),
+                SamplerName: sampler_name.clone(),
+            }
+        })?;
+        textures.push(MaterialTextureRequirement {
+            NodeId: node_id.clone(),
+            SanitizedName: sanitized_name,
+            AssetPath: asset_path,
+            ColorSpace: color_space,
+            Sampler: MaterialSamplerRequirement {
+                SamplerName: sampler_name,
+                Plan: plan,
+            },
+            BindingName: binding_name,
+        });
+    }
+
+    Ok(MaterialResourceRequirements {
+        MaterialName: asset.Material.Name.clone(),
+        Textures: textures,
+    })
+}
+
+fn TexturePath(node: &MaterialNode) -> Result<String, MaterialResourceRequirementError> {
+    match node.Params.get("path") {
+        Some(MaterialParamValue::String(path)) if !path.trim().is_empty() => Ok(path.clone()),
+        _ => Err(MaterialResourceRequirementError::MissingTexturePath {
+            NodeId: node.Id.clone(),
+        }),
+    }
+}
+
+fn TextureColorSpace(
+    node: &MaterialNode,
+) -> Result<MaterialTextureColorSpace, MaterialResourceRequirementError> {
+    match node.Params.get("color_space") {
+        None => Ok(MaterialTextureColorSpace::Srgb),
+        Some(MaterialParamValue::String(value)) if value == "srgb" => {
+            Ok(MaterialTextureColorSpace::Srgb)
+        }
+        Some(MaterialParamValue::String(value)) if value == "linear" => {
+            Ok(MaterialTextureColorSpace::Linear)
+        }
+        Some(MaterialParamValue::String(value)) => {
+            Err(MaterialResourceRequirementError::InvalidTextureColorSpace {
+                NodeId: node.Id.clone(),
+                Value: value.clone(),
+            })
+        }
+        _ => Err(MaterialResourceRequirementError::InvalidTextureColorSpace {
+            NodeId: node.Id.clone(),
+            Value: "non-string".to_string(),
+        }),
+    }
+}
+
 pub fn GenerateMaterialSdslv(
     asset: &MaterialTomlAsset,
 ) -> Result<MaterialSdslvSource, MaterialSdslvCodegenError> {
@@ -1383,5 +1508,161 @@ base_color='mixed'";
         let generated = GenerateMaterialSdslv(&tint).expect("codegen");
         crate::Engine::shader::sdslv::ValidateSource(&generated.Source)
             .expect("generated sdslv should parse + validate");
+    }
+
+    #[test]
+    fn MaterialResourceRequirementsNoTextureCase() {
+        let flat = ParseMaterialToml("flat.toml", FlatMaterialSource()).expect("flat parse");
+        let requirements =
+            CollectMaterialResourceRequirements(&flat).expect("flat requirements should build");
+        assert_eq!(
+            requirements.MaterialName, "FlatMagenta",
+            "material name should be preserved in requirements"
+        );
+        assert!(
+            requirements.Textures.is_empty(),
+            "flat constant material should have no texture requirements"
+        );
+    }
+
+    #[test]
+    fn MaterialResourceRequirementsSingleTextureDefaultsAndNames() {
+        let tint = ParseMaterialToml("tint.toml", TextureTintSource()).expect("tint parse");
+        let requirements =
+            CollectMaterialResourceRequirements(&tint).expect("requirements should build");
+        assert_eq!(
+            requirements.Textures.len(),
+            1,
+            "texture+tint fixture should produce one texture requirement"
+        );
+        let texture = &requirements.Textures[0];
+        assert_eq!(texture.NodeId, "base_color_tex");
+        assert_eq!(texture.SanitizedName, "base_color_tex");
+        assert_eq!(texture.AssetPath, "textures/albedo.ppm");
+        assert_eq!(texture.ColorSpace, MaterialTextureColorSpace::Srgb);
+        assert_eq!(texture.BindingName, "tex_base_color_tex");
+        assert_eq!(texture.Sampler.SamplerName, "samp_base_color_tex");
+        let expected_plan = SamplerPlan::DefaultColor("samp_base_color_tex")
+            .expect("expected default sampler plan should build");
+        assert_eq!(
+            texture.Sampler.Plan, expected_plan,
+            "texture metadata should use default color sampler plan"
+        );
+    }
+
+    #[test]
+    fn MaterialResourceRequirementsMultipleTexturesDeterministicOrderAndSanitization() {
+        let src = "[asset]
+type='material'
+version=1
+[material]
+name='MultiTex'
+output='surface'
+[[node]]
+id='albedo-main'
+kind='texture2d'
+[node.params]
+path='textures/a.ppm'
+[[node]]
+id='albedo_main'
+kind='texture2d'
+[node.params]
+path='textures/b.ppm'
+color_space='linear'
+[[node]]
+id='mixed'
+kind='add'
+[node.inputs]
+a='albedo-main'
+b='albedo_main'
+[[node]]
+id='surface'
+kind='standard_surface'
+[node.inputs]
+base_color='mixed'";
+        let asset = ParseMaterialToml("multi.toml", src).expect("multi parse");
+        let requirements =
+            CollectMaterialResourceRequirements(&asset).expect("requirements should build");
+        assert_eq!(requirements.Textures.len(), 2);
+        assert_eq!(
+            requirements.Textures[0].NodeId, "albedo-main",
+            "topological texture order should be deterministic"
+        );
+        assert_eq!(
+            requirements.Textures[1].NodeId, "albedo_main",
+            "topological texture order should be deterministic"
+        );
+        assert_eq!(requirements.Textures[0].SanitizedName, "albedo_main");
+        assert_eq!(requirements.Textures[1].SanitizedName, "albedo_main_1");
+        assert_eq!(requirements.Textures[0].BindingName, "tex_albedo_main");
+        assert_eq!(requirements.Textures[1].BindingName, "tex_albedo_main_1");
+        assert_eq!(
+            requirements.Textures[1].ColorSpace,
+            MaterialTextureColorSpace::Linear
+        );
+    }
+
+    #[test]
+    fn MaterialResourceRequirementsWrapsSemanticAndStructuralErrors() {
+        let semantic_bad = ParseMaterialToml(
+            "bad.toml",
+            "[asset]\ntype='material'\nversion=1\n[material]\nname='n'\noutput='surface'\n[[node]]\nid='surface'\nkind='standard_surface'",
+        )
+        .expect("bad semantic sample parse");
+        assert!(
+            matches!(
+                CollectMaterialResourceRequirements(&semantic_bad),
+                Err(MaterialResourceRequirementError::Semantic(
+                    MaterialSemanticError::MissingInput { .. }
+                ))
+            ),
+            "semantic validation failures should be wrapped by requirement collection"
+        );
+
+        let mut structural_bad =
+            ParseMaterialToml("flat.toml", FlatMaterialSource()).expect("flat parse");
+        structural_bad.Asset.Type = "other".to_string();
+        assert!(
+            matches!(
+                CollectMaterialResourceRequirements(&structural_bad),
+                Err(MaterialResourceRequirementError::Structural(
+                    MaterialTomlValidationError::InvalidAssetType { .. }
+                ))
+            ),
+            "structural validation failures should be wrapped by requirement collection"
+        );
+    }
+
+    #[test]
+    fn MaterialResourceRequirementsAndCodegenShareSanitizedTextureName() {
+        let src = "[asset]
+type='material'
+version=1
+[material]
+name='SharedNaming'
+output='surface'
+[[node]]
+id='base-color'
+kind='texture2d'
+[node.params]
+path='textures/base.ppm'
+[[node]]
+id='surface'
+kind='standard_surface'
+[node.inputs]
+base_color='base-color'";
+        let asset = ParseMaterialToml("shared.toml", src).expect("shared parse");
+        let requirements =
+            CollectMaterialResourceRequirements(&asset).expect("requirements should build");
+        let generated = GenerateMaterialSdslv(&asset).expect("codegen should build");
+        assert_eq!(requirements.Textures.len(), 1);
+        let sanitized_name = &requirements.Textures[0].SanitizedName;
+        assert_eq!(sanitized_name, "base_color");
+        assert!(
+            generated
+                .Source
+                .contains(&format!("SampleTexture2D_{sanitized_name}")),
+            "texture placeholder naming should match metadata sanitizer naming"
+        );
     }
 }
