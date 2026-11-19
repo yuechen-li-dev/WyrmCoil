@@ -1,0 +1,18 @@
+[package]
+name = "wyrmcoil_view"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lib]
+path = "src/wyrmcoil_view.rs"
+doctest = false
+
+[dependencies]
+gpui.workspace = true
+workspace.workspace = true
+wyrmcoil = { path = "../../../.." }
+
+[lints]
+workspace = true
