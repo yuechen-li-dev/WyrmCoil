@@ -157,6 +157,7 @@ fn ExecuteStatement(
             Name,
             TypeName,
             Initializer,
+            ..
         } => {
             let value = if let Some(initializer) = Initializer {
                 EvalExpression(initializer, env)?
@@ -169,7 +170,7 @@ fn ExecuteStatement(
             env.insert(Name.clone(), value);
             Ok(())
         }
-        SdslvStatement::Assign { Target, Value } => {
+        SdslvStatement::Assign { Target, Value, .. } => {
             let SdslvExpression::Identifier(name) = Target else {
                 return Err(SdslvAssertFailure {
                     Message: "unsupported assignment target in SDSL-V M7b runner".to_string(),
@@ -187,7 +188,7 @@ fn ExecuteStatement(
             Ok(())
         }
         SdslvStatement::Expression { Value } => ExecuteAssertExpression(Value, env, failures),
-        SdslvStatement::Return { .. } => Err(SdslvAssertFailure {
+        SdslvStatement::Return { .. } | SdslvStatement::ReturnVoid => Err(SdslvAssertFailure {
             Message: "return statement is not supported in SDSL-V M7b test execution".to_string(),
             Span: None,
         }),
@@ -197,6 +198,15 @@ fn ExecuteStatement(
         }),
         SdslvStatement::For { .. } => Err(SdslvAssertFailure {
             Message: "for statement is not supported in SDSL-V M57 test execution".to_string(),
+            Span: None,
+        }),
+        SdslvStatement::Comptime { .. }
+        | SdslvStatement::StaticAssert { .. }
+        | SdslvStatement::InlineFlow { .. }
+        | SdslvStatement::FlowTransition { .. }
+        | SdslvStatement::GuardedWrite { .. }
+        | SdslvStatement::GuardWhen { .. } => Err(SdslvAssertFailure {
+            Message: "canonical statement is unavailable in the legacy CPU runner".to_string(),
             Span: None,
         }),
     }
@@ -335,6 +345,21 @@ fn EvalExpression(
                 }),
             }
         }
+        SdslvExpression::Unary { Operator, Operand } => {
+            let operand = EvalExpression(Operand, env)?;
+            match (Operator, operand) {
+                (SdslvUnaryOperator::Not, RuntimeValue::Bool(value)) => {
+                    Ok(RuntimeValue::Bool(!value))
+                }
+                (SdslvUnaryOperator::BitNot, RuntimeValue::I32(value)) => {
+                    Ok(RuntimeValue::I32(!value))
+                }
+                _ => Err(SdslvAssertFailure {
+                    Message: "not requires a bool and ~ requires an integer".to_string(),
+                    Span: None,
+                }),
+            }
+        }
         SdslvExpression::Binary {
             Left,
             Operator,
@@ -345,16 +370,25 @@ fn EvalExpression(
             EvalBinary(&left, *Operator, &right)
         }
         SdslvExpression::Call { Callee, Arguments } => EvalCall(Callee, Arguments, env),
+        SdslvExpression::GenericCall { .. }
+        | SdslvExpression::Construct { .. }
+        | SdslvExpression::ForeignHlsl { .. }
+        | SdslvExpression::GuardedRead { .. } => Err(SdslvAssertFailure {
+            Message: "canonical expression is unavailable in the legacy CPU runner".to_string(),
+            Span: None,
+        }),
         SdslvExpression::FieldAccess { .. } => Err(SdslvAssertFailure {
             Message: "field access is not supported in SDSL-V M7b expression evaluation"
                 .to_string(),
             Span: None,
         }),
-        SdslvExpression::Index { .. } => Err(SdslvAssertFailure {
-            Message: "array indexing is not supported in SDSL-V test expression evaluation"
-                .to_string(),
-            Span: None,
-        }),
+        SdslvExpression::Index { .. } | SdslvExpression::MultiIndex { .. } => {
+            Err(SdslvAssertFailure {
+                Message: "array indexing is not supported in SDSL-V test expression evaluation"
+                    .to_string(),
+                Span: None,
+            })
+        }
         SdslvExpression::ArrayLiteral { .. } => Err(SdslvAssertFailure {
             Message: "array literals are not supported in SDSL-V test expression evaluation"
                 .to_string(),
@@ -405,6 +439,24 @@ fn EvalBinary(
         SdslvBinaryOperator::LessEqual => CompareNumeric(left, right, |a, b| a <= b),
         SdslvBinaryOperator::Greater => CompareNumeric(left, right, |a, b| a > b),
         SdslvBinaryOperator::GreaterEqual => CompareNumeric(left, right, |a, b| a >= b),
+        SdslvBinaryOperator::And | SdslvBinaryOperator::Or => {
+            if let (RuntimeValue::Bool(left), RuntimeValue::Bool(right)) = (left, right) {
+                let value = if operator == SdslvBinaryOperator::And {
+                    *left && *right
+                } else {
+                    *left || *right
+                };
+                return Ok(RuntimeValue::Bool(value));
+            }
+            Err(SdslvAssertFailure {
+                Message: "logical operators require bool operands".to_string(),
+                Span: None,
+            })
+        }
+        _ => Err(SdslvAssertFailure {
+            Message: "operator is unavailable in the legacy CPU runner".to_string(),
+            Span: None,
+        }),
     }
 }
 

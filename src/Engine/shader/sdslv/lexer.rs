@@ -4,7 +4,15 @@ use super::diagnostic::SdslvDiagnostic;
 use super::token::{SdslvSpan, SdslvToken, SdslvTokenKind};
 
 pub fn LexSource(source: &str) -> Result<Vec<SdslvToken>, Vec<SdslvDiagnostic>> {
-    let mut l = Lexer::New(source);
+    Lex(source, false)
+}
+
+pub fn LexCanonicalSource(source: &str) -> Result<Vec<SdslvToken>, Vec<SdslvDiagnostic>> {
+    Lex(source, true)
+}
+
+fn Lex(source: &str, canonical: bool) -> Result<Vec<SdslvToken>, Vec<SdslvDiagnostic>> {
+    let mut l = Lexer::New(source, canonical);
     l.LexAll();
     if l.Diagnostics.is_empty() {
         Ok(l.Tokens)
@@ -14,148 +22,94 @@ pub fn LexSource(source: &str) -> Result<Vec<SdslvToken>, Vec<SdslvDiagnostic>> 
 }
 
 struct Lexer<'a> {
-    S: &'a [u8],
+    S: &'a str,
     I: usize,
     Line: usize,
     Col: usize,
     Tokens: Vec<SdslvToken>,
     Diagnostics: Vec<SdslvDiagnostic>,
+    Canonical: bool,
+    ForeignHeader: bool,
 }
 impl<'a> Lexer<'a> {
-    fn New(source: &'a str) -> Self {
+    fn New(source: &'a str, canonical: bool) -> Self {
         Self {
-            S: source.as_bytes(),
+            S: source,
             I: 0,
             Line: 1,
             Col: 1,
             Tokens: vec![],
             Diagnostics: vec![],
+            Canonical: canonical,
+            ForeignHeader: false,
         }
     }
     fn LexAll(&mut self) {
-        while self.I < self.S.len() {
-            let c = self.S[self.I] as char;
+        while let Some(c) = self.Peek(0) {
             if c.is_whitespace() {
                 self.Bump(c);
                 continue;
             }
             if c == '/' && self.Peek(1) == Some('/') {
-                while self.I < self.S.len() && self.S[self.I] as char != '\n' {
-                    self.Bump(self.S[self.I] as char);
-                }
-                continue;
-            }
-            if c == '/' && self.Peek(1) == Some('*') {
-                self.Bump('/');
-                self.Bump('*');
-                while self.I + 1 < self.S.len()
-                    && !(self.S[self.I] as char == '*' && self.S[self.I + 1] as char == '/')
-                {
-                    self.Bump(self.S[self.I] as char);
-                }
-                if self.I + 1 < self.S.len() {
-                    self.Bump('*');
-                    self.Bump('/');
-                }
+                self.SkipLine();
                 continue;
             }
             let st = self.SpanStart();
-            if c.is_ascii_alphabetic() || c == '_' {
-                let text = self.take_while(|x| x.is_ascii_alphanumeric() || x == '_');
-                self.Push(self.KeywordOrIdent(&text), st);
+            if !self.Canonical && self.Take("/*") {
+                if !self.SkipBlockComment() {
+                    self.Error("unterminated block comment", st);
+                }
+                continue;
+            }
+            if c.is_alphabetic() || c == '_' {
+                self.AdvanceWhile(|x| x.is_alphanumeric() || x == '_');
+                let kind = self.KeywordOrIdent(&self.S[st.0..self.I]);
+                if kind == SdslvTokenKind::KeywordHlsl {
+                    self.ForeignHeader = true;
+                }
+                self.Push(kind, st);
                 continue;
             }
             if c.is_ascii_digit() {
-                let num = self.take_while(|x| x.is_ascii_digit());
-                if self.Peek(0) == Some('.')
-                    && self.Peek(1).map(|x| x.is_ascii_digit()).unwrap_or(false)
-                {
-                    self.Bump('.');
-                    let frac = self.take_while(|x| x.is_ascii_digit());
-                    self.Push(SdslvTokenKind::FloatLiteral(format!("{num}.{frac}")), st);
-                } else {
-                    self.Push(SdslvTokenKind::IntegerLiteral(num), st);
-                }
+                self.LexNumber(st);
                 continue;
             }
             if c == '"' {
                 self.Bump('"');
-                let mut text = String::new();
-                while self.I < self.S.len() {
-                    let ch = self.S[self.I] as char;
-                    if ch == '"' {
-                        self.Bump('"');
-                        break;
-                    }
-                    if ch == '\n' {
-                        self.Diagnostics.push(SdslvDiagnostic::New(
-                            "unterminated string literal",
-                            self.Span(st, self.I),
-                        ));
-                        break;
-                    }
-                    text.push(ch);
-                    self.Bump(ch);
+                let start = self.I;
+                self.AdvanceWhile(|ch| ch != '"' && ch != '\n');
+                let end = self.I;
+                if self.Take("\"") {
+                    self.Push(
+                        SdslvTokenKind::StringLiteral(self.S[start..end].to_string()),
+                        st,
+                    );
+                } else {
+                    self.Error("unterminated string literal", st);
                 }
-                if self.I >= self.S.len() && self.Peek(0).is_none() {
-                    self.Diagnostics.push(SdslvDiagnostic::New(
-                        "unterminated string literal",
-                        self.Span(st, self.I),
-                    ));
-                }
-                self.Push(SdslvTokenKind::StringLiteral(text), st);
                 continue;
             }
-            if c == '=' && self.Peek(1) == Some('=') {
-                self.Bump('=');
-                self.Bump('=');
-                self.Push(SdslvTokenKind::DoubleEquals, st);
+            if c == '{' && self.ForeignHeader {
+                self.LexForeignBlock(st);
                 continue;
             }
-            if c == '!' && self.Peek(1) == Some('=') {
-                self.Bump('!');
-                self.Bump('=');
-                self.Push(SdslvTokenKind::BangEquals, st);
+            if self.Take("&&") {
+                self.Error("use 'and' instead of '&&'", st);
                 continue;
             }
-            if c == '!' {
-                self.Bump('!');
-                self.Push(SdslvTokenKind::Bang, st);
+            if self.Take("||") {
+                self.Error("use 'or' instead of '||'", st);
                 continue;
             }
-            if c == '?' {
-                self.Bump('?');
-                self.Push(SdslvTokenKind::Question, st);
+            if self.Canonical && self.Take("?") {
+                self.Error(
+                    "SDSL-V4100: fallible postfix '?' was removed from canonical SDSL-V",
+                    st,
+                );
                 continue;
             }
-            if c == '<' && self.Peek(1) == Some('=') {
-                self.Bump('<');
-                self.Bump('=');
-                self.Push(SdslvTokenKind::LeftAngleEquals, st);
-                continue;
-            }
-            if c == '>' && self.Peek(1) == Some('=') {
-                self.Bump('>');
-                self.Bump('=');
-                self.Push(SdslvTokenKind::RightAngleEquals, st);
-                continue;
-            }
-            if c == '=' && self.Peek(1) == Some('>') {
-                self.Bump('=');
-                self.Bump('>');
-                self.Push(SdslvTokenKind::FatArrow, st);
-                continue;
-            }
-            if c == '-' && self.Peek(1) == Some('>') {
-                self.Bump('-');
-                self.Bump('>');
-                self.Push(SdslvTokenKind::Arrow, st);
-                continue;
-            }
-            if c == '.' && self.Peek(1) == Some('.') {
-                self.Bump('.');
-                self.Bump('.');
-                self.Push(SdslvTokenKind::Range, st);
+            if let Some(kind) = self.CompoundPunctuation(c) {
+                self.Push(kind, st);
                 continue;
             }
             let kind = match c {
@@ -177,19 +131,137 @@ impl<'a> Lexer<'a> {
                 '-' => Some(SdslvTokenKind::Minus),
                 '*' => Some(SdslvTokenKind::Star),
                 '/' => Some(SdslvTokenKind::Slash),
+                '%' => Some(SdslvTokenKind::Percent),
+                '&' => Some(SdslvTokenKind::BitAnd),
+                '|' => Some(SdslvTokenKind::BitOr),
+                '^' => Some(SdslvTokenKind::BitXor),
+                '~' => Some(SdslvTokenKind::BitNot),
+                '!' => Some(SdslvTokenKind::Bang),
+                '?' => Some(SdslvTokenKind::Question),
                 _ => None,
             };
+            self.Bump(c);
             if let Some(k) = kind {
-                self.Bump(c);
                 self.Push(k, st);
             } else {
-                self.Diagnostics.push(SdslvDiagnostic::New(
-                    &format!("invalid character '{c}'"),
-                    self.Span(st, self.I + 1),
-                ));
-                self.Bump(c);
+                self.Error(&format!("invalid character '{c}'"), st);
             }
         }
+    }
+
+    fn CompoundPunctuation(&mut self, first: char) -> Option<SdslvTokenKind> {
+        use SdslvTokenKind::*;
+        let second = self.Peek(1)?;
+        let kind = match (first, second) {
+            ('=', '=') => DoubleEquals,
+            ('!', '=') => BangEquals,
+            ('<', '=') => LeftAngleEquals,
+            ('>', '=') => RightAngleEquals,
+            ('=', '>') => FatArrow,
+            ('-', '>') => Arrow,
+            ('.', '.') => Range,
+            ('<', '<') => ShiftLeft,
+            ('>', '>') if self.Canonical => ShiftRight,
+            ('+', '=') => PlusEquals,
+            _ => return None,
+        };
+        self.Bump(first);
+        self.Bump(second);
+        Some(kind)
+    }
+
+    fn LexNumber(&mut self, start: (usize, usize, usize)) {
+        let mut float = false;
+        if self.Take("0x") || self.Take("0X") {
+            let digits = self.I;
+            self.AdvanceWhile(|ch| ch.is_ascii_hexdigit());
+            if self.I == digits {
+                self.Error("SDSL-V4310: hexadecimal literal requires digits", start);
+                return;
+            }
+        } else {
+            self.AdvanceWhile(|ch| ch.is_ascii_digit());
+            if self.Peek(0) == Some('.') && self.Peek(1).is_some_and(|ch| ch.is_ascii_digit()) {
+                self.Bump('.');
+                self.AdvanceWhile(|ch| ch.is_ascii_digit());
+                float = true;
+            }
+        }
+        if let Some(ch @ ('u' | 'U')) = self.Peek(0) {
+            self.Bump(ch);
+        }
+        let text = self.S[start.0..self.I].to_string();
+        let kind = if float {
+            SdslvTokenKind::FloatLiteral(text)
+        } else {
+            SdslvTokenKind::IntegerLiteral(text)
+        };
+        self.Push(kind, start);
+    }
+
+    fn LexForeignBlock(&mut self, start: (usize, usize, usize)) {
+        self.ForeignHeader = false;
+        self.Bump('{');
+        let body_start = self.I;
+        let mut depth = 1;
+        while let Some(ch) = self.Peek(0) {
+            if self.Take("//") {
+                self.SkipLine();
+                continue;
+            }
+            if self.Take("/*") {
+                self.SkipBlockComment();
+                continue;
+            }
+            let offset = self.I;
+            self.Bump(ch);
+            match ch {
+                '"' => self.SkipForeignString(),
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.Push(
+                            SdslvTokenKind::RawForeignSource(
+                                self.S[body_start..offset].to_string(),
+                            ),
+                            start,
+                        );
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.Error("unterminated inline HLSL block", start);
+    }
+
+    fn SkipForeignString(&mut self) {
+        while let Some(ch) = self.Peek(0) {
+            self.Bump(ch);
+            if ch == '"' {
+                return;
+            }
+            if ch == '\\'
+                && let Some(escaped) = self.Peek(0)
+            {
+                self.Bump(escaped);
+            }
+        }
+    }
+
+    fn SkipLine(&mut self) {
+        self.AdvanceWhile(|ch| ch != '\n');
+    }
+
+    fn SkipBlockComment(&mut self) -> bool {
+        while let Some(ch) = self.Peek(0) {
+            if self.Take("*/") {
+                return true;
+            }
+            self.Bump(ch);
+        }
+        false
     }
     fn KeywordOrIdent(&self, t: &str) -> SdslvTokenKind {
         match t {
@@ -233,6 +305,7 @@ impl<'a> Lexer<'a> {
             "while" => SdslvTokenKind::KeywordWhile,
             "in" => SdslvTokenKind::KeywordIn,
             "step" => SdslvTokenKind::KeywordStep,
+            _ if self.Canonical => CanonicalKeyword(t),
             _ => SdslvTokenKind::Identifier(t.to_string()),
         }
     }
@@ -254,24 +327,68 @@ impl<'a> Lexer<'a> {
         });
     }
     fn Peek(&self, o: usize) -> Option<char> {
-        self.S.get(self.I + o).map(|b| *b as char)
+        self.S[self.I..].chars().nth(o)
     }
-    fn take_while<F: Fn(char) -> bool>(&mut self, f: F) -> String {
-        let mut out = String::new();
-        while self.I < self.S.len() && f(self.S[self.I] as char) {
-            let c = self.S[self.I] as char;
-            out.push(c);
+    fn AdvanceWhile(&mut self, predicate: impl Fn(char) -> bool) {
+        while let Some(c) = self.Peek(0).filter(|ch| predicate(*ch)) {
             self.Bump(c);
         }
-        out
+    }
+    fn Take(&mut self, text: &str) -> bool {
+        if !self.S[self.I..].starts_with(text) {
+            return false;
+        }
+        for c in text.chars() {
+            self.Bump(c);
+        }
+        true
+    }
+    fn Error(&mut self, message: &str, start: (usize, usize, usize)) {
+        self.Diagnostics
+            .push(SdslvDiagnostic::New(message, self.Span(start, self.I)));
     }
     fn Bump(&mut self, c: char) {
-        self.I += 1;
+        self.I += c.len_utf8();
         if c == '\n' {
             self.Line += 1;
             self.Col = 1;
         } else {
             self.Col += 1;
         }
+    }
+}
+
+fn CanonicalKeyword(text: &str) -> SdslvTokenKind {
+    use SdslvTokenKind::*;
+    match text {
+        "var" => KeywordVar,
+        "import" => KeywordImport,
+        "export" => KeywordExport,
+        "concept" => KeywordConcept,
+        "config" => KeywordConfig,
+        "template" => KeywordTemplate,
+        "resources" => KeywordResources,
+        "workgroup" => KeywordWorkgroup,
+        "readonly" => KeywordReadonly,
+        "readwrite" => KeywordReadwrite,
+        "require" => KeywordRequire,
+        "static" => KeywordStatic,
+        "assert" => KeywordAssert,
+        "comptime" => KeywordComptime,
+        "and" => KeywordAnd,
+        "or" => KeywordOr,
+        "not" => KeywordNot,
+        "HLSL" => KeywordHlsl,
+        "read" => KeywordRead,
+        "write" => KeywordWrite,
+        "push" => KeywordPush,
+        "pop" => KeywordPop,
+        "finish" => KeywordFinish,
+        "compute" => KeywordCompute,
+        "vertex" => KeywordVertex,
+        "pixel" => KeywordPixel,
+        "true" => KeywordTrue,
+        "false" => KeywordFalse,
+        _ => Identifier(text.to_string()),
     }
 }

@@ -3,7 +3,8 @@
 
 use crate::Engine::primitives::{EntityId, RenderItem, RenderSnapshot, Vec2};
 use crate::{
-    Dw, DwActRequest, DwControl, DwFrameCtx, DwFrameDef, DwFrameRegistry, DwKey, DwMessage, DwPhase,
+    Dw, DwActRequest, DwControl, DwFrameCtx, DwFrameDef, DwFrameRegistry, DwKey, DwMessage,
+    DwMessagePayload, DwPhase,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -278,6 +279,7 @@ pub mod Acts {
     pub const ApplyVelocityCommand: DwActId = DwActId { Domain, Local: 1 };
     pub const NudgeEntityCommand: DwActId = DwActId { Domain, Local: 2 };
     pub const GuardStep: DwActId = DwActId { Domain, Local: 3 };
+    pub const ApplyPlayerMovement: DwActId = DwActId { Domain, Local: 4 };
 }
 pub mod Keys {
     use super::DwKey;
@@ -290,6 +292,8 @@ pub mod Keys {
     pub const HasSelection: DwKey<bool> = DwKey::New("HasSelection", 26);
     pub const SelectedEntity: DwKey<i32> = DwKey::New("SelectedEntity", 27);
     pub const SelectedHealth: DwKey<f32> = DwKey::New("SelectedHealth", 28);
+    pub const PlayerMoveX: DwKey<i32> = DwKey::New("PlayerMoveX", 29);
+    pub const PlayerMoveY: DwKey<i32> = DwKey::New("PlayerMoveY", 30);
 }
 pub mod MailKinds {
     pub const MovePlayerRight: u32 = 1;
@@ -297,6 +301,7 @@ pub mod MailKinds {
     pub const StopPlayer: u32 = 3;
     pub const AlertGuard: u32 = 4;
     pub const NudgeGuardUp: u32 = 5;
+    pub const SetPlayerMovement: u32 = 6;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -306,6 +311,7 @@ pub enum InputEvent {
     StopPressed,
     AlertGuardPressed,
     NudgeGuardPressed,
+    SetPlayerMovement { X: i32, Y: i32 },
 }
 
 pub fn MoveRightMessage() -> DwMessage {
@@ -330,6 +336,9 @@ pub fn InputToMessage(event: InputEvent) -> DwMessage {
         InputEvent::StopPressed => StopMessage(),
         InputEvent::AlertGuardPressed => AlertGuardMessage(),
         InputEvent::NudgeGuardPressed => NudgeGuardMessage(),
+        InputEvent::SetPlayerMovement { X, Y } => {
+            DwMessage::PairI32(MailKinds::SetPlayerMovement, X, Y)
+        }
     }
 }
 
@@ -378,11 +387,33 @@ impl DwPhase for UnitPhase {
 }
 
 fn Root(ctx: &mut DwFrameCtx) -> DwControl {
+    LatchPlayerMovement(ctx);
     match ctx.Phase::<RootPhase>() {
         Some(RootPhase::Player) => Dw::Push(Frames::Player, RootPhase::Guard),
         Some(RootPhase::Guard) => Dw::Push(Frames::Guard, RootPhase::Loop),
         Some(RootPhase::Loop) => Dw::Continue(RootPhase::Player),
         None => Dw::Fail("wyrmcoil root phase invalid"),
+    }
+}
+
+fn LatchPlayerMovement(ctx: &mut DwFrameCtx) {
+    let mut movement = None;
+    while let Some(message) = ctx
+        .MailboxMut()
+        .ConsumeFirstKind(MailKinds::SetPlayerMovement)
+    {
+        if let DwMessagePayload::PairI32 { A, B } = message.Payload {
+            movement = Some((A.signum(), B.signum()));
+        }
+    }
+    if let Some((x, y)) = movement {
+        ctx.BoardMut()
+            .Set(Keys::PlayerMoveX, x)
+            .expect("player X movement should write");
+        ctx.BoardMut()
+            .Set(Keys::PlayerMoveY, y)
+            .expect("player Y movement should write");
+        ctx.Immediate(Acts::ApplyPlayerMovement);
     }
 }
 
@@ -400,6 +431,7 @@ fn QueueVelocityCommand(ctx: &mut DwFrameCtx, entity: i32, x: f32, y: f32) {
 }
 
 fn Player(ctx: &mut DwFrameCtx) -> DwControl {
+    LatchPlayerMovement(ctx);
     match ctx.Phase::<UnitPhase>() {
         Some(UnitPhase::Enter) => {
             while let Some(message) = ctx.MailboxMut().ConsumeFront() {
@@ -433,6 +465,7 @@ fn Player(ctx: &mut DwFrameCtx) -> DwControl {
     }
 }
 fn Guard(ctx: &mut DwFrameCtx) -> DwControl {
+    LatchPlayerMovement(ctx);
     match ctx.Phase::<UnitPhase>() {
         Some(UnitPhase::Enter) => {
             let mut velocity_x = 0.0;
@@ -504,7 +537,22 @@ pub fn BuildRegistry() -> DwFrameRegistry {
 
 pub fn DispatchActs(world: &mut World, board: &crate::DwBoard, acts: &[DwActRequest]) {
     for act in acts {
-        if act.Id == Acts::ApplyVelocityCommand {
+        if act.Id == Acts::ApplyPlayerMovement {
+            let x = board.GetOr(Keys::PlayerMoveX, 0) as f32;
+            let y = board.GetOr(Keys::PlayerMoveY, 0) as f32;
+            let speed = if x != 0.0 && y != 0.0 {
+                std::f32::consts::FRAC_1_SQRT_2
+            } else {
+                1.0
+            };
+            world.Transforms.SetVelocity(
+                EntityId(0),
+                Vec2 {
+                    X: x * speed,
+                    Y: y * speed,
+                },
+            );
+        } else if act.Id == Acts::ApplyVelocityCommand {
             let entity = board.GetOr(Keys::CommandEntity, -1);
             let velocity_x = board.GetOr(Keys::CommandVelocityX, 0.0);
             let velocity_y = board.GetOr(Keys::CommandVelocityY, 0.0);

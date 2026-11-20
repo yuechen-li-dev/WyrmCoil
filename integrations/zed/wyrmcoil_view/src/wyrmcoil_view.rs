@@ -4,8 +4,9 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     App, AppContext, Bounds, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Point, Render, SharedString, Styled, Subscription, Window,
-    WindowId, actions, canvas, div, fill, point, px, rgb, size,
+    IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, MouseButton, ParentElement, Pixels, Point,
+    Render, SharedString, Styled, Subscription, Window, WindowId, actions, canvas, div, fill,
+    point, px, rgb, size,
 };
 use workspace::{Item, MultiWorkspace, Workspace};
 use wyrmcoil::Demo::{DemoWorld, InputEvent};
@@ -38,8 +39,10 @@ struct Preview {
     focus: FocusHandle,
     title: SharedString,
     session: PreviewSession,
+    camera: Vec2,
+    paused: bool,
     pending_frame: Option<WindowId>,
-    window_observers: Option<[Subscription; 2]>,
+    window_observers: Option<[Subscription; 4]>,
 }
 
 impl Preview {
@@ -48,6 +51,8 @@ impl Preview {
             focus: cx.focus_handle(),
             title: format!("{} Preview", wyrmcoil::ProjectName()).into(),
             session: PreviewSession::New(),
+            camera: Vec2::Zero(),
+            paused: false,
             pending_frame: None,
             window_observers: None,
         }
@@ -82,12 +87,25 @@ impl Preview {
                     .active_item(cx)
                     .is_some_and(|item| item.item_id() == cx.entity_id())
             });
-        if !selected || !window.is_window_active() || !window.is_visible() {
-            self.session.step.Pause();
+        if self.paused || !selected || !window.is_window_active() || !window.is_visible() {
+            self.session.Suspend();
             return;
         }
 
+        if !self.TakesInput(window) || window.modifiers().modified() {
+            self.session.input.Cancel();
+        }
         if self.session.Advance(Instant::now()) {
+            let player = self.session.engine.Player;
+            if let Some(item) = self
+                .session
+                .snapshot
+                .Items
+                .iter()
+                .find(|item| item.Entity == player)
+            {
+                self.camera = TrackPlayer(self.camera, item.Position);
+            }
             cx.notify();
         } else {
             // Keep the clock live above 60 Hz without repainting an unchanged snapshot.
@@ -96,8 +114,106 @@ impl Preview {
     }
 
     fn ResetTiming(&mut self, cx: &mut Context<Self>) {
-        self.session.step.Pause();
+        self.session.Suspend();
         cx.notify();
+    }
+
+    fn TakesInput(&self, window: &Window) -> bool {
+        !self.paused
+            && window.is_window_active()
+            && window.is_visible()
+            && self.focus.is_focused(window)
+    }
+
+    fn Pause(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.TakesInput(window) && !window.modifiers().modified() {
+            self.paused = true;
+            self.ResetTiming(cx);
+        }
+    }
+
+    fn KeyDown(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.TakesInput(window) || event.keystroke.modifiers.modified() {
+            return;
+        }
+        if event.keystroke.key == "escape" && !event.is_held {
+            self.Pause(window, cx);
+            cx.stop_propagation();
+        } else if self.session.input.KeyDown(&event.keystroke, event.is_held) {
+            cx.stop_propagation();
+        }
+    }
+
+    fn KeyUp(&mut self, event: &KeyUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.TakesInput(window) && self.session.input.KeyUp(&event.keystroke) {
+            cx.stop_propagation();
+        }
+    }
+}
+
+#[derive(Default)]
+struct MovementInput {
+    held: u8,
+    pressed: u8,
+    applied: (i32, i32),
+}
+
+impl MovementInput {
+    fn KeyDown(&mut self, key: &Keystroke, repeat: bool) -> bool {
+        let bit = Self::KeyBit(&key.key);
+        if bit == 0 || key.modifiers.modified() {
+            return false;
+        }
+        if !repeat && self.held & bit == 0 {
+            self.held |= bit;
+            self.pressed |= bit;
+        }
+        true
+    }
+
+    fn KeyUp(&mut self, key: &Keystroke) -> bool {
+        let bit = Self::KeyBit(&key.key);
+        let was_held = self.held & bit != 0;
+        self.held &= !bit;
+        was_held && !key.modifiers.modified()
+    }
+
+    fn KeyBit(key: &str) -> u8 {
+        match key {
+            "w" => 1 << 0,
+            "up" => 1 << 1,
+            "s" => 1 << 2,
+            "down" => 1 << 3,
+            "a" => 1 << 4,
+            "left" => 1 << 5,
+            "d" => 1 << 6,
+            "right" => 1 << 7,
+            _ => 0,
+        }
+    }
+
+    fn Latch(&mut self) -> Option<InputEvent> {
+        // A direction pressed and released between ticks still gets one step.
+        let active = self.held | std::mem::take(&mut self.pressed);
+        let up = i32::from(active & 0b0000_0011 != 0);
+        let down = i32::from(active & 0b0000_1100 != 0);
+        let left = i32::from(active & 0b0011_0000 != 0);
+        let right = i32::from(active & 0b1100_0000 != 0);
+        let movement = (right - left, up - down);
+        if movement == self.applied {
+            return None;
+        }
+        self.applied = movement;
+        Some(InputEvent::SetPlayerMovement {
+            X: movement.0,
+            Y: movement.1,
+        })
+    }
+
+    fn Cancel(&mut self) {
+        self.held = 0;
+        self.pressed = 0;
+        // Keep the last applied direction so the next tick can send a stop.
     }
 }
 
@@ -133,6 +249,7 @@ struct PreviewSession {
     engine: Engine<DemoWorld, InputEvent>,
     snapshot: RenderSnapshot,
     step: FixedStep,
+    input: MovementInput,
 }
 
 impl PreviewSession {
@@ -143,12 +260,16 @@ impl PreviewSession {
             engine,
             snapshot,
             step: FixedStep::default(),
+            input: MovementInput::default(),
         }
     }
 
     fn Advance(&mut self, now: Instant) -> bool {
         let steps = self.step.Steps(now);
         for _ in 0..steps {
+            if let Some(event) = self.input.Latch() {
+                self.engine.EnqueueInput(event);
+            }
             self.engine.TickControl();
             self.engine.TickSimulation();
         }
@@ -157,6 +278,11 @@ impl PreviewSession {
         }
         self.snapshot = self.engine.RenderSnapshot();
         true
+    }
+
+    fn Suspend(&mut self) {
+        self.input.Cancel();
+        self.step.Pause();
     }
 }
 
@@ -168,7 +294,7 @@ impl Focusable for Preview {
 
 impl Render for Preview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if window.is_window_active() && window.is_visible() {
+        if !self.paused && window.is_window_active() && window.is_visible() {
             self.RequestFrame(window, cx);
         }
 
@@ -176,6 +302,14 @@ impl Render for Preview {
         let player = self.session.engine.Player;
         let guard = self.session.engine.Guard;
         let snapshot = self.session.snapshot.clone();
+        let camera = self.camera;
+        let controls = if self.TakesInput(window) {
+            "Game focused · WASD / arrows · Esc pauses"
+        } else if self.paused {
+            "Paused · click to resume"
+        } else {
+            "Click to play · WASD / arrows"
+        };
         let mut status = div()
             .flex()
             .flex_wrap()
@@ -183,6 +317,7 @@ impl Render for Preview {
             .px_3()
             .py_2()
             .text_sm()
+            .child(controls)
             .child(format!(
                 "Control {}   Simulation {}   Snapshot {}",
                 clock.ControlTick, clock.SimulationTick, snapshot.Frame
@@ -196,7 +331,30 @@ impl Render for Preview {
         }
 
         div()
+            .key_context("WyrmCoilPreview")
             .track_focus(&self.focus)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|preview, _, window, cx| {
+                    preview.paused = false;
+                    window.focus(&preview.focus, cx);
+                    cx.notify();
+                }),
+            )
+            .on_key_down(cx.listener(Self::KeyDown))
+            .on_key_up(cx.listener(Self::KeyUp))
+            .on_modifiers_changed(cx.listener(
+                |preview, event: &gpui::ModifiersChangedEvent, _, _| {
+                    if event.modifiers.modified() {
+                        preview.session.input.Cancel();
+                    }
+                },
+            ))
+            // Zed binds Escape to Unfollow in the workspace context.
+            .on_action(cx.listener(|preview, _: &workspace::Unfollow, window, cx| {
+                preview.Pause(window, cx);
+                cx.propagate();
+            }))
             .size_full()
             .flex()
             .flex_col()
@@ -208,10 +366,17 @@ impl Render for Preview {
                 canvas(
                     |_, _, _| (),
                     move |bounds, (), window, _| {
-                        let viewport = Viewport::Fit(bounds, &snapshot);
+                        let viewport = Viewport::New(bounds, camera);
+                        viewport.PaintGrid(bounds, window);
                         for item in &snapshot.Items {
                             let (_, color) = Appearance(item.Entity, player, guard);
-                            let center = viewport.Project(item.Position);
+                            let projected = viewport.Project(item.Position);
+                            let center = viewport.ClipMarker(bounds, projected);
+                            let color = if item.Entity == guard && center != projected {
+                                0xb47742
+                            } else {
+                                color
+                            };
                             let side = viewport.marker_size;
                             let origin = point(center.x - side * 0.5, center.y - side * 0.5);
                             window.paint_quad(fill(
@@ -237,33 +402,75 @@ fn Appearance(entity: EntityId, player: EntityId, guard: EntityId) -> (&'static 
     }
 }
 
+fn TrackPlayer(camera: Vec2, player: Vec2) -> Vec2 {
+    const DEAD_ZONE: f32 = 18.0;
+    Vec2 {
+        X: camera.X.clamp(player.X - DEAD_ZONE, player.X + DEAD_ZONE),
+        Y: camera.Y.clamp(player.Y - DEAD_ZONE, player.Y + DEAD_ZONE),
+    }
+}
+
 struct Viewport {
     origin: Point<Pixels>,
+    camera: Vec2,
     scale: Pixels,
     marker_size: Pixels,
 }
 
 impl Viewport {
-    fn Fit(bounds: Bounds<Pixels>, snapshot: &RenderSnapshot) -> Self {
-        let mut extent = 0.0_f32;
-        for item in &snapshot.Items {
-            extent = extent.max(item.Position.X.abs()).max(item.Position.Y.abs());
-        }
-        // Keep both markers in view as the guard travels without snapping between zoom levels.
-        let half_span = extent + 18.0;
+    fn New(bounds: Bounds<Pixels>, camera: Vec2) -> Self {
         let side = bounds.size.width.min(bounds.size.height);
         Self {
             origin: bounds.center(),
-            scale: side * (0.42 / half_span),
+            camera,
+            scale: side * (1.0 / 80.0),
             marker_size: px(16.0).min(side * 0.12),
         }
     }
 
     fn Project(&self, position: Vec2) -> Point<Pixels> {
         point(
-            self.origin.x + self.scale * position.X,
-            self.origin.y - self.scale * position.Y,
+            self.origin.x + self.scale * (position.X - self.camera.X),
+            self.origin.y - self.scale * (position.Y - self.camera.Y),
         )
+    }
+
+    fn ClipMarker(&self, bounds: Bounds<Pixels>, projected: Point<Pixels>) -> Point<Pixels> {
+        let x = projected.x - self.origin.x;
+        let y = projected.y - self.origin.y;
+        let limit_x = (bounds.size.width * 0.5 - self.marker_size).max(px(1.0));
+        let limit_y = (bounds.size.height * 0.5 - self.marker_size).max(px(1.0));
+        let ratio = (x.abs() / limit_x).max(y.abs() / limit_y);
+        if ratio <= 1.0 {
+            return projected;
+        }
+        point(self.origin.x + x / ratio, self.origin.y + y / ratio)
+    }
+
+    fn PaintGrid(&self, bounds: Bounds<Pixels>, window: &mut Window) {
+        let spacing = self.scale * 12.0;
+        if spacing < px(8.0) {
+            return;
+        }
+        let zero = self.Project(Vec2::Zero());
+        let phase = |offset: Pixels| px(f32::from(offset).rem_euclid(f32::from(spacing)));
+        let color = rgb(0x202a3b);
+        let mut x = bounds.left() + phase(zero.x - bounds.left());
+        while x < bounds.right() {
+            window.paint_quad(fill(
+                Bounds::new(point(x, bounds.top()), size(px(1.0), bounds.size.height)),
+                color,
+            ));
+            x += spacing;
+        }
+        let mut y = bounds.top() + phase(zero.y - bounds.top());
+        while y < bounds.bottom() {
+            window.paint_quad(fill(
+                Bounds::new(point(bounds.left(), y), size(bounds.size.width, px(1.0))),
+                color,
+            ));
+            y += spacing;
+        }
     }
 }
 
@@ -282,21 +489,265 @@ impl Item for Preview {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.session.step.Pause();
+        self.session.Suspend();
         self.window_observers = Some([
             cx.observe_window_activation(window, |preview, _, cx| preview.ResetTiming(cx)),
             cx.observe_window_visibility(window, |preview, _, _, cx| preview.ResetTiming(cx)),
+            cx.on_focus(&self.focus, window, |_, _, cx| cx.notify()),
+            cx.on_blur(&self.focus, window, |preview, _, cx| {
+                preview.session.input.Cancel();
+                cx.notify();
+            }),
         ]);
     }
 
     fn deactivated(&mut self, _: &mut Window, _: &mut Context<Self>) {
-        self.session.step.Pause();
+        self.session.Suspend();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn Key(name: &str) -> Keystroke {
+        Keystroke {
+            key: name.to_owned(),
+            key_char: None,
+            modifiers: gpui::Modifiers::default(),
+        }
+    }
+
+    fn Step(session: &mut PreviewSession, now: &mut Instant) {
+        *now += Duration::from_nanos(16_666_667);
+        assert!(session.Advance(*now));
+    }
+
+    fn PlayerPosition(session: &PreviewSession) -> Vec2 {
+        session
+            .engine
+            .World
+            .Transforms
+            .Position(session.engine.Player)
+            .unwrap()
+    }
+
+    #[test]
+    fn movement_keys_press_hold_and_release() {
+        for (key, x, y) in [
+            ("w", 0, 1),
+            ("up", 0, 1),
+            ("s", 0, -1),
+            ("down", 0, -1),
+            ("a", -1, 0),
+            ("left", -1, 0),
+            ("d", 1, 0),
+            ("right", 1, 0),
+        ] {
+            let mut input = MovementInput::default();
+            let key = Key(key);
+            assert!(input.KeyDown(&key, false));
+            assert_eq!(
+                input.Latch(),
+                Some(InputEvent::SetPlayerMovement { X: x, Y: y })
+            );
+            assert_eq!(input.Latch(), None);
+            assert!(input.KeyUp(&key));
+            assert_eq!(
+                input.Latch(),
+                Some(InputEvent::SetPlayerMovement { X: 0, Y: 0 })
+            );
+        }
+    }
+
+    #[test]
+    fn short_tap_survives_and_repeats_do_not_add_edges() {
+        let mut session = PreviewSession::New();
+        let mut now = Instant::now();
+        session.Advance(now);
+        let right = Key("d");
+        assert!(session.input.KeyDown(&right, true));
+        Step(&mut session, &mut now);
+        assert_eq!(PlayerPosition(&session), Vec2::Zero());
+
+        session.input.KeyDown(&right, false);
+        session.input.KeyDown(&right, false);
+        session.input.KeyDown(&right, true);
+        session.input.KeyUp(&right);
+        Step(&mut session, &mut now);
+        assert_eq!(PlayerPosition(&session), Vec2 { X: 1.0, Y: 0.0 });
+        Step(&mut session, &mut now);
+        assert_eq!(PlayerPosition(&session), Vec2 { X: 1.0, Y: 0.0 });
+    }
+
+    #[test]
+    fn sustained_movement_uses_the_real_demo_velocity() {
+        let mut session = PreviewSession::New();
+        let mut now = Instant::now();
+        session.Advance(now);
+        session.input.KeyDown(&Key("w"), false);
+        for _ in 0..6 {
+            Step(&mut session, &mut now);
+        }
+        assert_eq!(PlayerPosition(&session), Vec2 { X: 0.0, Y: 6.0 });
+        session.input.KeyUp(&Key("w"));
+        Step(&mut session, &mut now);
+        assert_eq!(PlayerPosition(&session), Vec2 { X: 0.0, Y: 6.0 });
+    }
+
+    #[test]
+    fn opposing_directions_cancel_and_aliases_release_independently() {
+        let mut input = MovementInput::default();
+        for key in ["a", "left", "d", "w", "down"] {
+            input.KeyDown(&Key(key), false);
+        }
+        assert_eq!(input.Latch(), None);
+        input.KeyUp(&Key("a"));
+        assert_eq!(input.Latch(), None);
+        input.KeyUp(&Key("left"));
+        assert_eq!(
+            input.Latch(),
+            Some(InputEvent::SetPlayerMovement { X: 1, Y: 0 })
+        );
+    }
+
+    #[test]
+    fn diagonal_movement_is_normalized_and_guard_keeps_moving() {
+        let mut session = PreviewSession::New();
+        let mut now = Instant::now();
+        session.Advance(now);
+        for _ in 0..4 {
+            Step(&mut session, &mut now);
+        }
+        let guard = session.snapshot.Items[1].Position;
+        session.input.KeyDown(&Key("right"), false);
+        session.input.KeyDown(&Key("up"), false);
+        Step(&mut session, &mut now);
+        let player = PlayerPosition(&session);
+        assert_eq!(player.X, std::f32::consts::FRAC_1_SQRT_2);
+        assert_eq!(player.X, player.Y);
+        assert!((player.X.hypot(player.Y) - 1.0).abs() < 0.0001);
+        assert!(session.snapshot.Items[1].Position.X > guard.X);
+    }
+
+    #[test]
+    fn blur_cancels_movement_even_when_key_up_goes_elsewhere() {
+        let mut session = PreviewSession::New();
+        let mut now = Instant::now();
+        session.Advance(now);
+        let right = Key("d");
+        session.input.KeyDown(&right, false);
+        Step(&mut session, &mut now);
+        let position = PlayerPosition(&session);
+
+        session.input.Cancel();
+        session.input.KeyDown(&right, true);
+        Step(&mut session, &mut now);
+        assert_eq!(PlayerPosition(&session), position);
+        session.input.KeyDown(&right, false);
+        Step(&mut session, &mut now);
+        assert!(PlayerPosition(&session).X > position.X);
+    }
+
+    #[test]
+    fn tab_and_window_suspension_drop_backlog_and_pending_taps() {
+        let mut session = PreviewSession::New();
+        let mut now = Instant::now();
+        session.Advance(now);
+        session.input.KeyDown(&Key("w"), false);
+        Step(&mut session, &mut now);
+        let position = PlayerPosition(&session);
+        session.input.KeyDown(&Key("a"), false);
+        session.input.KeyUp(&Key("a"));
+
+        session.Suspend();
+        now += Duration::from_secs(60);
+        assert!(!session.Advance(now));
+        session.input.KeyDown(&Key("w"), true);
+        Step(&mut session, &mut now);
+        assert_eq!(session.engine.Clock().SimulationTick, 2);
+        assert_eq!(PlayerPosition(&session), position);
+
+        let mut reopened = PreviewSession::New();
+        assert!(!reopened.Advance(now));
+        Step(&mut reopened, &mut now);
+        assert_eq!(PlayerPosition(&reopened), Vec2::Zero());
+    }
+
+    #[test]
+    fn identical_tick_indexed_input_replays_deterministically() {
+        fn Run() -> PreviewSession {
+            let mut session = PreviewSession::New();
+            let mut now = Instant::now();
+            session.Advance(now);
+            for (key, pressed) in [("w", true), ("d", true), ("w", false), ("d", false)] {
+                if pressed {
+                    session.input.KeyDown(&Key(key), false);
+                } else {
+                    session.input.KeyUp(&Key(key));
+                }
+                for _ in 0..3 {
+                    Step(&mut session, &mut now);
+                }
+            }
+            session
+        }
+        assert_eq!(Run().engine.ExportChunk(), Run().engine.ExportChunk());
+    }
+
+    #[test]
+    fn shortcut_modifiers_and_unbound_keys_are_not_consumed() {
+        let mut input = MovementInput::default();
+        for (name, modifiers) in [
+            (
+                "w",
+                gpui::Modifiers {
+                    control: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "s",
+                gpui::Modifiers {
+                    control: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "p",
+                gpui::Modifiers {
+                    control: true,
+                    shift: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "tab",
+                gpui::Modifiers {
+                    alt: true,
+                    ..Default::default()
+                },
+            ),
+            ("d", gpui::Modifiers::command()),
+            ("space", gpui::Modifiers::default()),
+        ] {
+            let mut key = Key(name);
+            key.modifiers = modifiers;
+            assert!(!input.KeyDown(&key, false));
+            assert!(!input.KeyUp(&key));
+        }
+        assert_eq!(input.Latch(), None);
+
+        let mut left = Key("a");
+        assert!(input.KeyDown(&left, false));
+        assert!(input.Latch().is_some());
+        left.modifiers.control = true;
+        assert!(!input.KeyUp(&left));
+        assert_eq!(
+            input.Latch(),
+            Some(InputEvent::SetPlayerMovement { X: 0, Y: 0 })
+        );
+    }
 
     #[test]
     fn carries_fractional_steps() {
@@ -404,39 +855,52 @@ mod tests {
     }
 
     #[test]
-    fn viewport_keeps_origin_and_fits_world_positions_after_resize() {
-        let mut session = PreviewSession::New();
+    fn viewport_keeps_scale_and_clips_distant_markers_after_resize() {
+        let session = PreviewSession::New();
         let bounds = Bounds::new(point(px(40.0), px(60.0)), size(px(300.0), px(200.0)));
-        let viewport = Viewport::Fit(bounds, &session.snapshot);
+        let viewport = Viewport::New(bounds, Vec2::Zero());
         assert_eq!(viewport.Project(Vec2::Zero()), point(px(190.0), px(160.0)));
         let guard = session.snapshot.Items[1].Position;
         let projected = viewport.Project(guard);
-        let offset = px(420.0 / 23.0);
-        assert_eq!(projected, point(px(190.0) + offset, px(160.0) - offset));
-
-        session.snapshot.Items[1].Position = Vec2 {
+        assert_eq!(projected, point(px(202.5), px(147.5)));
+        assert_eq!(viewport.ClipMarker(bounds, projected), projected);
+        let narrow = Bounds::new(point(px(40.0), px(60.0)), size(px(96.0), px(240.0)));
+        let viewport = Viewport::New(narrow, Vec2::Zero());
+        let distant = viewport.Project(Vec2 {
             X: 1_000.0,
             Y: 1_000.0,
-        };
-        let narrow = Bounds::new(point(px(40.0), px(60.0)), size(px(96.0), px(240.0)));
-        let viewport = Viewport::Fit(narrow, &session.snapshot);
-        let projected = viewport.Project(session.snapshot.Items[1].Position);
+        });
+        let projected = viewport.ClipMarker(narrow, distant);
         assert!(narrow.contains(&projected));
         assert!(projected.x > narrow.center().x && projected.y < narrow.center().y);
     }
 
     #[test]
     fn guard_keeps_moving_forward_across_the_old_zoom_threshold() {
-        let mut session = PreviewSession::New();
         let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
-        session.snapshot.Items[1].Position = Vec2 { X: 12.0, Y: 12.0 };
-        let before =
-            Viewport::Fit(bounds, &session.snapshot).Project(session.snapshot.Items[1].Position);
-        session.snapshot.Items[1].Position = Vec2 { X: 12.5, Y: 12.5 };
-        let after =
-            Viewport::Fit(bounds, &session.snapshot).Project(session.snapshot.Items[1].Position);
+        let viewport = Viewport::New(bounds, Vec2::Zero());
+        let before = viewport.Project(Vec2 { X: 12.0, Y: 12.0 });
+        let after = viewport.Project(Vec2 { X: 12.5, Y: 12.5 });
 
-        assert!(after.x > before.x && after.x - before.x < px(3.0));
-        assert!(after.y < before.y && before.y - after.y < px(3.0));
+        assert_eq!(after.x - before.x, px(3.75));
+        assert_eq!(before.y - after.y, px(3.75));
+    }
+
+    #[test]
+    fn player_moves_visibly_and_camera_follows_continuously() {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        let first = Vec2 { X: 18.0, Y: 0.0 };
+        let camera = TrackPlayer(Vec2::Zero(), first);
+        assert_eq!(camera, Vec2::Zero());
+        let viewport = Viewport::New(bounds, camera);
+        let first = viewport.Project(first);
+        assert_eq!(first.x - viewport.Project(Vec2::Zero()).x, px(135.0));
+
+        let next = Vec2 { X: 19.0, Y: 0.0 };
+        let camera = TrackPlayer(camera, next);
+        let viewport = Viewport::New(bounds, camera);
+        assert_eq!(camera.X, 1.0);
+        assert_eq!(viewport.Project(next), first);
+        assert_eq!(viewport.Project(Vec2::Zero()).x, px(392.5));
     }
 }

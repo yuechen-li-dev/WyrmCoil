@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::ast::*;
+use super::canonical_graphics::{Builtin, GraphicsFieldRole, Interpolation, ResolveGraphicsField};
 use super::diagnostic::SdslvDiagnostic;
 use super::token::SdslvSpan;
 use super::validation::ValidateModule;
@@ -77,6 +78,12 @@ impl<'a> HlslEmitter<'a> {
                 SdslvDecl::Shader(shader) => self.EmitShader(shader),
                 SdslvDecl::Flow(flow) => self.EmitFlow(flow),
                 SdslvDecl::Compile(compile) => self.EmitCompile(compile),
+                SdslvDecl::Concept(_)
+                | SdslvDecl::Config(_)
+                | SdslvDecl::Function(_)
+                | SdslvDecl::Board(_) => {
+                    self.Err("canonical declarations must be lowered before HLSL emission");
+                }
                 SdslvDecl::Interface(interface) => {
                     self.Lines.push(format!(
                         "// interface {} omitted in HLSL M3",
@@ -116,6 +123,13 @@ impl<'a> HlslEmitter<'a> {
                 continue;
             };
 
+            if self.Module.Canonical {
+                match ResolveGraphicsField(self.Module, field) {
+                    Ok(role) => self.EmitGraphicsField(&field_type, &field.Name, role),
+                    Err(diagnostic) => self.Diagnostics.push(diagnostic),
+                }
+                continue;
+            }
             let semantic = if self.IsPositionField(field) {
                 if sv_position_emitted {
                     self.Err(&format!(
@@ -141,6 +155,35 @@ impl<'a> HlslEmitter<'a> {
             }
         }
         self.Lines.push("};".to_string());
+        self.EmitAggregateConstructor(&stream.Name, &stream.Fields);
+    }
+
+    fn EmitGraphicsField(&mut self, ty: &str, name: &str, role: GraphicsFieldRole) {
+        let semantic = match role {
+            GraphicsFieldRole::Location(index, interpolation) => {
+                let qualifier = match interpolation {
+                    Interpolation::Flat => "nointerpolation ",
+                    Interpolation::NoPerspective => "noperspective ",
+                    Interpolation::Linear => "",
+                };
+                self.Lines.push(format!(
+                    "    [[vk::location({index})]] {qualifier}{ty} {name} : TEXCOORD{index};"
+                ));
+                return;
+            }
+            GraphicsFieldRole::Target(index) => format!("SV_Target{index}"),
+            GraphicsFieldRole::Builtin(Builtin::VertexId) => "SV_VertexID".to_string(),
+            GraphicsFieldRole::Builtin(Builtin::InstanceId) => "SV_InstanceID".to_string(),
+            GraphicsFieldRole::Builtin(Builtin::FrontFace) => "SV_IsFrontFace".to_string(),
+            GraphicsFieldRole::Builtin(Builtin::Position) | GraphicsFieldRole::ClipPosition => {
+                "SV_Position".to_string()
+            }
+            GraphicsFieldRole::Resource | GraphicsFieldRole::Unspecified => {
+                self.Err("canonical graphics field has no HLSL interface semantic");
+                return;
+            }
+        };
+        self.Lines.push(format!("    {ty} {name} : {semantic};"));
     }
     fn EmitRecord(&mut self, record: &SdslvRecordDecl) {
         self.Lines.push(format!("struct {} {{", record.Name));
@@ -152,6 +195,41 @@ impl<'a> HlslEmitter<'a> {
                 .push(format!("    {} {};", field_type, field.Name));
         }
         self.Lines.push("};".to_string());
+        self.EmitAggregateConstructor(&record.Name, &record.Fields);
+    }
+
+    fn AggregateFields(&self, name: &str) -> Option<&[SdslvFieldDecl]> {
+        self.Module
+            .Declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                SdslvDecl::Stream(stream) if stream.Name == name => Some(stream.Fields.as_slice()),
+                SdslvDecl::Record(record) if record.Name == name => Some(record.Fields.as_slice()),
+                _ => None,
+            })
+    }
+
+    fn EmitAggregateConstructor(&mut self, name: &str, fields: &[SdslvFieldDecl]) {
+        if !self.Module.Canonical || fields.is_empty() {
+            return;
+        }
+        let mut parameters = Vec::with_capacity(fields.len());
+        for (index, field) in fields.iter().enumerate() {
+            let Some(ty) = self.MapTypeFromPath(&field.TypeName) else {
+                return;
+            };
+            parameters.push(format!("{ty} value{index}"));
+        }
+        let parameters = parameters.join(", ");
+        self.Lines
+            .push(format!("{name} __sdslv_make_{name}({parameters}) {{"));
+        self.Lines.push(format!("    {name} result;"));
+        for (index, field) in fields.iter().enumerate() {
+            self.Lines
+                .push(format!("    result.{} = value{index};", field.Name));
+        }
+        self.Lines.push("    return result;".to_string());
+        self.Lines.push("}".to_string());
     }
 
     fn EmitShader(&mut self, shader: &SdslvShaderDecl) {
@@ -242,7 +320,13 @@ impl<'a> HlslEmitter<'a> {
                         .is_some_and(Self::ExpressionContainsFallibility)
                     || Body.iter().any(Self::StatementContainsFallibility)
             }
-            SdslvStatement::Empty => false,
+            SdslvStatement::Empty | SdslvStatement::ReturnVoid => false,
+            SdslvStatement::Comptime { .. }
+            | SdslvStatement::StaticAssert { .. }
+            | SdslvStatement::InlineFlow { .. }
+            | SdslvStatement::FlowTransition { .. }
+            | SdslvStatement::GuardedWrite { .. }
+            | SdslvStatement::GuardWhen { .. } => false,
         }
     }
 
@@ -481,7 +565,18 @@ impl<'a> HlslEmitter<'a> {
             method.Name,
             parameters.join(", ")
         );
-        if stage_name == "pixel" {
+        let structured_target = self.Module.Canonical
+            && self
+                .AggregateFields(&method.ReturnType.ToDisplayString())
+                .is_some_and(|fields| {
+                    fields.iter().any(|field| {
+                        matches!(
+                            ResolveGraphicsField(self.Module, field),
+                            Ok(GraphicsFieldRole::Target(_))
+                        )
+                    })
+                });
+        if stage_name == "pixel" && !structured_target {
             signature.push_str(" : SV_Target");
         }
         signature.push_str(" {");
@@ -518,6 +613,7 @@ impl<'a> HlslEmitter<'a> {
                 Name,
                 TypeName,
                 Initializer,
+                ..
             } => {
                 let rendered = self
                     .MapTypeFromPath(TypeName)
@@ -611,7 +707,7 @@ impl<'a> HlslEmitter<'a> {
                     vec![format!("{} {};", rendered, Name)]
                 }
             }
-            SdslvStatement::Assign { Target, Value } => {
+            SdslvStatement::Assign { Target, Value, .. } => {
                 if let SdslvExpression::ArrayLiteral { Elements, .. } = Value {
                     let target_text = self.EmitExpression(Target, 0);
                     let mut lines = vec![];
@@ -766,6 +862,16 @@ impl<'a> HlslEmitter<'a> {
                 vec![format!("{};", self.EmitExpression(Value, 0))]
             }
             SdslvStatement::Empty => vec![";".to_string()],
+            SdslvStatement::ReturnVoid => vec!["return;".to_string()],
+            SdslvStatement::Comptime { .. }
+            | SdslvStatement::StaticAssert { .. }
+            | SdslvStatement::InlineFlow { .. }
+            | SdslvStatement::FlowTransition { .. }
+            | SdslvStatement::GuardedWrite { .. }
+            | SdslvStatement::GuardWhen { .. } => {
+                self.Err("canonical statement requires lowering before HLSL emission");
+                vec![]
+            }
             SdslvStatement::If {
                 Condition,
                 ThenBody,
@@ -1075,12 +1181,12 @@ impl<'a> HlslEmitter<'a> {
                 {
                     return format!("{}_{}", enum_name, Field);
                 }
-                format!("{}.{}", self.EmitExpression(Base, 3), Field)
+                format!("{}.{}", self.EmitExpression(Base, 13), Field)
             }
             SdslvExpression::Index { Base, Index, .. } => {
                 format!(
                     "{}[{}]",
-                    self.EmitExpression(Base, 3),
+                    self.EmitExpression(Base, 13),
                     self.EmitExpression(Index, 0)
                 )
             }
@@ -1091,12 +1197,19 @@ impl<'a> HlslEmitter<'a> {
                 }
                 format!(
                     "{}({})",
-                    self.EmitExpression(Callee, 3),
+                    self.EmitExpression(Callee, 13),
                     rendered.join(", ")
                 )
             }
-            SdslvExpression::Unary { Operand, .. } => {
-                format!("-{}", self.EmitExpression(Operand, 3))
+            SdslvExpression::Unary { Operator, Operand } => {
+                let op = match Operator {
+                    SdslvUnaryOperator::Negate => "-",
+                    SdslvUnaryOperator::Not => "!",
+                    SdslvUnaryOperator::BitNot => "~",
+                };
+                let operand = self.EmitExpression(Operand, 13);
+                let text = format!("{op}{operand}");
+                if parent_prec > 12 { format!("({text})") } else { text }
             }
             SdslvExpression::Binary {
                 Left,
@@ -1104,22 +1217,35 @@ impl<'a> HlslEmitter<'a> {
                 Right,
             } => {
                 let (op, prec) = match Operator {
-                    SdslvBinaryOperator::Add => ("+", 2),
-                    SdslvBinaryOperator::Subtract => ("-", 2),
-                    SdslvBinaryOperator::Multiply => ("*", 3),
-                    SdslvBinaryOperator::Divide => ("/", 3),
-                    SdslvBinaryOperator::Equal => ("==", 1),
-                    SdslvBinaryOperator::NotEqual => ("!=", 1),
-                    SdslvBinaryOperator::Less => ("<", 1),
-                    SdslvBinaryOperator::LessEqual => ("<=", 1),
-                    SdslvBinaryOperator::Greater => (">", 1),
-                    SdslvBinaryOperator::GreaterEqual => (">=", 1),
+                    SdslvBinaryOperator::Or => ("||", 1),
+                    SdslvBinaryOperator::And => ("&&", 2),
+                    SdslvBinaryOperator::BitOr => ("|", 3),
+                    SdslvBinaryOperator::BitXor => ("^", 4),
+                    SdslvBinaryOperator::BitAnd => ("&", 5),
+                    SdslvBinaryOperator::Equal => ("==", 6),
+                    SdslvBinaryOperator::NotEqual => ("!=", 6),
+                    SdslvBinaryOperator::Less => ("<", 7),
+                    SdslvBinaryOperator::LessEqual => ("<=", 7),
+                    SdslvBinaryOperator::Greater => (">", 7),
+                    SdslvBinaryOperator::GreaterEqual => (">=", 7),
+                    SdslvBinaryOperator::ShiftLeft => ("<<", 8),
+                    SdslvBinaryOperator::ShiftRight => (">>", 8),
+                    SdslvBinaryOperator::Add => ("+", 9),
+                    SdslvBinaryOperator::Subtract => ("-", 9),
+                    SdslvBinaryOperator::Multiply => ("*", 10),
+                    SdslvBinaryOperator::Divide => ("/", 10),
+                    SdslvBinaryOperator::Remainder => ("%", 10),
+                };
+                let right = if matches!(Operator, SdslvBinaryOperator::ShiftLeft | SdslvBinaryOperator::ShiftRight) {
+                    format!("({} & 31u)", self.EmitExpression(Right, 6))
+                } else {
+                    self.EmitExpression(Right, prec + 1)
                 };
                 let text = format!(
                     "{} {} {}",
                     self.EmitExpression(Left, prec),
                     op,
-                    self.EmitExpression(Right, prec + 1)
+                    right
                 );
                 if prec < parent_prec {
                     format!("({})", text)
@@ -1127,6 +1253,30 @@ impl<'a> HlslEmitter<'a> {
                     text
                 }
             }
+            SdslvExpression::GenericCall { Callee, TypeArguments, Arguments, .. } => {
+                if let SdslvExpression::Identifier(name) = Callee.as_ref()
+                    && name == "Convert"
+                    && let ([ty], [arg]) = (TypeArguments.as_slice(), Arguments.as_slice())
+                    && let Some(mapped) = self.MapBuiltinType(&ty.ToDisplayString())
+                {
+                    return format!("{mapped}({})", self.EmitExpression(arg, 0));
+                }
+                unreachable!("canonical generic calls are checked before HLSL emission")
+            }
+            SdslvExpression::Construct { TypeName, Fields, .. } => {
+                let name = TypeName.Segments.join(".");
+                let declared = self.AggregateFields(&name).expect("validated aggregate name");
+                let mut arguments = Vec::with_capacity(declared.len());
+                for field in declared {
+                    let value = Fields.iter().find(|value| value.Field == field.Name)
+                        .expect("validated aggregate initializer fields");
+                    arguments.push(self.EmitExpression(&value.Value, 0));
+                }
+                format!("__sdslv_make_{name}({})", arguments.join(", "))
+            }
+            SdslvExpression::ForeignHlsl { .. } => unreachable!("inline HLSL requires validation and lowering"),
+            SdslvExpression::GuardedRead { .. } => unreachable!("guarded reads require structured memory lowering"),
+            SdslvExpression::MultiIndex { .. } => unreachable!("multi-index access requires shaped-memory lowering"),
             SdslvExpression::With { .. } => "/*with-unsupported*/".to_string(),
             SdslvExpression::Switch { .. } => {
                 "/* switch expression is not supported in this expression context in M55c */"
@@ -1168,6 +1318,13 @@ impl<'a> HlslEmitter<'a> {
             } => {
                 let element = self.MapTypeFromPath(Element)?;
                 Some(format!("{}[{}]", element, Length))
+            }
+            SdslvTypeRef::Applied { .. } => {
+                self.Err(&format!(
+                    "HLSL lowering is unavailable for {}",
+                    type_ref.ToDisplayString()
+                ));
+                None
             }
         }
     }
@@ -1217,6 +1374,7 @@ impl<'a> HlslEmitter<'a> {
             "float3" => Some("float3"),
             "float4" => Some("float4"),
             "float4x4" => Some("float4x4"),
+            "void" => Some("void"),
             "i32" => Some("int"),
             "u32" => Some("uint"),
             "bool" => Some("bool"),

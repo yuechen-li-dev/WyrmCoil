@@ -289,12 +289,112 @@ fn ValidateTestExpression(expression: &SdslvExpression, diagnostics: &mut Vec<Sd
 }
 
 pub fn ValidateModule(module: &SdslvModule) -> Result<(), Vec<SdslvDiagnostic>> {
+    if module.Canonical {
+        let mut diagnostics = super::canonical_graphics::ValidateGraphics(module);
+        diagnostics.extend(ValidateCanonicalBindings(module));
+        if !diagnostics.is_empty() {
+            return Err(diagnostics);
+        }
+    }
     let mut validator = Validator::New(module);
     validator.Validate();
     if validator.Diagnostics.is_empty() {
         Ok(())
     } else {
         Err(validator.Diagnostics)
+    }
+}
+
+fn ValidateCanonicalBindings(module: &SdslvModule) -> Vec<SdslvDiagnostic> {
+    let mut diagnostics = vec![];
+    for declaration in &module.Declarations {
+        match declaration {
+            SdslvDecl::Function(function) => CheckFunctionBindings(function, &mut diagnostics),
+            SdslvDecl::Shader(shader) => {
+                for function in shader.Methods.iter().chain(&shader.StageMethods) {
+                    CheckFunctionBindings(function, &mut diagnostics);
+                }
+            }
+            _ => {}
+        }
+    }
+    diagnostics
+}
+
+fn CheckFunctionBindings(function: &SdslvFunctionDecl, diagnostics: &mut Vec<SdslvDiagnostic>) {
+    let Some(body) = &function.Body else { return };
+    let mut bindings = HashMap::new();
+    for parameter in &function.Parameters {
+        bindings.insert(parameter.Name.as_str(), false);
+    }
+    CheckBlockBindings(&body.Statements, &mut bindings, diagnostics);
+}
+
+fn CheckBlockBindings<'a>(
+    statements: &'a [SdslvStatement],
+    bindings: &mut HashMap<&'a str, bool>,
+    diagnostics: &mut Vec<SdslvDiagnostic>,
+) {
+    for statement in statements {
+        match statement {
+            SdslvStatement::Let { Name, Mutable, .. } => {
+                bindings.insert(Name, *Mutable);
+            }
+            SdslvStatement::Assign { Target, Span, .. }
+            | SdslvStatement::GuardedWrite { Target, Span, .. } => {
+                let mut root = Target;
+                while let SdslvExpression::FieldAccess { Base, .. }
+                | SdslvExpression::Index { Base, .. }
+                | SdslvExpression::MultiIndex { Base, .. } = root
+                {
+                    root = Base;
+                }
+                if let SdslvExpression::Identifier(name) = root
+                    && bindings.get(name.as_str()) == Some(&false)
+                {
+                    diagnostics.push(SdslvDiagnostic::New(
+                        &format!("SDSL-V3701: cannot assign to immutable binding '{name}'"),
+                        *Span,
+                    ));
+                }
+            }
+            SdslvStatement::If {
+                ThenBody, ElseBody, ..
+            } => {
+                CheckBlockBindings(ThenBody, &mut bindings.clone(), diagnostics);
+                if let Some(else_body) = ElseBody {
+                    CheckBlockBindings(else_body, &mut bindings.clone(), diagnostics);
+                }
+            }
+            SdslvStatement::For { Iterator, Body, .. } => {
+                let mut inner = bindings.clone();
+                inner.insert(Iterator, false);
+                CheckBlockBindings(Body, &mut inner, diagnostics);
+            }
+            SdslvStatement::Comptime { Statement, .. } => {
+                CheckBlockBindings(
+                    std::slice::from_ref(Statement.as_ref()),
+                    bindings,
+                    diagnostics,
+                );
+            }
+            SdslvStatement::InlineFlow { States, .. } => {
+                for state in States {
+                    CheckBlockBindings(&state.Body.Statements, &mut bindings.clone(), diagnostics);
+                }
+            }
+            SdslvStatement::GuardWhen {
+                Cases, ElseBody, ..
+            } => {
+                for case in Cases {
+                    CheckBlockBindings(&case.Body.Statements, &mut bindings.clone(), diagnostics);
+                }
+                if let Some(else_body) = ElseBody {
+                    CheckBlockBindings(&else_body.Statements, &mut bindings.clone(), diagnostics);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -362,6 +462,12 @@ impl<'a> Validator<'a> {
     }
 
     fn Validate(&mut self) {
+        for import in &self.Module.Imports {
+            self.Diagnostics.push(SdslvDiagnostic::New(
+                "canonical imports require module resolution before compilation",
+                import.Span,
+            ));
+        }
         self.ValidateUses();
         self.BuildTopLevelNames();
         self.BuildTypeEnvironment();
@@ -376,6 +482,17 @@ impl<'a> Validator<'a> {
                 SdslvDecl::Flow(flow) => self.ValidateFlow(flow),
                 SdslvDecl::Compile(compile) => self.ValidateCompile(compile),
                 SdslvDecl::Enum(enum_decl) => self.ValidateEnum(enum_decl),
+                SdslvDecl::Concept(_) | SdslvDecl::Config(_) => {
+                    self.Err("concepts and configs require canonical template materialization");
+                }
+                SdslvDecl::Function(function) => self.Err(&format!(
+                    "top-level function '{}' requires canonical function lowering",
+                    function.Name,
+                )),
+                SdslvDecl::Board(board) => self.Err(&format!(
+                    "shader-local board '{}' requires flow lowering",
+                    board.Name
+                )),
             }
         }
         self.ValidateFunctionBodies();
@@ -469,11 +586,15 @@ impl<'a> Validator<'a> {
                 SdslvDecl::TypeAlias(x) => (&x.Name, "type"),
                 SdslvDecl::Stream(x) => (&x.Name, "stream"),
                 SdslvDecl::Record(x) => (&x.Name, "record"),
+                SdslvDecl::Board(x) => (&x.Name, "board"),
                 SdslvDecl::Interface(x) => (&x.Name, "interface"),
                 SdslvDecl::Shader(x) => (&x.Name, "shader"),
                 SdslvDecl::Flow(x) => (&x.Name, "flow"),
                 SdslvDecl::Compile(x) => (&x.Alias, "compile"),
                 SdslvDecl::Enum(x) => (&x.Name, "enum"),
+                SdslvDecl::Concept(x) => (&x.Name, "concept"),
+                SdslvDecl::Config(x) => (&x.Name, "config"),
+                SdslvDecl::Function(x) => (&x.Name, "fn"),
             };
             if let Some(existing_kind) = self.TopLevelKinds.insert(name.clone(), kind) {
                 self.Err(&format!(
@@ -552,6 +673,18 @@ impl<'a> Validator<'a> {
     }
 
     fn ValidateShader(&mut self, shader: &SdslvShaderDecl) {
+        if self.Module.Canonical
+            && (shader.Template.is_some()
+                || shader.Resources.is_some()
+                || !shader.MaterialFields.is_empty()
+                || !shader.Workgroups.is_empty()
+                || !shader.StaticAsserts.is_empty())
+        {
+            self.Err(&format!(
+                "shader '{}' requires canonical template, resource, or compute lowering",
+                shader.Name
+            ));
+        }
         self.ValidateGenericConstraints(shader);
         self.ValidateShaderDuplicates(shader);
         self.ValidateStages(shader);
@@ -559,6 +692,16 @@ impl<'a> Validator<'a> {
     }
 
     fn ValidateEnum(&mut self, enum_decl: &SdslvEnumDecl) {
+        if let Some(variant) = enum_decl
+            .Variants
+            .iter()
+            .find(|variant| variant.Payload.is_some())
+        {
+            self.Diagnostics.push(SdslvDiagnostic::New(
+                "canonical payload enums require tagged-value lowering",
+                variant.Span,
+            ));
+        }
         if enum_decl.Variants.is_empty() {
             self.Diagnostics.push(SdslvDiagnostic::New(
                 "enum must have at least one variant",
@@ -981,6 +1124,11 @@ impl<'a> Validator<'a> {
                 self.ResolveFlowExpressionType(locals, Operand)
             }
             SdslvExpression::Call { .. } => TypeRef::Unknown,
+            SdslvExpression::GenericCall { .. }
+            | SdslvExpression::Construct { .. }
+            | SdslvExpression::ForeignHlsl { .. }
+            | SdslvExpression::GuardedRead { .. }
+            | SdslvExpression::MultiIndex { .. } => TypeRef::Unknown,
             SdslvExpression::With { Base, .. } => self.ResolveFlowExpressionType(locals, Base),
             SdslvExpression::Index { Base, .. } => self.ResolveFlowExpressionType(locals, Base),
             SdslvExpression::ArrayLiteral { .. } => TypeRef::Unknown,
@@ -1076,6 +1224,7 @@ impl<'a> Validator<'a> {
                     Name,
                     TypeName,
                     Initializer,
+                    ..
                 } => {
                     if let Some(init) = Initializer {
                         self.CheckExpressionCalls(shader, locals, init, is_fallible_fn, false);
@@ -1107,7 +1256,7 @@ impl<'a> Validator<'a> {
                         locals.insert(Name.clone(), self.TypeRefToType(TypeName));
                     }
                 }
-                SdslvStatement::Assign { Target, Value } => {
+                SdslvStatement::Assign { Target, Value, .. } => {
                     self.CheckExpressionCalls(shader, locals, Target, is_fallible_fn, false);
                     self.CheckExpressionCalls(shader, locals, Value, is_fallible_fn, false);
                     if self.IsFallibleExpression(shader, locals, Target) {
@@ -1168,6 +1317,22 @@ impl<'a> Validator<'a> {
                     self.ValidateWhenUtilityExpression(shader, locals, Value);
                 }
                 SdslvStatement::Empty => {}
+                SdslvStatement::ReturnVoid => {
+                    if return_type.Name() != Some("void") {
+                        self.Err("a return without a value requires a void function");
+                    }
+                }
+                SdslvStatement::Comptime { Span, .. }
+                | SdslvStatement::StaticAssert { Span, .. }
+                | SdslvStatement::InlineFlow { Span, .. }
+                | SdslvStatement::FlowTransition { Span, .. }
+                | SdslvStatement::GuardedWrite { Span, .. }
+                | SdslvStatement::GuardWhen { Span, .. } => {
+                    self.Diagnostics.push(SdslvDiagnostic::New(
+                        "canonical statement requires compile-time or flow lowering",
+                        *Span,
+                    ));
+                }
                 SdslvStatement::If {
                     Condition,
                     ThenBody,
@@ -1399,6 +1564,11 @@ impl<'a> Validator<'a> {
     ) {
         match expression {
             SdslvExpression::Call { Callee, Arguments } => {
+                if self.Module.Canonical
+                    && !matches!(Callee.as_ref(), SdslvExpression::Identifier(_))
+                {
+                    self.CheckExpressionCalls(shader, locals, Callee, is_fallible_fn, false);
+                }
                 if let SdslvExpression::Identifier(name) = &**Callee
                     && name == "error"
                 {
@@ -1480,12 +1650,83 @@ impl<'a> Validator<'a> {
                     ));
                 }
             }
-            SdslvExpression::Binary { Left, Right, .. } => {
+            SdslvExpression::Binary {
+                Left,
+                Operator,
+                Right,
+            } => {
                 self.CheckExpressionCalls(shader, locals, Left, is_fallible_fn, false);
                 self.CheckExpressionCalls(shader, locals, Right, is_fallible_fn, false);
+                self.ValidateOperatorOperands(shader, locals, *Operator, Left, Right);
             }
-            SdslvExpression::Unary { Operand, .. } => {
-                self.CheckExpressionCalls(shader, locals, Operand, is_fallible_fn, false)
+            SdslvExpression::Unary { Operator, Operand } => {
+                self.CheckExpressionCalls(shader, locals, Operand, is_fallible_fn, false);
+                let ty = self.ResolveExpressionType(shader, locals, Operand);
+                match Operator {
+                    SdslvUnaryOperator::Not if ty.Name() != Some("bool") => {
+                        self.Err("SDSL-V1502: not requires a bool operand")
+                    }
+                    SdslvUnaryOperator::BitNot if !matches!(ty.Name(), Some("i32" | "u32")) => {
+                        self.Err("SDSL-V4311: bitwise complement requires an integer operand")
+                    }
+                    _ => {}
+                }
+            }
+            SdslvExpression::Construct {
+                TypeName,
+                Fields,
+                Span,
+            } => {
+                self.ValidateConstructor(shader, locals, TypeName, Fields, *Span);
+                for field in Fields {
+                    self.CheckExpressionCalls(shader, locals, &field.Value, is_fallible_fn, false);
+                }
+            }
+            SdslvExpression::GenericCall {
+                Callee,
+                TypeArguments,
+                Arguments,
+                Span,
+            } => {
+                if !matches!(Callee.as_ref(), SdslvExpression::Identifier(name) if name == "Convert")
+                    || !matches!(TypeArguments.as_slice(), [ty] if matches!(ty.ToDisplayString().as_str(), "i32" | "u32" | "f32" | "float"))
+                    || Arguments.len() != 1
+                {
+                    self.Diagnostics.push(SdslvDiagnostic::New(
+                        "unsupported canonical generic call",
+                        *Span,
+                    ));
+                } else if !self.IsNumericScalarType(&self.ResolveExpressionType(
+                    shader,
+                    locals,
+                    &Arguments[0],
+                )) {
+                    self.Diagnostics.push(SdslvDiagnostic::New(
+                        "Convert requires a numeric scalar",
+                        *Span,
+                    ));
+                }
+                for argument in Arguments {
+                    self.CheckExpressionCalls(shader, locals, argument, is_fallible_fn, false);
+                }
+            }
+            SdslvExpression::ForeignHlsl { Span, .. } => {
+                self.Diagnostics.push(SdslvDiagnostic::New(
+                    "inline HLSL requires capture validation and lowering",
+                    *Span,
+                ));
+            }
+            SdslvExpression::GuardedRead { Span, .. } => {
+                self.Diagnostics.push(SdslvDiagnostic::New(
+                    "guarded reads require structured memory lowering",
+                    *Span,
+                ));
+            }
+            SdslvExpression::MultiIndex { Span, .. } => {
+                self.Diagnostics.push(SdslvDiagnostic::New(
+                    "multi-index access requires shaped-memory lowering",
+                    *Span,
+                ));
             }
             SdslvExpression::TryPropagate { Expression, .. } => {
                 self.CheckExpressionCalls(shader, locals, Expression, is_fallible_fn, false);
@@ -1527,6 +1768,12 @@ impl<'a> Validator<'a> {
             SdslvExpression::Match { Subject, Arms, .. } => {
                 self.CheckExpressionCalls(shader, locals, Subject, is_fallible_fn, false);
                 for arm in Arms {
+                    if matches!(arm.Kind, SdslvMatchArmKind::PayloadVariant { .. }) {
+                        self.Diagnostics.push(SdslvDiagnostic::New(
+                            "canonical payload match requires tagged-value lowering",
+                            arm.Span,
+                        ));
+                    }
                     self.CheckExpressionCalls(shader, locals, &arm.Value, is_fallible_fn, false);
                 }
             }
@@ -1567,6 +1814,106 @@ impl<'a> Validator<'a> {
         }
     }
 
+    fn ValidateOperatorOperands(
+        &mut self,
+        shader: &SdslvShaderDecl,
+        locals: &HashMap<String, TypeRef>,
+        operator: SdslvBinaryOperator,
+        left: &SdslvExpression,
+        right: &SdslvExpression,
+    ) {
+        use SdslvBinaryOperator::*;
+        if !matches!(
+            operator,
+            And | Or | BitAnd | BitOr | BitXor | ShiftLeft | ShiftRight
+        ) {
+            return;
+        }
+        let left = self.ResolveExpressionType(shader, locals, left);
+        let right = self.ResolveExpressionType(shader, locals, right);
+        let error = match operator {
+            And | Or if left.Name() != Some("bool") || right.Name() != Some("bool") => {
+                "SDSL-V1502: logical operators require bool operands"
+            }
+            BitAnd | BitOr | BitXor | ShiftLeft | ShiftRight
+                if !matches!(left.Name(), Some("i32" | "u32")) =>
+            {
+                "SDSL-V4311: bitwise operators require scalar integers"
+            }
+            ShiftLeft | ShiftRight if right.Name() != Some("u32") => {
+                "SDSL-V4312: shift count must be u32"
+            }
+            BitAnd | BitOr | BitXor if right.Name() != left.Name() => {
+                "SDSL-V4311: bitwise operands must have matching integer types"
+            }
+            _ => return,
+        };
+        self.Err(error);
+    }
+
+    fn ValidateConstructor(
+        &mut self,
+        shader: &SdslvShaderDecl,
+        locals: &HashMap<String, TypeRef>,
+        name: &SdslvPath,
+        initializers: &[SdslvWithUpdate],
+        span: SdslvSpan,
+    ) {
+        let name = name.Segments.join(".");
+        let declared = self
+            .StreamByName
+            .get(&name)
+            .map(|stream| stream.Fields.as_slice())
+            .or_else(|| {
+                self.RecordByName
+                    .get(&name)
+                    .map(|record| record.Fields.as_slice())
+            });
+        let Some(declared) = declared else {
+            self.Diagnostics.push(SdslvDiagnostic::New(
+                &format!("unsupported aggregate constructor '{name}'"),
+                span,
+            ));
+            return;
+        };
+        let mut seen = HashSet::new();
+        for initializer in initializers {
+            if !seen.insert(initializer.Field.as_str()) {
+                self.Diagnostics.push(SdslvDiagnostic::New(
+                    &format!("duplicate initializer '{}'", initializer.Field),
+                    span,
+                ));
+                continue;
+            }
+            let Some(field) = declared
+                .iter()
+                .find(|field| field.Name == initializer.Field)
+            else {
+                self.Diagnostics.push(SdslvDiagnostic::New(
+                    &format!("unknown field '{}' in '{name}'", initializer.Field),
+                    span,
+                ));
+                continue;
+            };
+            let expected = self.TypeRefToType(&field.TypeName);
+            let actual = self.ResolveExpressionType(shader, locals, &initializer.Value);
+            if let Some((_, expected, actual)) = self.TypeMismatch("", &expected, &actual) {
+                self.Diagnostics.push(SdslvDiagnostic::New(
+                    &format!("field '{}' expects {expected}, found {actual}", field.Name),
+                    span,
+                ));
+            }
+        }
+        for field in declared {
+            if !seen.contains(field.Name.as_str()) {
+                self.Diagnostics.push(SdslvDiagnostic::New(
+                    &format!("missing initializer for '{}'", field.Name),
+                    span,
+                ));
+            }
+        }
+    }
+
     fn ResolveExpressionType(
         &self,
         shader: &SdslvShaderDecl,
@@ -1585,7 +1932,14 @@ impl<'a> Validator<'a> {
                 }
                 TypeRef::Unknown
             }
-            SdslvExpression::IntegerLiteral(_) => TypeRef::Named("i32".to_string()),
+            SdslvExpression::IntegerLiteral(value) => TypeRef::Named(
+                if value.ends_with(['u', 'U']) {
+                    "u32"
+                } else {
+                    "i32"
+                }
+                .to_string(),
+            ),
             SdslvExpression::FloatLiteral(_) => TypeRef::Named("float".to_string()),
             SdslvExpression::StringLiteral(_) => TypeRef::Named("string".to_string()),
             SdslvExpression::BoolLiteral(_) => TypeRef::Named("bool".to_string()),
@@ -1604,6 +1958,17 @@ impl<'a> Validator<'a> {
             SdslvExpression::Call { Callee, Arguments } => {
                 self.ResolveCallType(shader, locals, Callee, Arguments)
             }
+            SdslvExpression::Construct { TypeName, .. } => {
+                TypeRef::Named(TypeName.Segments.join("."))
+            }
+            SdslvExpression::ForeignHlsl { ResultType, .. } => self.TypeRefToType(ResultType),
+            SdslvExpression::GuardedRead { .. } | SdslvExpression::MultiIndex { .. } => {
+                TypeRef::Unknown
+            }
+            SdslvExpression::GenericCall { TypeArguments, .. } => TypeArguments
+                .first()
+                .map(|ty| self.TypeRefToType(ty))
+                .unwrap_or(TypeRef::Unknown),
             SdslvExpression::Index { Base, Index, .. } => {
                 let base_type = self.ResolveExpressionType(shader, locals, Base);
                 let index_type = self.ResolveExpressionType(shader, locals, Index);
@@ -1623,6 +1988,10 @@ impl<'a> Validator<'a> {
                 let l = self.ResolveExpressionType(shader, locals, Left);
                 let r = self.ResolveExpressionType(shader, locals, Right);
                 match Operator {
+                    SdslvBinaryOperator::And | SdslvBinaryOperator::Or => {
+                        TypeRef::Named("bool".to_string())
+                    }
+                    SdslvBinaryOperator::ShiftLeft | SdslvBinaryOperator::ShiftRight => l,
                     SdslvBinaryOperator::Equal
                     | SdslvBinaryOperator::NotEqual
                     | SdslvBinaryOperator::Less
@@ -1644,6 +2013,10 @@ impl<'a> Validator<'a> {
                     }
                 }
             }
+            SdslvExpression::Unary {
+                Operator: SdslvUnaryOperator::Not,
+                ..
+            } => TypeRef::Named("bool".to_string()),
             SdslvExpression::Unary { Operand, .. } => {
                 self.ResolveExpressionType(shader, locals, Operand)
             }
@@ -2003,7 +2376,8 @@ impl<'a> Validator<'a> {
                         arm_locals.insert(Binding.clone(), error_type.clone());
                     }
                 }
-                SdslvMatchArmKind::EnumVariant { .. } => {
+                SdslvMatchArmKind::EnumVariant { .. }
+                | SdslvMatchArmKind::PayloadVariant { .. } => {
                     self.Err("fallible match cannot mix ok/err arms with enum variant arms");
                     continue;
                 }
@@ -2411,6 +2785,7 @@ impl<'a> Validator<'a> {
                 Element: Box::new(self.TypeRefToType(Element)),
                 Length: *Length,
             },
+            SdslvTypeRef::Applied { .. } => TypeRef::Unknown,
         }
     }
 
@@ -2421,6 +2796,7 @@ impl<'a> Validator<'a> {
                 shader_generics.contains(&name) || self.IsKnownTypeName(&name)
             }
             SdslvTypeRef::Array { Element, .. } => self.IsKnownTypeRef(Element, shader_generics),
+            SdslvTypeRef::Applied { .. } => false,
         }
     }
 
@@ -2428,6 +2804,7 @@ impl<'a> Validator<'a> {
         Self::IsBuiltinFlowBoardType(name)
             || name == "string"
             || name == "Error"
+            || name == "void"
             || self.AliasUnderlyingByName.contains_key(name)
             || self.StreamByName.contains_key(name)
             || self.RecordByName.contains_key(name)

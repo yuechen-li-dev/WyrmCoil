@@ -1,5 +1,7 @@
 # SDSL-V Authoring Guide (Current Implementation Status)
 
+This guide covers the existing shader dialect and CPU test runner. For the native Oct-compatible frontend and its current compilation coverage, read [Canonical SDSL-V in WyrmCoil](sdsl-v-oct-frontend.md).
+
 This guide documents what SDSL-V can do **today** in WyrmCoil, how to author source that works with the current compiler/test runner, and what remains intentionally out of scope.
 
 Use this alongside `docs/sdsl-v.md`:

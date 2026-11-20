@@ -10,6 +10,12 @@ pub struct SdslvPath {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SdslvTypeRef {
     Named(SdslvPath),
+    Applied {
+        Name: SdslvPath,
+        Arguments: Vec<SdslvTypeRef>,
+        Extents: Vec<SdslvExpression>,
+        Span: SdslvSpan,
+    },
     Array {
         Element: Box<SdslvTypeRef>,
         Length: usize,
@@ -24,7 +30,7 @@ impl SdslvTypeRef {
     pub fn AsNamedPath(&self) -> Option<&SdslvPath> {
         match self {
             Self::Named(path) => Some(path),
-            Self::Array { .. } => None,
+            Self::Array { .. } | Self::Applied { .. } => None,
         }
     }
     pub fn ToDisplayString(&self) -> String {
@@ -35,6 +41,19 @@ impl SdslvTypeRef {
             } => {
                 format!("array<{}, {}>", Element.ToDisplayString(), Length)
             }
+            Self::Applied {
+                Name,
+                Arguments,
+                Extents,
+                ..
+            } => {
+                let mut arguments: Vec<String> =
+                    Arguments.iter().map(Self::ToDisplayString).collect();
+                if !Extents.is_empty() {
+                    arguments.push("extent expression".to_string());
+                }
+                format!("{}<{}>", Name.Segments.join("."), arguments.join(", "))
+            }
         }
     }
 }
@@ -43,7 +62,24 @@ impl SdslvTypeRef {
 pub struct SdslvModule {
     pub Namespace: Option<SdslvPath>,
     pub Uses: Vec<SdslvUseDecl>,
+    pub Imports: Vec<SdslvImportDecl>,
+    pub Exports: Vec<SdslvExportDecl>,
+    pub Canonical: bool,
     pub Declarations: Vec<SdslvDecl>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvImportDecl {
+    pub Path: String,
+    pub Relative: bool,
+    pub Alias: Option<String>,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvExportDecl {
+    pub DeclarationIndex: usize,
+    pub Span: SdslvSpan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,11 +115,52 @@ pub enum SdslvDecl {
     TypeAlias(SdslvTypeAliasDecl),
     Stream(SdslvStreamDecl),
     Record(SdslvRecordDecl),
+    Board(SdslvRecordDecl),
     Interface(SdslvInterfaceDecl),
     Shader(SdslvShaderDecl),
     Flow(SdslvFlowDecl),
     Compile(SdslvCompileDecl),
     Enum(SdslvEnumDecl),
+    Concept(SdslvConceptDecl),
+    Config(SdslvConfigDecl),
+    Function(SdslvFunctionDecl),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvConceptDecl {
+    pub Name: String,
+    pub Members: Vec<SdslvConceptMember>,
+    pub Requirements: Vec<SdslvExpression>,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SdslvConceptMember {
+    Field {
+        Field: SdslvFieldDecl,
+        Default: Option<SdslvExpression>,
+        ZeroAllowed: bool,
+    },
+    Group {
+        Name: String,
+        Members: Vec<SdslvConceptMember>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvConfigDecl {
+    pub Name: String,
+    pub Concept: SdslvPath,
+    pub Fields: Vec<SdslvConfigField>,
+    pub Requirements: Vec<SdslvExpression>,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvConfigField {
+    pub Path: SdslvPath,
+    pub Value: SdslvExpression,
+    pub Span: SdslvSpan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +173,7 @@ pub struct SdslvEnumDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvEnumVariant {
     pub Name: String,
+    pub Payload: Option<Vec<SdslvFieldDecl>>,
     pub Span: SdslvSpan,
 }
 
@@ -177,11 +255,22 @@ pub struct SdslvTypeAliasDecl {
 pub struct SdslvFieldDecl {
     pub Name: String,
     pub TypeName: SdslvTypeRef,
+    pub Attributes: Vec<SdslvAttribute>,
+    pub Access: Option<SdslvResourceAccess>,
+    pub Span: SdslvSpan,
+    pub TypeSpan: SdslvSpan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdslvResourceAccess {
+    Readonly,
+    Readwrite,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvStreamDecl {
     pub Name: String,
     pub Fields: Vec<SdslvFieldDecl>,
+    pub Span: SdslvSpan,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvRecordDecl {
@@ -202,6 +291,23 @@ pub struct SdslvShaderDecl {
     pub MaterialFields: Vec<SdslvFieldDecl>,
     pub Methods: Vec<SdslvFunctionDecl>,
     pub StageMethods: Vec<SdslvFunctionDecl>,
+    pub Template: Option<SdslvTemplateParam>,
+    pub Resources: Option<SdslvResourceDecl>,
+    pub Workgroups: Vec<SdslvFieldDecl>,
+    pub StaticAsserts: Vec<SdslvExpression>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvTemplateParam {
+    pub Name: String,
+    pub Concept: SdslvPath,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SdslvResourceDecl {
+    Stream(SdslvPath),
+    Inline(Vec<SdslvFieldDecl>),
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvWhereConstraint {
@@ -210,11 +316,13 @@ pub struct SdslvWhereConstraint {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvFunctionDecl {
+    pub Attributes: Vec<SdslvAttribute>,
     pub IsOverride: bool,
     pub Stage: Option<String>,
     pub Name: String,
     pub Parameters: Vec<SdslvFunctionParameter>,
     pub ReturnType: SdslvTypeRef,
+    pub ReturnTypeSpan: SdslvSpan,
     pub ErrorType: Option<SdslvTypeRef>,
     pub Body: Option<SdslvBody>,
 }
@@ -235,13 +343,46 @@ pub enum SdslvStatement {
         Name: String,
         TypeName: SdslvTypeRef,
         Initializer: Option<SdslvExpression>,
+        Mutable: bool,
+        Span: SdslvSpan,
     },
     Assign {
         Target: SdslvExpression,
         Value: SdslvExpression,
+        Span: SdslvSpan,
     },
     Return {
         Value: SdslvExpression,
+    },
+    ReturnVoid,
+    Comptime {
+        Statement: Box<SdslvStatement>,
+        Span: SdslvSpan,
+    },
+    StaticAssert {
+        Condition: SdslvExpression,
+        Span: SdslvSpan,
+    },
+    InlineFlow {
+        Name: String,
+        Boards: Vec<SdslvFlowBoardBinding>,
+        States: Vec<SdslvInlineState>,
+        Span: SdslvSpan,
+    },
+    FlowTransition {
+        Transition: SdslvFlowTransition,
+        Span: SdslvSpan,
+    },
+    GuardedWrite {
+        Target: SdslvExpression,
+        Value: SdslvExpression,
+        Condition: SdslvExpression,
+        Span: SdslvSpan,
+    },
+    GuardWhen {
+        Cases: Vec<SdslvGuardCase>,
+        ElseBody: Option<SdslvBody>,
+        Span: SdslvSpan,
     },
     If {
         Condition: SdslvExpression,
@@ -264,6 +405,34 @@ pub enum SdslvStatement {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvInlineState {
+    pub Name: String,
+    pub Body: SdslvBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvFlowBoardBinding {
+    pub Name: String,
+    pub TypeName: SdslvTypeRef,
+    pub Initializer: SdslvExpression,
+    pub Span: SdslvSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SdslvFlowTransition {
+    Goto(String),
+    Push(String),
+    Pop,
+    Finish,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdslvGuardCase {
+    pub Condition: SdslvExpression,
+    pub Body: SdslvBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SdslvExpression {
     Identifier(String),
     IntegerLiteral(String),
@@ -283,9 +452,37 @@ pub enum SdslvExpression {
         Index: Box<SdslvExpression>,
         Span: SdslvSpan,
     },
+    MultiIndex {
+        Base: Box<SdslvExpression>,
+        Indices: Vec<SdslvExpression>,
+        Span: SdslvSpan,
+    },
     Call {
         Callee: Box<SdslvExpression>,
         Arguments: Vec<SdslvExpression>,
+    },
+    GenericCall {
+        Callee: Box<SdslvExpression>,
+        TypeArguments: Vec<SdslvTypeRef>,
+        Arguments: Vec<SdslvExpression>,
+        Span: SdslvSpan,
+    },
+    Construct {
+        TypeName: SdslvPath,
+        Fields: Vec<SdslvWithUpdate>,
+        Span: SdslvSpan,
+    },
+    ForeignHlsl {
+        ResultType: SdslvTypeRef,
+        Captures: Vec<String>,
+        Source: String,
+        Span: SdslvSpan,
+    },
+    GuardedRead {
+        Target: Box<SdslvExpression>,
+        Condition: Box<SdslvExpression>,
+        Fallback: Box<SdslvExpression>,
+        Span: SdslvSpan,
     },
     Binary {
         Left: Box<SdslvExpression>,
@@ -367,11 +564,21 @@ pub enum SdslvBinaryOperator {
     LessEqual,
     Greater,
     GreaterEqual,
+    Or,
+    And,
+    BitOr,
+    BitXor,
+    BitAnd,
+    ShiftLeft,
+    ShiftRight,
+    Remainder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SdslvUnaryOperator {
     Negate,
+    Not,
+    BitNot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -383,7 +590,17 @@ pub struct SdslvMatchArm {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SdslvMatchArmKind {
-    EnumVariant { VariantPath: SdslvPath },
-    FallibleOk { Binding: String },
-    FallibleErr { Binding: String },
+    EnumVariant {
+        VariantPath: SdslvPath,
+    },
+    PayloadVariant {
+        VariantPath: SdslvPath,
+        Binding: String,
+    },
+    FallibleOk {
+        Binding: String,
+    },
+    FallibleErr {
+        Binding: String,
+    },
 }

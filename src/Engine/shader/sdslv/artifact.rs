@@ -3,7 +3,7 @@
 use super::ast::*;
 use super::diagnostic::SdslvDiagnostic;
 use super::emitter::EmitHlsl;
-use super::parser::ParseSource;
+use super::parser::{ParseCanonicalSource, ParseSource};
 use super::validation::ValidateModule;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +34,14 @@ pub fn CompileSourceToShaderArtifact(
     source: &str,
 ) -> Result<SdslvShaderArtifact, Vec<SdslvDiagnostic>> {
     let module = ParseSource(source)?;
+    BuildShaderArtifact(source_name, &module)
+}
+
+pub fn CompileCanonicalSourceToShaderArtifact(
+    source_name: &str,
+    source: &str,
+) -> Result<SdslvShaderArtifact, Vec<SdslvDiagnostic>> {
+    let module = ParseCanonicalSource(source)?;
     BuildShaderArtifact(source_name, &module)
 }
 
