@@ -7,6 +7,8 @@ intent:
   summary:
     Provide small example pairs that demonstrate the allowed Rust subset in practice.
     These examples are normative anchors for authors.
+    Project functions use PascalCase. Locals and parameters use snake_case.
+    Standard library and external API calls keep their original spelling.
   audience:
     primary:
       LLM authors
@@ -28,7 +30,7 @@ examples:
             display_name: String,
         }
 
-        fn new_user(user_id: &str, display_name: &str) -> UserRecord {
+        fn NewUser(user_id: &str, display_name: &str) -> UserRecord {
             UserRecord {
                 user_id: user_id.to_string(),
                 display_name: display_name.to_string(),
@@ -46,7 +48,7 @@ examples:
         }
 
         impl Project {
-            fn add_file(&mut self, path: String) {
+            fn AddFile(&mut self, path: String) {
                 self.files.push(path);
             }
         }
@@ -60,7 +62,7 @@ examples:
             display_name: &'a str,
         }
 
-        fn new_user<'a>(user_id: &'a str, display_name: &'a str) -> UserRecord<'a> {
+        fn NewUser<'a>(user_id: &'a str, display_name: &'a str) -> UserRecord<'a> {
             UserRecord { user_id, display_name }
         }
 
@@ -82,7 +84,7 @@ examples:
       why:
         The immutable borrow ends before the next mutation, keeping the code easy for both compiler and reviewer.
       code: |
-        fn append_summary(names: &mut Vec<String>) {
+        fn AppendSummary(names: &mut Vec<String>) {
             let count = names.len();
             let summary = format!("count={count}");
             names.push(summary);
@@ -92,7 +94,7 @@ examples:
       why:
         Breaking work into steps shortens borrow lifetimes and makes state transitions easier to inspect.
       code: |
-        fn uppercase_first(items: &mut [String]) {
+        fn UppercaseFirst(items: &mut [String]) {
             if items.is_empty() {
                 return;
             }
@@ -105,7 +107,7 @@ examples:
       why:
         Chaining can accidentally widen borrow scope and make the code harder to modify safely.
       code: |
-        fn append_summary(names: &mut Vec<String>) {
+        fn AppendSummary(names: &mut Vec<String>) {
             let summary = names
                 .first()
                 .map(|name| format!("{name}-{}", names.len()))
@@ -118,7 +120,7 @@ examples:
       why:
         A reference is held across unrelated logic, increasing coupling and compiler friction.
       code: |
-        fn update_and_log(values: &mut Vec<String>) {
+        fn UpdateAndLog(values: &mut Vec<String>) {
             let first = &values[0];
 
             println!("first before update = {}", first);
@@ -136,7 +138,7 @@ examples:
       why:
         A small clone removes lifetime coupling and keeps the code straightforward.
       code: |
-        fn duplicate_first(items: &[String]) -> Option<(String, String)> {
+        fn DuplicateFirst(items: &[String]) -> Option<(String, String)> {
             let first = items.first()?.clone();
             Some((first.clone(), first))
         }
@@ -145,7 +147,7 @@ examples:
       why:
         Cloning a small value before mutation avoids awkward borrow overlap.
       code: |
-        fn rename_first_with_suffix(items: &mut [String], suffix: &str) {
+        fn RenameFirstWithSuffix(items: &mut [String], suffix: &str) {
             if items.is_empty() {
                 return;
             }
@@ -158,7 +160,7 @@ examples:
       why:
         The code preserves a borrow-heavy shape mainly to avoid a cheap clone.
       code: |
-        fn rename_first_with_suffix<'a>(items: &'a mut [String], suffix: &'a str) -> &'a str {
+        fn RenameFirstWithSuffix<'a>(items: &'a mut [String], suffix: &'a str) -> &'a str {
             let first = &items[0];
             items[0] = format!("{first}{suffix}");
             &items[0]
@@ -166,15 +168,11 @@ examples:
 
     bad_clone_everything_without_reason:
       why:
-        Cloning can simplify design, but indiscriminate cloning creates unnecessary cost and noise.
+        This copies the entire collection and its strings just to read their lengths.
       code: |
-        fn total_lengths(items: &[String]) -> usize {
-            items
-                .iter()
-                .cloned()
-                .map(|item| item.clone())
-                .map(|item| item.len())
-                .sum()
+        fn TotalLengths(items: &[String]) -> usize {
+            let snapshot = items.to_vec();
+            snapshot.iter().map(String::len).sum()
         }
 
   result_and_option:
@@ -185,7 +183,7 @@ examples:
       why:
         Option is the right fit when the only question is whether a value exists.
       code: |
-        fn find_name(names: &[String], target: &str) -> Option<usize> {
+        fn FindName(names: &[String], target: &str) -> Option<usize> {
             names.iter().position(|name| name == target)
         }
 
@@ -193,7 +191,7 @@ examples:
       why:
         Result makes failure explicit without theatrical error architecture.
       code: |
-        fn parse_positive_int(text: &str) -> Result<u32, String> {
+        fn ParsePositiveInt(text: &str) -> Result<u32, String> {
             let value: u32 = text.parse().map_err(|_| "invalid integer".to_string())?;
             if value == 0 {
                 return Err("value must be positive".to_string());
@@ -208,7 +206,7 @@ examples:
         use std::fs;
         use std::path::Path;
 
-        fn load_trimmed_text(path: &Path) -> Result<String, std::io::Error> {
+        fn LoadTrimmedText(path: &Path) -> Result<String, std::io::Error> {
             let text = fs::read_to_string(path)?;
             Ok(text.trim().to_string())
         }
@@ -235,7 +233,7 @@ examples:
       why:
         Logging is not a replacement for explicit failure in the type.
       code: |
-        fn parse_positive_int(text: &str) -> u32 {
+        fn ParsePositiveInt(text: &str) -> u32 {
             match text.parse::<u32>() {
                 Ok(value) if value > 0 => value,
                 _ => {
@@ -258,15 +256,15 @@ examples:
         }
 
         impl Counter {
-            fn new() -> Self {
+            fn New() -> Self {
                 Self { value: 0 }
             }
 
-            fn increment(&mut self) {
+            fn Increment(&mut self) {
                 self.value += 1;
             }
 
-            fn value(&self) -> usize {
+            fn Value(&self) -> usize {
                 self.value
             }
         }
@@ -282,7 +280,7 @@ examples:
             Failed(String),
         }
 
-        fn is_terminal(state: &JobState) -> bool {
+        fn IsTerminal(state: &JobState) -> bool {
             matches!(state, JobState::Finished | JobState::Failed(_))
         }
 
@@ -291,13 +289,13 @@ examples:
         A trait is justified when there is a genuine interface boundary.
       code: |
         trait FileStore {
-            fn read_text(&self, path: &str) -> Result<String, String>;
+            fn ReadText(&self, path: &str) -> Result<String, String>;
         }
 
         struct LocalFileStore;
 
         impl FileStore for LocalFileStore {
-            fn read_text(&self, path: &str) -> Result<String, String> {
+            fn ReadText(&self, path: &str) -> Result<String, String> {
                 std::fs::read_to_string(path).map_err(|e| e.to_string())
             }
         }
@@ -307,8 +305,8 @@ examples:
         Trait indirection is introduced where a concrete type would be simpler and clearer.
       code: |
         trait CounterBehavior {
-            fn increment(&mut self);
-            fn value(&self) -> usize;
+            fn Increment(&mut self);
+            fn Value(&self) -> usize;
         }
 
         struct CounterImpl {
@@ -316,11 +314,11 @@ examples:
         }
 
         impl CounterBehavior for CounterImpl {
-            fn increment(&mut self) {
+            fn Increment(&mut self) {
                 self.value += 1;
             }
 
-            fn value(&self) -> usize {
+            fn Value(&self) -> usize {
                 self.value
             }
         }
@@ -344,7 +342,7 @@ examples:
       why:
         The loop makes control flow, mutation, and intermediate state obvious.
       code: |
-        fn collect_even_strings(values: &[i32]) -> Vec<String> {
+        fn CollectEvenStrings(values: &[i32]) -> Vec<String> {
             let mut result = Vec::new();
 
             for value in values {
@@ -360,7 +358,7 @@ examples:
       why:
         A short iterator chain is acceptable when it stays obvious.
       code: |
-        fn collect_even_strings(values: &[i32]) -> Vec<String> {
+        fn CollectEvenStrings(values: &[i32]) -> Vec<String> {
             values
                 .iter()
                 .filter(|value| **value % 2 == 0)
@@ -372,7 +370,7 @@ examples:
       why:
         The chain is harder to inspect and modify than a simple loop.
       code: |
-        fn summarize(values: &[i32]) -> Vec<String> {
+        fn Summarize(values: &[i32]) -> Vec<String> {
             values
                 .iter()
                 .enumerate()
@@ -391,7 +389,7 @@ examples:
       why:
         Dense expressions can make borrow scope and state transitions harder to understand.
       code: |
-        fn rewrite_first(items: &mut Vec<String>) {
+        fn RewriteFirst(items: &mut Vec<String>) {
             items[0] = items
                 .first()
                 .map(|value| value.trim().to_uppercase())
@@ -411,11 +409,11 @@ examples:
         }
 
         impl Queue {
-            fn push(&mut self, item: String) {
+            fn Push(&mut self, item: String) {
                 self.items.push(item);
             }
 
-            fn pop(&mut self) -> Option<String> {
+            fn Pop(&mut self) -> Option<String> {
                 self.items.pop()
             }
         }
@@ -429,12 +427,12 @@ examples:
         }
 
         impl Graph {
-            fn add_node(&mut self, name: String) -> usize {
+            fn AddNode(&mut self, name: String) -> usize {
                 self.names.push(name);
                 self.names.len() - 1
             }
 
-            fn name(&self, id: usize) -> Option<&str> {
+            fn Name(&self, id: usize) -> Option<&str> {
                 self.names.get(id).map(String::as_str)
             }
         }
@@ -450,7 +448,7 @@ examples:
             name: Rc<RefCell<String>>,
         }
 
-        fn rename(node: &Node, new_name: &str) {
+        fn Rename(node: &Node, new_name: &str) {
             *node.name.borrow_mut() = new_name.to_string();
         }
 
@@ -475,7 +473,7 @@ examples:
         use std::fs;
         use std::path::Path;
 
-        fn load_config(path: &Path) -> Result<String, std::io::Error> {
+        fn LoadConfig(path: &Path) -> Result<String, std::io::Error> {
             fs::read_to_string(path)
         }
 
@@ -483,7 +481,7 @@ examples:
       why:
         Async is confined to a boundary that genuinely benefits from it.
       code: |
-        async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String, reqwest::Error> {
+        async fn FetchText(client: &reqwest::Client, url: &str) -> Result<String, reqwest::Error> {
             let response = client.get(url).send().await?;
             response.text().await
         }
@@ -492,12 +490,12 @@ examples:
       why:
         Async spreads through code that does not materially benefit from it.
       code: |
-        async fn parse_name(text: &str) -> String {
+        async fn ParseName(text: &str) -> String {
             text.trim().to_string()
         }
 
-        async fn build_message(text: &str) -> String {
-            let name = parse_name(text).await;
+        async fn BuildMessage(text: &str) -> String {
+            let name = ParseName(text).await;
             format!("hello {name}")
         }
 
@@ -511,7 +509,7 @@ examples:
             jobs: Arc<Mutex<Vec<String>>>,
         }
 
-        async fn add_job(state: Arc<AppState>, name: String) {
+        async fn AddJob(state: Arc<AppState>, name: String) {
             state.jobs.lock().unwrap().push(name);
         }
 
@@ -523,7 +521,7 @@ examples:
       why:
         The standard library already solves the problem safely and clearly.
       code: |
-        fn first_byte(data: &[u8]) -> Option<u8> {
+        fn FirstByte(data: &[u8]) -> Option<u8> {
             data.first().copied()
         }
 
@@ -531,7 +529,7 @@ examples:
       why:
         Unsafe is introduced without a real boundary need or documented invariant.
       code: |
-        fn first_byte(data: &[u8]) -> u8 {
+        fn FirstByte(data: &[u8]) -> u8 {
             unsafe { *data.get_unchecked(0) }
         }
 

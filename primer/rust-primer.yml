@@ -50,6 +50,8 @@ must_do:
   - Keep borrow scopes short.
   - Write code whose failure modes are visible in types and tests.
   - Use Result<T, E> and Option<T> idiomatically.
+  - Use PascalCase for project functions and methods and snake_case for locals and parameters.
+  - Preserve external API and trait-required spellings, as described in AGENTS.md.
   - Follow existing repository-local patterns before introducing a new one.
   - Keep mutation and side effects visible.
   - Keep performance-sensitive work localized.
@@ -95,7 +97,7 @@ restricted:
   - Interior mutability is restricted outside narrow justified cases.
   - Explicit lifetime-heavy public APIs are restricted unless the benefit is clear.
   - Trait object and dynamic dispatch use is restricted unless there is a real boundary need.
-  - Async is restricted unless the repository is already async-first in that area.
+  - Keep async at the API boundary that requires it.
   - Macro-heavy abstraction is restricted.
   - Complex generic bounds and advanced trait machinery are restricted.
   - Self-referential patterns are banned.
@@ -139,7 +141,8 @@ default_patterns:
     rules:
       - Prefer cheap or local clones when they remove lifetime coupling.
       - Do not contort APIs just to avoid cloning small values.
-      - Do not clone blindly in hot paths without evidence.
+      - Judge a clone by the data it copies and how often the call runs. Cloning a Vec clones its elements and may allocate.
+      - For a sizable copy in per-frame or per-tick code, measure the cost or reuse owned storage.
       - Clone to simplify design, not to mask confusion.
       - Prefer a small honest clone over a large dishonest abstraction.
     guidance:
@@ -231,7 +234,8 @@ default_patterns:
     headline:
       Async is not the default.
     rules:
-      - Use async only where the repository already needs it.
+      - Keep setup and completion at the API boundary that requires asynchronous work.
+      - For GPU work, identify who owns the resource through completion and where the result returns to that owner.
       - Do not introduce async to look modern.
       - Do not mix shared mutable state with async casually.
       - Keep async boundaries explicit and narrow.
@@ -325,7 +329,7 @@ review_checklist:
     - Is mutation local and visible?
     - Does this follow existing repository patterns?
     - Did this change introduce abstraction mainly to appease the compiler?
-    - Would a small clone simplify this design materially?
+    - What does this clone copy, and how often does it run?
     - Would a loop be clearer than this iterator chain?
     - Does this trait or generic abstraction solve a real present problem?
     - Is interior mutability or async being used because it is truly needed, or because the simpler ownership model was not chosen?
