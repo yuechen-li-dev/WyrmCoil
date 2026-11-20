@@ -1,0 +1,35 @@
+type ClipPosition = float4 @space(clip.position);
+
+stream Vertex {
+    [location(0)] PositionShade: float4;
+}
+
+stream Instance {
+    [location(1)] ColumnX: float4;
+    [location(2)] ColumnY: float4;
+    [location(3)] ColumnZ: float4;
+    [location(4)] ColumnW: float4;
+    [location(5)] Color: float4;
+}
+
+stream Surface {
+    Position: ClipPosition;
+    [location(0)] Color: float4;
+}
+
+shader Room {
+    stage vertex fn VS(input: Vertex, instance: Instance) -> Surface {
+        var local: float4 = input.PositionShade;
+        var position: float4 = instance.ColumnX * local.x + instance.ColumnY * local.y
+                             + instance.ColumnZ * local.z + instance.ColumnW;
+        return Surface {
+            Position: position;
+            Color: float4(instance.Color.x * local.w, instance.Color.y * local.w,
+                          instance.Color.z * local.w, instance.Color.w);
+        };
+    }
+
+    stage pixel fn PS(surface: Surface) -> float4 {
+        return surface.Color;
+    }
+}

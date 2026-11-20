@@ -290,6 +290,34 @@ fn zed_viewport_source_also_compiles_and_validates_with_dxc() {
         if entry.Stage == SdslvShaderStage::Vertex {
             assert!(disassembly.contains("BuiltIn VertexIndex"));
             assert!(disassembly.contains("BuiltIn Position"));
+            assert!(
+                disassembly
+                    .lines()
+                    .any(|line| line.ends_with(" Location 1"))
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires DXC and SPIRV-Tools"]
+fn zed_room_compiles_and_validates_with_dxc() {
+    let source = include_str!("../integrations/zed/wyrmcoil_view/src/room.sdslv");
+    let artifact = CompileCanonicalSourceToShaderArtifact("room.sdslv", source).unwrap();
+    assert_eq!(artifact.EntryPoints.len(), 2);
+    for entry in &artifact.EntryPoints {
+        let compiled =
+            CompileArtifactEntryWithDxc(&artifact, entry, &DxcOptions::default()).unwrap();
+        RunSpirvTool(
+            "spirv-val",
+            &["--target-env", "vulkan1.0", "-"],
+            &compiled.OutputBytes,
+        );
+        let ir = RunSpirvTool("spirv-dis", &["--no-header", "-"], &compiled.OutputBytes);
+        assert!(ir.contains(&format!("\"{}\"", entry.Name)));
+        if entry.Stage == SdslvShaderStage::Vertex {
+            assert!(ir.contains("BuiltIn Position"));
+            assert!(ir.lines().any(|line| line.ends_with(" Location 5")));
         }
     }
 }

@@ -97,9 +97,11 @@ impl HlslEmitter {
                     VdMirInterpolation::NoPerspective => "noperspective ",
                     VdMirInterpolation::Linear => "",
                 };
-                self.Lines.push(format!(
-                    "    [[vk::location({index})]] {qualifier}{ty} {name} : TEXCOORD{index};"
-                ));
+                self.Lines.push("#ifdef __spirv__".to_string());
+                self.Lines.push(format!("    [[vk::location({index})]]"));
+                self.Lines.push("#endif".to_string());
+                self.Lines
+                    .push(format!("    {qualifier}{ty} {name} : TEXCOORD{index};"));
                 return;
             }
             VdMirFieldRole::Target(index) => format!("SV_Target{index}"),

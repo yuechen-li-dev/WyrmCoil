@@ -79,7 +79,11 @@ fn canonical_graphics_uses_typed_interfaces_and_ordered_constructor_arguments() 
     assert_eq!(artifact.Hlsl, EmitVdMirHlsl(&mir).unwrap());
     assert_eq!(artifact.EntryPoints[0].Name, entries[0].0.Name);
     assert_eq!(artifact.EntryPoints[1].Name, entries[1].0.Name);
-    assert!(artifact.Hlsl.contains("[[vk::location(5)]]"));
+    assert!(
+        artifact
+            .Hlsl
+            .contains("#ifdef __spirv__\n    [[vk::location(5)]]\n#endif")
+    );
     assert!(
         artifact
             .Hlsl

@@ -585,6 +585,7 @@ pub fn DispatchActs(world: &mut World, board: &crate::DwBoard, acts: &[DwActRequ
 }
 
 impl crate::Engine::wyrmcoil::World for DemoWorld {
+    type Snapshot = RenderSnapshot;
     type Chunk = DemoWorldChunk;
     fn RefreshBoard(&self, board: &mut crate::DwBoard) {
         self.RefreshSelectionBoard(board);

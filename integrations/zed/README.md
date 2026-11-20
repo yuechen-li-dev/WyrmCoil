@@ -12,4 +12,4 @@ Use `-PrepareOnly` to fetch and patch Zed without running Cargo. The script stag
 
 With the default Cargo target directory, launch `vendor/zed/target/debug/zed.exe` on Windows or `vendor/zed/target/debug/zed` on Linux and macOS. The build also puts Zed's development CLI next to the editor. From an open workspace, open Zed's command palette and search for `wyrmcoil: open preview`. The command opens or focuses the **WyrmCoil Preview** tab.
 
-The revision and build settings are in the [M0 report](../../docs/zed-integration-m0.md). The Windows preview uses the SDSL-V player triangle by default. Set `WYRMCOIL_GPUI_MARKER` before launch to select the square marker for comparison. [M3a GPU integration report](../../docs/zed-integration-m3a.md)
+The revision and build settings are in the [M0 report](../../docs/zed-integration-m0.md). On Windows, `wyrmcoil: open preview` opens the 3D room. Use WASD to walk, the arrow keys to look, and Escape to pause. `wyrmcoil: open planar preview` opens the original M3b demo. `WYRMCOIL_GPUI_MARKER` selects its square markers for comparison. [M4 room integration report](../../docs/zed-integration-m4.md)

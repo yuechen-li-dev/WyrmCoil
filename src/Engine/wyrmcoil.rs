@@ -1,14 +1,14 @@
 #![allow(non_snake_case)]
 
-use crate::Engine::primitives::RenderSnapshot;
 use crate::{DwActRequest, DwFrameId, DwMessage, DwRuntimeChunk, DwSession, DwTickResult};
 
 pub trait World {
     type Chunk;
+    type Snapshot;
     fn RefreshBoard(&self, board: &mut crate::DwBoard);
     fn DispatchActs(&mut self, board: &crate::DwBoard, acts: &[DwActRequest]);
     fn Tick(&mut self);
-    fn ExtractRenderSnapshot(&self, frame: u64) -> RenderSnapshot;
+    fn ExtractRenderSnapshot(&self, frame: u64) -> Self::Snapshot;
     fn ExportChunk(&self) -> Self::Chunk;
     fn FromChunk(chunk: Self::Chunk) -> Self;
 }
@@ -107,7 +107,7 @@ impl<W: World, I: Copy> Engine<W, I> {
         self.World.Tick();
         self.Clock.SimulationTick += 1;
     }
-    pub fn RenderSnapshot(&mut self) -> RenderSnapshot {
+    pub fn RenderSnapshot(&mut self) -> W::Snapshot {
         self.Clock.RenderFrame += 1;
         self.World.ExtractRenderSnapshot(self.Clock.RenderFrame)
     }

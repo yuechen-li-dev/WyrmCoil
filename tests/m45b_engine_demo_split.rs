@@ -17,6 +17,7 @@ struct FakeChunk {
 }
 
 impl World for FakeWorld {
+    type Snapshot = RenderSnapshot;
     type Chunk = FakeChunk;
     fn RefreshBoard(&self, _board: &mut DwBoard) {}
     fn DispatchActs(&mut self, _board: &DwBoard, _acts: &[DwActRequest]) {}

@@ -1,9 +1,16 @@
 type ClipPosition = float4 @space(clip.position);
 stream VertexInvocation { [builtin(vertex_id)] Id: u32; }
-stream RasterVertex { Position: ClipPosition; }
+stream ViewportInstance {
+    [location(0)] Transform: float4;
+    [location(1)] Color: float4;
+}
+stream RasterVertex {
+    Position: ClipPosition;
+    [location(0)] Color: float4;
+}
 
-shader PreviewTriangle {
-    stage vertex fn VS(input: VertexInvocation) -> RasterVertex {
+shader PreviewInstances {
+    stage vertex fn VS(input: VertexInvocation, instance: ViewportInstance) -> RasterVertex {
         var x: f32 = -0.95;
         var y: f32 = -0.90;
         if input.Id == 1u {
@@ -13,10 +20,14 @@ shader PreviewTriangle {
             x = 0.0;
             y = 0.95;
         }
-        return RasterVertex { Position: float4(x, y, 0.0, 1.0); };
+        return RasterVertex {
+            Position: float4(instance.Transform.x + x * instance.Transform.z,
+                             instance.Transform.y + y * instance.Transform.w, 0.0, 1.0);
+            Color: instance.Color;
+        };
     }
 
-    stage pixel fn PS() -> float4 {
-        return float4(0.40, 0.83, 0.93, 1.0);
+    stage pixel fn PS(input: RasterVertex) -> float4 {
+        return input.Color;
     }
 }

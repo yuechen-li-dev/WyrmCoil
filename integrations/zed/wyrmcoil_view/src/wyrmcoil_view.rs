@@ -12,50 +12,134 @@ use gpui::{
 use workspace::{Item, MultiWorkspace, Workspace};
 use wyrmcoil::Demo::{DemoWorld, InputEvent};
 use wyrmcoil::Engine::shader::sdslv::{CompileCanonicalSourceToShaderArtifact, SdslvShaderStage};
-use wyrmcoil::Engine::{Engine, EntityId, RenderSnapshot, Vec2};
+use wyrmcoil::Engine::{Engine, EntityId, RenderItem, RenderSnapshot, Vec2};
+
+mod room;
+use room::RoomPreview;
 
 actions!(
     wyrmcoil,
     [
-        /// Open the WyrmCoil Preview tab.
-        OpenPreview
+        /// Open the 3D WyrmCoil Preview tab.
+        OpenPreview,
+        /// Open the original 2D WyrmCoil Preview tab.
+        OpenPlanarPreview
     ]
 );
 
 pub fn Init(cx: &mut App) {
     cx.observe_new(|workspace: &mut Workspace, _, _| {
         workspace.register_action(|workspace, _: &OpenPreview, window, cx| {
-            if let Some(preview) = workspace.item_of_type::<Preview>(cx) {
-                workspace.activate_item(&preview, true, true, window, cx);
-                return;
-            }
-
-            let preview = cx.new(Preview::New);
-            workspace.add_item_to_active_pane(Box::new(preview), None, true, window, cx);
+            Open(workspace, Mode::Room, window, cx);
+        });
+        workspace.register_action(|workspace, _: &OpenPlanarPreview, window, cx| {
+            Open(workspace, Mode::Planar, window, cx);
         });
     })
     .detach();
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Planar,
+    Room,
+}
+
+fn Open(workspace: &mut Workspace, mode: Mode, window: &mut Window, cx: &mut Context<Workspace>) {
+    let existing = workspace
+        .items_of_type::<Preview>(cx)
+        .find(|item| item.read(cx).scene.Mode() == mode);
+    if let Some(preview) = existing {
+        workspace.activate_item(&preview, true, true, window, cx);
+    } else {
+        let preview = cx.new(|cx| Preview::New(mode, cx));
+        workspace.add_item_to_active_pane(Box::new(preview), None, true, window, cx);
+    }
+}
+
+enum Scene {
+    Planar {
+        session: PreviewSession,
+        camera: Vec2,
+        shader: Option<Arc<gpui::GpuViewportShader>>,
+    },
+    Room(RoomPreview),
+}
+
+impl Scene {
+    fn Mode(&self) -> Mode {
+        match self {
+            Self::Planar { .. } => Mode::Planar,
+            Self::Room(_) => Mode::Room,
+        }
+    }
+
+    fn Input(&mut self) -> &mut MovementInput {
+        match self {
+            Self::Planar { session, .. } => &mut session.input,
+            Self::Room(room) => &mut room.input,
+        }
+    }
+
+    fn Suspend(&mut self) {
+        match self {
+            Self::Planar { session, .. } => session.Suspend(),
+            Self::Room(room) => room.Suspend(),
+        }
+    }
+
+    fn Advance(&mut self, now: Instant) -> bool {
+        match self {
+            Self::Planar {
+                session, camera, ..
+            } => {
+                if !session.Advance(now) {
+                    return false;
+                }
+                let player = session.engine.Player;
+                if let Some(item) = session
+                    .snapshot
+                    .Items
+                    .iter()
+                    .find(|item| item.Entity == player)
+                {
+                    *camera = TrackPlayer(*camera, item.Position);
+                }
+                true
+            }
+            Self::Room(room) => room.Advance(now),
+        }
+    }
+}
+
 struct Preview {
     focus: FocusHandle,
     title: SharedString,
-    session: PreviewSession,
-    camera: Vec2,
-    gpu_shader: Option<Arc<gpui::GpuViewportShader>>,
+    scene: Scene,
     paused: bool,
     pending_frame: Option<WindowId>,
     window_observers: Option<[Subscription; 4]>,
 }
 
 impl Preview {
-    fn New(cx: &mut Context<Self>) -> Self {
+    fn New(mode: Mode, cx: &mut Context<Self>) -> Self {
+        let scene = match mode {
+            Mode::Planar => Scene::Planar {
+                session: PreviewSession::New(),
+                camera: Vec2::Zero(),
+                shader: NewViewportShader(),
+            },
+            Mode::Room => Scene::Room(RoomPreview::New()),
+        };
+        let suffix = if mode == Mode::Planar {
+            " Preview (2D)"
+        } else {
+            " Preview"
+        };
         Self {
             focus: cx.focus_handle(),
-            title: format!("{} Preview", wyrmcoil::ProjectName()).into(),
-            session: PreviewSession::New(),
-            camera: Vec2::Zero(),
-            gpu_shader: NewViewportShader(),
+            title: format!("{}{suffix}", wyrmcoil::ProjectName()).into(),
+            scene,
             paused: false,
             pending_frame: None,
             window_observers: None,
@@ -92,24 +176,14 @@ impl Preview {
                     .is_some_and(|item| item.item_id() == cx.entity_id())
             });
         if self.paused || !selected || !window.is_window_active() || !window.is_visible() {
-            self.session.Suspend();
+            self.scene.Suspend();
             return;
         }
 
         if !self.TakesInput(window) || window.modifiers().modified() {
-            self.session.input.Cancel();
+            self.scene.Input().Cancel();
         }
-        if self.session.Advance(Instant::now()) {
-            let player = self.session.engine.Player;
-            if let Some(item) = self
-                .session
-                .snapshot
-                .Items
-                .iter()
-                .find(|item| item.Entity == player)
-            {
-                self.camera = TrackPlayer(self.camera, item.Position);
-            }
+        if self.scene.Advance(Instant::now()) {
             cx.notify();
         } else {
             // Keep the clock live above 60 Hz without repainting an unchanged snapshot.
@@ -118,7 +192,7 @@ impl Preview {
     }
 
     fn ResetTiming(&mut self, cx: &mut Context<Self>) {
-        self.session.Suspend();
+        self.scene.Suspend();
         cx.notify();
     }
 
@@ -143,22 +217,25 @@ impl Preview {
         if event.keystroke.key == "escape" && !event.is_held {
             self.Pause(window, cx);
             cx.stop_propagation();
-        } else if self.session.input.KeyDown(&event.keystroke, event.is_held) {
+        } else if self.scene.Input().KeyDown(&event.keystroke, event.is_held) {
             cx.stop_propagation();
         }
     }
 
     fn KeyUp(&mut self, event: &KeyUpEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.TakesInput(window) && self.session.input.KeyUp(&event.keystroke) {
+        if self.TakesInput(window) && self.scene.Input().KeyUp(&event.keystroke) {
             cx.stop_propagation();
         }
     }
 }
 
 fn BuildViewportShader() -> Result<gpui::GpuViewportShader, String> {
-    let artifact =
-        CompileCanonicalSourceToShaderArtifact("viewport.sdslv", include_str!("viewport.sdslv"))
-            .map_err(|errors| format!("{errors:?}"))?;
+    BuildShader("viewport.sdslv", include_str!("viewport.sdslv"))
+}
+
+fn BuildShader(name: &str, source: &str) -> Result<gpui::GpuViewportShader, String> {
+    let artifact = CompileCanonicalSourceToShaderArtifact(name, source)
+        .map_err(|errors| format!("{name}: {errors:?}"))?;
     let [vertex, pixel] = artifact.EntryPoints.as_slice() else {
         return Err("expected exactly two viewport shader entries".to_string());
     };
@@ -169,6 +246,7 @@ fn BuildViewportShader() -> Result<gpui::GpuViewportShader, String> {
         source: artifact.Hlsl,
         vertex_entry: vertex.Name.clone(),
         pixel_entry: pixel.Name.clone(),
+        mesh: None,
     })
 }
 
@@ -227,8 +305,7 @@ impl MovementInput {
     }
 
     fn Latch(&mut self) -> Option<InputEvent> {
-        // A direction pressed and released between ticks still gets one step.
-        let active = self.held | std::mem::take(&mut self.pressed);
+        let active = self.TakeActive();
         let up = i32::from(active & 0b0000_0011 != 0);
         let down = i32::from(active & 0b0000_1100 != 0);
         let left = i32::from(active & 0b0011_0000 != 0);
@@ -242,6 +319,11 @@ impl MovementInput {
             X: movement.0,
             Y: movement.1,
         })
+    }
+
+    fn TakeActive(&mut self) -> u8 {
+        // A direction pressed and released between ticks still gets one step.
+        self.held | std::mem::take(&mut self.pressed)
     }
 
     fn Cancel(&mut self) {
@@ -332,38 +414,23 @@ impl Render for Preview {
             self.RequestFrame(window, cx);
         }
 
-        let clock = self.session.engine.Clock();
-        let player = self.session.engine.Player;
-        let guard = self.session.engine.Guard;
-        let snapshot = self.session.snapshot.clone();
-        let camera = self.camera;
-        let gpu_shader = self.gpu_shader.clone();
-        let controls = if self.TakesInput(window) {
-            "Game focused · WASD / arrows · Esc pauses"
-        } else if self.paused {
+        let controls = if self.paused {
             "Paused · click to resume"
+        } else if !self.TakesInput(window) {
+            "Click to play"
+        } else if self.scene.Mode() == Mode::Room {
+            "WASD walk · arrows look · Esc pauses"
         } else {
-            "Click to play · WASD / arrows"
+            "Game focused · WASD / arrows · Esc pauses"
         };
-        let mut status = div()
-            .flex()
-            .flex_wrap()
-            .gap_x_4()
-            .px_3()
-            .py_2()
-            .text_sm()
-            .child(controls)
-            .child(format!(
-                "Control {}   Simulation {}   Snapshot {}",
-                clock.ControlTick, clock.SimulationTick, snapshot.Frame
-            ));
-        for item in &snapshot.Items {
-            let (name, color) = Appearance(item.Entity, player, guard);
-            status = status.child(div().text_color(rgb(color)).child(format!(
-                "{} #{} · sprite {} · ({:.1}, {:.1})",
-                name, item.Entity.0, item.SpriteId, item.Position.X, item.Position.Y
-            )));
-        }
+        let (status, viewport) = match &self.scene {
+            Scene::Planar {
+                session,
+                camera,
+                shader,
+            } => DrawPlanar(session, *camera, shader.clone(), controls),
+            Scene::Room(room) => room.Draw(controls),
+        };
 
         div()
             .key_context("WyrmCoilPreview")
@@ -381,7 +448,7 @@ impl Render for Preview {
             .on_modifiers_changed(cx.listener(
                 |preview, event: &gpui::ModifiersChangedEvent, _, _| {
                     if event.modifiers.modified() {
-                        preview.session.input.Cancel();
+                        preview.scene.Input().Cancel();
                     }
                 },
             ))
@@ -397,41 +464,69 @@ impl Render for Preview {
             .bg(rgb(0x151b26))
             .text_color(rgb(0xe7edf6))
             .child(status)
-            .child(
-                canvas(
-                    |_, _, _| (),
-                    move |bounds, (), window, _| {
-                        if bounds.is_empty() {
-                            return;
-                        }
-                        let viewport = Viewport::New(bounds, camera);
-                        viewport.PaintGrid(bounds, window);
-                        for item in &snapshot.Items {
-                            let (_, color) = Appearance(item.Entity, player, guard);
-                            let projected = viewport.Project(item.Position);
-                            let center = viewport.ClipMarker(bounds, projected);
-                            let color = if item.Entity == guard && center != projected {
-                                0xb47742
-                            } else {
-                                color
-                            };
-                            let side = viewport.marker_size;
-                            let origin = point(center.x - side * 0.5, center.y - side * 0.5);
-                            let marker = Bounds::new(origin, size(side, side));
-                            if item.Entity == player
-                                && let Some(shader) = &gpu_shader
-                                && window.paint_gpu_viewport(marker, shader)
-                            {
-                                continue;
-                            }
-                            window.paint_quad(fill(marker, rgb(color)));
-                        }
-                    },
-                )
-                .flex_1()
-                .w_full(),
-            )
+            .child(viewport.flex_1().w_full())
     }
+}
+
+fn Status(controls: &'static str, clock: wyrmcoil::Engine::EngineClock, frame: u64) -> gpui::Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .gap_x_4()
+        .px_3()
+        .py_2()
+        .text_sm()
+        .child(controls)
+        .child(format!(
+            "Control {}   Simulation {}   Snapshot {}",
+            clock.ControlTick, clock.SimulationTick, frame
+        ))
+}
+
+fn DrawPlanar(
+    session: &PreviewSession,
+    camera: Vec2,
+    gpu_shader: Option<Arc<gpui::GpuViewportShader>>,
+    controls: &'static str,
+) -> (gpui::Div, gpui::Canvas<()>) {
+    let player = session.engine.Player;
+    let guard = session.engine.Guard;
+    let mut snapshot = session.snapshot.clone();
+    let mut status = Status(controls, session.engine.Clock(), snapshot.Frame);
+    for item in &snapshot.Items {
+        let (name, color) = Appearance(item.Entity, player, guard);
+        status = status.child(div().text_color(rgb(color)).child(format!(
+            "{} #{} · sprite {} · ({:.1}, {:.1})",
+            name, item.Entity.0, item.SpriteId, item.Position.X, item.Position.Y
+        )));
+    }
+    let viewport = canvas(
+        |_, _, _| (),
+        move |bounds, (), window, _| {
+            if bounds.is_empty() {
+                return;
+            }
+            let viewport = Viewport::New(bounds, camera);
+            viewport.PaintGrid(bounds, window);
+            if let Some(shader) = &gpu_shader {
+                let instances = viewport.Instances(bounds, &mut snapshot.Items, player, guard);
+                if window.paint_gpu_viewport(
+                    bounds,
+                    shader,
+                    gpui::GpuViewportDraw::Triangles(instances),
+                ) {
+                    return;
+                }
+            }
+            for item in &snapshot.Items {
+                let (center, color) = viewport.Marker(bounds, item, player, guard);
+                let side = viewport.marker_size;
+                let origin = point(center.x - side * 0.5, center.y - side * 0.5);
+                window.paint_quad(fill(Bounds::new(origin, size(side, side)), rgb(color)));
+            }
+        },
+    );
+    (status, viewport)
 }
 
 fn Appearance(entity: EntityId, player: EntityId, guard: EntityId) -> (&'static str, u32) {
@@ -489,6 +584,60 @@ impl Viewport {
         point(self.origin.x + x / ratio, self.origin.y + y / ratio)
     }
 
+    fn Marker(
+        &self,
+        bounds: Bounds<Pixels>,
+        item: &RenderItem,
+        player: EntityId,
+        guard: EntityId,
+    ) -> (Point<Pixels>, u32) {
+        let (_, color) = Appearance(item.Entity, player, guard);
+        let projected = self.Project(item.Position);
+        let center = self.ClipMarker(bounds, projected);
+        if item.Entity == guard && center != projected {
+            return (center, 0xb47742);
+        }
+        (center, color)
+    }
+
+    fn Instances(
+        &self,
+        bounds: Bounds<Pixels>,
+        items: &mut [RenderItem],
+        player: EntityId,
+        guard: EntityId,
+    ) -> gpui::GpuViewportInstances {
+        let mut instances = gpui::GpuViewportInstances::new();
+        if bounds.is_empty() {
+            return instances;
+        }
+        // Higher entity IDs paint last. Sprite IDs break ties within an entity.
+        items.sort_unstable_by_key(|item| (item.Entity.0, item.SpriteId));
+        let width = f32::from(bounds.size.width);
+        let height = f32::from(bounds.size.height);
+        let side = f32::from(self.marker_size);
+        for item in items {
+            let (center, color) = self.Marker(bounds, item, player, guard);
+            let x = f32::from(center.x - bounds.left());
+            let y = f32::from(center.y - bounds.top());
+            instances.push(gpui::GpuViewportInstance {
+                transform: [
+                    2.0 * x / width - 1.0,
+                    1.0 - 2.0 * y / height,
+                    side / width,
+                    side / height,
+                ],
+                color: [
+                    ((color >> 16) & 255) as f32 / 255.0,
+                    ((color >> 8) & 255) as f32 / 255.0,
+                    (color & 255) as f32 / 255.0,
+                    1.0,
+                ],
+            });
+        }
+        instances
+    }
+
     fn PaintGrid(&self, bounds: Bounds<Pixels>, window: &mut Window) {
         let spacing = self.scale * 12.0;
         if spacing < px(8.0) {
@@ -531,32 +680,34 @@ impl Item for Preview {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.session.Suspend();
+        self.scene.Suspend();
         self.window_observers = Some([
             cx.observe_window_activation(window, |preview, _, cx| preview.ResetTiming(cx)),
             cx.observe_window_visibility(window, |preview, _, _, cx| preview.ResetTiming(cx)),
             cx.on_focus(&self.focus, window, |_, _, cx| cx.notify()),
             cx.on_blur(&self.focus, window, |preview, _, cx| {
-                preview.session.input.Cancel();
+                preview.scene.Input().Cancel();
                 cx.notify();
             }),
         ]);
     }
 
     fn deactivated(&mut self, _: &mut Window, _: &mut Context<Self>) {
-        self.session.Suspend();
+        self.scene.Suspend();
     }
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn native_viewport_shader_uses_vertex_id_and_two_real_entries() {
+    fn native_viewport_shader_uses_vertex_id_and_instanced_transforms() {
         let shader = super::BuildViewportShader().unwrap();
-        assert_eq!(shader.vertex_entry, "PreviewTriangle_VS");
-        assert_eq!(shader.pixel_entry, "PreviewTriangle_PS");
+        assert_eq!(shader.vertex_entry, "PreviewInstances_VS");
+        assert_eq!(shader.pixel_entry, "PreviewInstances_PS");
         assert!(shader.source.contains("SV_VertexID"));
         assert!(shader.source.contains("SV_Target"));
+        assert!(shader.source.contains("Transform : TEXCOORD0"));
+        assert!(shader.source.contains("Color : TEXCOORD1"));
     }
     use super::*;
 
@@ -923,6 +1074,72 @@ mod tests {
         let projected = viewport.ClipMarker(narrow, distant);
         assert!(narrow.contains(&projected));
         assert!(projected.x > narrow.center().x && projected.y < narrow.center().y);
+    }
+
+    #[test]
+    fn gpu_instances_follow_the_real_snapshot_in_entity_order() {
+        let mut session = PreviewSession::New();
+        let bounds = Bounds::new(point(px(40.0), px(60.0)), size(px(320.0), px(240.0)));
+        let player = session.engine.Player;
+        let guard = session.engine.Guard;
+        let viewport = Viewport::New(bounds, Vec2 { X: 8.0, Y: -4.0 });
+        let mut snapshot = session.engine.RenderSnapshot();
+        snapshot.Items.reverse();
+        let initial = viewport.Instances(bounds, &mut snapshot.Items, player, guard);
+        assert_eq!(snapshot.Items[0].Entity, player);
+        assert_eq!(snapshot.Items[1].Entity, guard);
+        assert_eq!(initial.len(), 2);
+        assert!(!initial.spilled());
+        assert_eq!(&initial[0].transform[2..], &[16.0 / 320.0, 16.0 / 240.0]);
+        assert!((initial[0].transform[0] + 0.15).abs() < 1e-6);
+        assert!((initial[0].transform[1] - 0.10).abs() < 1e-6);
+        assert_ne!(initial[0].color, initial[1].color);
+
+        let mut now = Instant::now();
+        session.Advance(now);
+        for _ in 0..20 {
+            Step(&mut session, &mut now);
+        }
+        let advanced = viewport.Instances(bounds, &mut session.snapshot.Items, player, guard);
+        assert_eq!(advanced[0], initial[0]);
+        assert!(advanced[1].transform[0] > initial[1].transform[0]);
+        assert!(advanced[1].transform[1] > initial[1].transform[1]);
+    }
+
+    #[test]
+    fn gpu_instances_respect_visibility_empty_bounds_and_guard_edge() {
+        let mut session = PreviewSession::New();
+        let player = session.engine.Player;
+        let guard = session.engine.Guard;
+        let bounds = Bounds::new(point(px(40.0), px(60.0)), size(px(160.0), px(240.0)));
+        let viewport = Viewport::New(bounds, Vec2::Zero());
+        session.engine.World.Transforms.Alive[player.0] = false;
+        session.engine.World.Transforms.Positions[guard.0] = Vec2 {
+            X: 1000.0,
+            Y: 1000.0,
+        };
+        let mut snapshot = session.engine.RenderSnapshot();
+        let single = viewport.Instances(bounds, &mut snapshot.Items, player, guard);
+        assert_eq!(single.len(), 1);
+        assert_eq!(snapshot.Items[0].Entity, guard);
+        let [x, y, half_x, half_y] = single[0].transform;
+        assert!(x > 0.0 && x + half_x <= 1.0);
+        assert!(y > 0.0 && y + half_y <= 1.0);
+        assert_eq!(single[0].color[0], 180.0 / 255.0);
+        let zero = Bounds::new(bounds.origin, size(px(0.0), bounds.size.height));
+        assert!(
+            viewport
+                .Instances(zero, &mut snapshot.Items, player, guard)
+                .is_empty()
+        );
+
+        session.engine.World.Renderables.Visible[guard.0] = false;
+        let mut snapshot = session.engine.RenderSnapshot();
+        assert!(
+            viewport
+                .Instances(bounds, &mut snapshot.Items, player, guard)
+                .is_empty()
+        );
     }
 
     #[test]

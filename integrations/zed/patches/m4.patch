@@ -1,0 +1,1010 @@
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 86520ab049857499e9be13d2b18e715d4ac83c24..536707cbc7aae51e65cd973995ec9afea4618230 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -1368,6 +1368,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
+     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
+     fn draw(&self, scene: &Scene);
++
++    /// Reports support for the instanced GPU viewport surface.
++    fn supports_gpu_viewport(&self) -> bool {
++        false
++    }
+     fn schedule_frame(&self) {}
+     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
+     fn is_subpixel_rendering_supported(&self) -> bool;
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index b2104e5402a50562c3528ba735f8f72847f96e2d..21410b2f8fb352d849a4d4424287fa6287f2b8e3 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -1049,6 +1049,79 @@ pub struct PaintSurface {
+     pub content_mask: ContentMask<ScaledPixels>,
+     #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub image_buffer: objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>,
++    #[cfg(target_os = "windows")]
++    pub gpu_viewport: std::sync::Arc<GpuViewportShader>,
++    #[cfg(target_os = "windows")]
++    pub gpu_viewport_draw: GpuViewportDraw,
++}
++
++/// A viewport pass with an ordered stream of triangle instances. The vertex entry
++/// reads the transform and color at TEXCOORD0 and TEXCOORD1, and generates the
++/// shared geometry from the vertex index. The pixel entry produces opaque color.
++/// The platform renderer owns compilation, the target, and presentation.
++#[derive(Debug)]
++pub struct GpuViewportShader {
++    /// Platform shader source. The Windows renderer consumes shader-model-4.1 HLSL.
++    pub source: String,
++    /// Vertex shader entry point.
++    pub vertex_entry: String,
++    /// Pixel shader entry point.
++    pub pixel_entry: String,
++    /// Static indexed geometry for the depth-tested pass, when supplied.
++    pub mesh: Option<GpuViewportMesh>,
++}
++
++/// One GPU viewport instance, in input-layout order.
++#[derive(Clone, Copy, Debug, PartialEq)]
++#[repr(C)]
++pub struct GpuViewportInstance {
++    /// Clip-space center (x, y) followed by half-size (x, y).
++    pub transform: [f32; 4],
++    /// RGBA vertex color, with opaque alpha.
++    pub color: [f32; 4],
++}
++
++/// Instances in painter's order. Two objects fit inline.
++pub type GpuViewportInstances = SmallVec<[GpuViewportInstance; 2]>;
++
++/// One indexed mesh, with xyz and face brightness per vertex.
++#[derive(Debug)]
++pub struct GpuViewportMesh {
++    /// Immutable vertex data in input-layout order.
++    pub vertices: Vec<[f32; 4]>,
++    /// Triangle indices.
++    pub indices: Vec<u16>,
++    /// Index prefix to draw for the first instance. Zero draws the full mesh for all.
++    pub first_instance_indices: u32,
++}
++
++/// One depth-tested mesh instance, in input-layout order.
++#[derive(Clone, Copy, Debug, PartialEq)]
++#[repr(C)]
++pub struct GpuViewportMeshInstance {
++    /// Four columns of the model-view-projection transform.
++    pub clip_from_model: [[f32; 4]; 4],
++    /// Opaque RGBA color.
++    pub color: [f32; 4],
++}
++
++/// Owned viewport draw data. Mesh instances are shared with the cached surface.
++#[derive(Clone, Debug, PartialEq)]
++pub enum GpuViewportDraw {
++    /// Painter-ordered screen-space marker instances.
++    Triangles(GpuViewportInstances),
++    /// Depth-tested 3D instances of the viewport shader's indexed mesh.
++    Mesh(std::sync::Arc<[GpuViewportMeshInstance]>),
++}
++
++impl GpuViewportDraw {
++    /// Whether the viewport has anything to draw.
++    pub fn is_empty(&self) -> bool {
++        match self {
++            Self::Triangles(instances) => instances.is_empty(),
++            Self::Mesh(instances) => instances.is_empty(),
++        }
++    }
+ }
+ 
+ impl From<PaintSurface> for Primitive {
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 5b8f5deb86b5350c372c56cda9372fc403093c68..11202de19c28e5ca74d49d2bd88760887fcdd0e0 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5621,6 +5621,44 @@ impl Window {
+         });
+     }
+ 
++    /// Returns the snapped device-pixel size used by viewport targets.
++    pub fn gpu_viewport_size(&self, bounds: Bounds<Pixels>) -> Size<ScaledPixels> {
++        self.snap_bounds(bounds).size
++    }
++
++    /// Paint a GPU viewport surface at the current scene order, if supported.
++    pub fn paint_gpu_viewport(
++        &mut self,
++        bounds: Bounds<Pixels>,
++        shader: &Arc<crate::GpuViewportShader>,
++        draw: crate::GpuViewportDraw,
++    ) -> bool {
++        if !self.platform_window.supports_gpu_viewport() {
++            return false;
++        }
++        self.invalidator.debug_assert_paint();
++        #[cfg(target_os = "windows")]
++        {
++            let bounds = self.snap_bounds(bounds);
++            let content_mask = self.snapped_content_mask();
++            if !draw.is_empty() && !bounds.intersect(&content_mask.bounds).is_empty() {
++                self.next_frame.scene.insert_primitive(crate::PaintSurface {
++                    order: 0,
++                    bounds,
++                    content_mask,
++                    gpu_viewport: shader.clone(),
++                    gpu_viewport_draw: draw,
++                });
++            }
++            true
++        }
++        #[cfg(not(target_os = "windows"))]
++        {
++            let _ = (bounds, shader, draw);
++            false
++        }
++    }
++
+     /// Removes an image from the sprite atlas.
+     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
+         for frame_index in 0..data.frame_count() {
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+index 8573fe4030997708a98ca8f1755bff434aef997f..f87c98b0ea9b11255869416938f8e2636e290cb9 100644
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -42,6 +42,8 @@ pub(crate) struct DirectXRenderer {
+     resources: Option<DirectXResources>,
+     globals: DirectXGlobalElements,
+     pipelines: DirectXRenderPipelines,
++    gpu_viewports: Vec<Option<GpuViewportPass>>,
++    viewport_sprites: Vec<PolychromeSprite>,
+     direct_composition: Option<DirectComposition>,
+     font_info: &'static FontInfo,
+ 
+@@ -79,6 +81,721 @@ struct DirectXResources {
+     viewport: D3D11_VIEWPORT,
+ }
+ 
++struct GpuViewportPass {
++    shader: Arc<GpuViewportShader>,
++    vertex: ID3D11VertexShader,
++    pixel: ID3D11PixelShader,
++    layout: ID3D11InputLayout,
++    mesh: Option<GpuViewportMeshState>,
++    instance_buffer: Option<ID3D11Buffer>,
++    instance_capacity: usize,
++    target: Option<GpuViewportTarget>,
++}
++
++struct GpuViewportTarget {
++    size: Size<DevicePixels>,
++    render_view: Option<ID3D11RenderTargetView>,
++    texture_view: Option<ID3D11ShaderResourceView>,
++    depth: Option<ID3D11DepthStencilView>,
++    draw: Option<GpuViewportDraw>,
++}
++
++struct GpuViewportMeshState {
++    vertices: ID3D11Buffer,
++    indices: ID3D11Buffer,
++    index_count: u32,
++    first_instance_indices: u32,
++    depth_state: ID3D11DepthStencilState,
++    rasterizer: ID3D11RasterizerState,
++}
++
++fn viewport_size(surface: &PaintSurface) -> Size<DevicePixels> {
++    size(
++        DevicePixels(surface.bounds.size.width.0 as i32),
++        DevicePixels(surface.bounds.size.height.0 as i32),
++    )
++}
++
++fn surface_sprite(surface: &PaintSurface) -> PolychromeSprite {
++    PolychromeSprite {
++        order: surface.order,
++        pad: 0,
++        tile: AtlasTile {
++            // The compositor receives the target's view directly for this batch.
++            texture_id: AtlasTextureId {
++                index: 0,
++                kind: AtlasTextureKind::Polychrome,
++            },
++            tile_id: TileId(0),
++            padding: 0,
++            bounds: Bounds::new(Point::default(), viewport_size(surface)),
++        },
++        grayscale: false.into(),
++        opacity: 1.0,
++        bounds: surface.bounds,
++        content_mask: surface.content_mask,
++        corner_radii: Corners::default(),
++    }
++}
++
++impl GpuViewportPass {
++    fn prepare(
++        slot: &mut Option<Self>,
++        surface: &PaintSurface,
++        devices: &DirectXRendererDevices,
++    ) -> Result<()> {
++        let size = viewport_size(surface);
++        let draw = &surface.gpu_viewport_draw;
++        if size.width.0 <= 0 || size.height.0 <= 0 || draw.is_empty() {
++            *slot = None;
++            return Ok(());
++        }
++        if !slot
++            .as_ref()
++            .is_some_and(|pass| Arc::ptr_eq(&pass.shader, &surface.gpu_viewport))
++        {
++            *slot = None;
++            let start = std::time::Instant::now();
++            let shader = surface.gpu_viewport.clone();
++            let vertex = compile_viewport_shader(
++                &shader.source,
++                &shader.vertex_entry,
++                windows::core::s!("vs_4_1"),
++            )?;
++            let pixel = compile_viewport_shader(
++                &shader.source,
++                &shader.pixel_entry,
++                windows::core::s!("ps_4_1"),
++            )?;
++            let mesh = shader
++                .mesh
++                .as_ref()
++                .map(|mesh| GpuViewportMeshState::new(&devices.device, mesh))
++                .transpose()?;
++            let layout = create_viewport_input_layout(&devices.device, &vertex, mesh.is_some())?;
++            let vertex = create_vertex_shader(&devices.device, &vertex)?;
++            let pixel = create_fragment_shader(&devices.device, &pixel)?;
++            *slot = Some(Self {
++                shader,
++                vertex,
++                pixel,
++                layout,
++                mesh,
++                instance_buffer: None,
++                instance_capacity: 0,
++                target: None,
++            });
++            log::info!(
++                "GPU viewport: SM4.1 pipeline ready in {:.2?}",
++                start.elapsed()
++            );
++        }
++        let pass = slot.as_mut().context("viewport pipeline missing")?;
++        anyhow::ensure!(
++            pass.mesh.is_some() == matches!(draw, GpuViewportDraw::Mesh(_)),
++            "viewport draw does not match shader geometry"
++        );
++        if !pass
++            .target
++            .as_ref()
++            .is_some_and(|target| target.size == size)
++        {
++            pass.target = None;
++            pass.target = Some(GpuViewportTarget::new(devices, size, pass.mesh.is_some())?);
++        }
++        if pass.target.as_ref().and_then(|target| target.draw.as_ref()) != Some(draw) {
++            match draw {
++                GpuViewportDraw::Triangles(instances) => {
++                    pass.render(devices, instances.as_slice())?
++                }
++                GpuViewportDraw::Mesh(instances) => pass.render(devices, instances)?,
++            }
++            pass.target.as_mut().unwrap().draw = Some(draw.clone());
++        }
++        Ok(())
++    }
++
++    fn render<T>(&mut self, devices: &DirectXRendererDevices, instances: &[T]) -> Result<()> {
++        let target = self.target.as_mut().context("viewport target missing")?;
++        target.draw = None;
++        let stride = size_of::<T>() as u32;
++        if self.instance_capacity < instances.len() {
++            let capacity = instances
++                .len()
++                .max(2)
++                .checked_next_power_of_two()
++                .context("viewport instance capacity overflow")?;
++            anyhow::ensure!(
++                capacity <= MAX_INSTANCE_BUFFER_SIZE / stride as usize,
++                "viewport instance buffer capacity too large: {capacity}"
++            );
++            let desc = D3D11_BUFFER_DESC {
++                ByteWidth: capacity as u32 * stride,
++                Usage: D3D11_USAGE_DYNAMIC,
++                BindFlags: D3D11_BIND_VERTEX_BUFFER.0 as u32,
++                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
++                ..Default::default()
++            };
++            let mut buffer = None;
++            // CreateBuffer initializes the one output and copies the descriptor.
++            unsafe { devices.device.CreateBuffer(&desc, None, Some(&mut buffer)) }?;
++            self.instance_buffer = Some(buffer.context("viewport instance buffer missing")?);
++            self.instance_capacity = capacity;
++            log::debug!("GPU viewport: allocated instance buffer ({capacity} instances)");
++        }
++        let context = &devices.device_context;
++        let buffer = self
++            .instance_buffer
++            .as_ref()
++            .context("viewport instance buffer missing")?;
++        update_buffer(context, buffer, instances).context("upload viewport instances")?;
++        let render_view = target
++            .render_view
++            .as_ref()
++            .context("viewport render view missing")?;
++        let offset = 0;
++        let count = instances.len() as u32;
++        let mut draw_calls = 1;
++        // Layout, stride, and indices are validated before binding. All handles
++        // and pointer arguments stay live until the corresponding call returns.
++        unsafe {
++            context.ClearRenderTargetView(render_view, &[0.0; 4]);
++            if let Some(depth) = &target.depth {
++                context.ClearDepthStencilView(depth, D3D11_CLEAR_DEPTH.0, 0.0, 0);
++            }
++            context.OMSetRenderTargets(
++                Some(slice::from_ref(&target.render_view)),
++                target.depth.as_ref(),
++            );
++            context.OMSetBlendState(None, None, u32::MAX);
++            context.OMSetDepthStencilState(self.mesh.as_ref().map(|mesh| &mesh.depth_state), 0);
++            context.RSSetViewports(Some(&[D3D11_VIEWPORT {
++                Width: target.size.width.0 as f32,
++                Height: target.size.height.0 as f32,
++                MaxDepth: 1.0,
++                ..Default::default()
++            }]));
++            context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
++            context.IASetInputLayout(&self.layout);
++            context.VSSetShader(&self.vertex, None);
++            context.PSSetShader(&self.pixel, None);
++            if let Some(mesh) = &self.mesh {
++                let previous_rasterizer = context.RSGetState().ok();
++                context.RSSetState(&mesh.rasterizer);
++                let streams = [Some(mesh.vertices.clone()), self.instance_buffer.clone()];
++                let strides = [size_of::<[f32; 4]>() as u32, stride];
++                let offsets = [0, 0];
++                context.IASetVertexBuffers(
++                    0,
++                    2,
++                    Some(streams.as_ptr()),
++                    Some(strides.as_ptr()),
++                    Some(offsets.as_ptr()),
++                );
++                context.IASetIndexBuffer(&mesh.indices, DXGI_FORMAT_R16_UINT, 0);
++                let first = u32::from(mesh.first_instance_indices > 0);
++                if first == 1 {
++                    context.DrawIndexedInstanced(mesh.first_instance_indices, 1, 0, 0, 0);
++                }
++                if count > first {
++                    context.DrawIndexedInstanced(mesh.index_count, count - first, 0, 0, first);
++                    draw_calls += first;
++                }
++                context.IASetIndexBuffer(None, DXGI_FORMAT_R16_UINT, 0);
++                context.IASetVertexBuffers(
++                    0,
++                    2,
++                    Some([None, None].as_ptr()),
++                    Some(strides.as_ptr()),
++                    Some(offsets.as_ptr()),
++                );
++                context.RSSetState(previous_rasterizer.as_ref());
++            } else {
++                context.IASetVertexBuffers(
++                    0,
++                    1,
++                    Some(&self.instance_buffer),
++                    Some(&stride),
++                    Some(&offset),
++                );
++                context.DrawInstanced(3, count, 0, 0);
++                context.IASetVertexBuffers(0, 1, Some(&None), Some(&stride), Some(&offset));
++            }
++            context.OMSetRenderTargets(None, None);
++            context.OMSetDepthStencilState(None, 0);
++            context.IASetInputLayout(None);
++            context.VSSetShader(None, None);
++            context.PSSetShader(None, None);
++        }
++        log::trace!(
++            "GPU viewport: {draw_calls} draw calls, {} instances, {} uploaded bytes",
++            instances.len(),
++            size_of_val(instances)
++        );
++        Ok(())
++    }
++}
++
++fn create_viewport_input_layout(
++    device: &ID3D11Device,
++    vertex: &[u8],
++    mesh: bool,
++) -> Result<ID3D11InputLayout> {
++    let transform = D3D11_INPUT_ELEMENT_DESC {
++        SemanticName: windows::core::s!("TEXCOORD"),
++        Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
++        InputSlotClass: D3D11_INPUT_PER_INSTANCE_DATA,
++        InstanceDataStepRate: 1,
++        ..Default::default()
++    };
++    let mut elements = vec![transform];
++    if mesh {
++        elements[0].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA;
++        elements[0].InstanceDataStepRate = 0;
++        for index in 0..5 {
++            elements.push(D3D11_INPUT_ELEMENT_DESC {
++                SemanticIndex: index + 1,
++                InputSlot: 1,
++                AlignedByteOffset: index * 16,
++                ..transform
++            });
++        }
++    } else {
++        elements.push(D3D11_INPUT_ELEMENT_DESC {
++            SemanticIndex: 1,
++            AlignedByteOffset: std::mem::offset_of!(GpuViewportInstance, color) as u32,
++            ..transform
++        });
++    }
++    let mut layout = None;
++    // Both descriptors refer to a static semantic and the compiled VS is live.
++    unsafe { device.CreateInputLayout(&elements, vertex, Some(&mut layout)) }
++        .context("create viewport input layout")?;
++    layout.context("viewport input layout missing")
++}
++
++impl GpuViewportMeshState {
++    fn new(device: &ID3D11Device, mesh: &GpuViewportMesh) -> Result<Self> {
++        let index_count = u32::try_from(mesh.indices.len())?;
++        anyhow::ensure!(
++            index_count.is_multiple_of(3)
++                && mesh.first_instance_indices.is_multiple_of(3)
++                && mesh.first_instance_indices <= index_count
++                && mesh
++                    .indices
++                    .iter()
++                    .all(|&index| usize::from(index) < mesh.vertices.len()),
++            "invalid viewport triangle indices"
++        );
++        let vertices =
++            create_immutable_viewport_buffer(device, &mesh.vertices, D3D11_BIND_VERTEX_BUFFER)?;
++        let indices =
++            create_immutable_viewport_buffer(device, &mesh.indices, D3D11_BIND_INDEX_BUFFER)?;
++        let desc = D3D11_RASTERIZER_DESC {
++            FillMode: D3D11_FILL_SOLID,
++            CullMode: D3D11_CULL_BACK,
++            FrontCounterClockwise: true.into(),
++            DepthClipEnable: true.into(),
++            ..Default::default()
++        };
++        let mut rasterizer = None;
++        // The descriptor is initialized and D3D11 returns a new owned state.
++        unsafe { device.CreateRasterizerState(&desc, Some(&mut rasterizer)) }?;
++        log::debug!(
++            "GPU viewport: uploaded {} vertex bytes and {} index bytes",
++            size_of_val(mesh.vertices.as_slice()),
++            size_of_val(mesh.indices.as_slice())
++        );
++        Ok(Self {
++            vertices,
++            indices,
++            index_count,
++            first_instance_indices: mesh.first_instance_indices,
++            depth_state: create_depth_stencil_state(device, D3D11_DEPTH_WRITE_MASK_ALL)?,
++            rasterizer: rasterizer.context("viewport rasterizer missing")?,
++        })
++    }
++}
++
++fn create_immutable_viewport_buffer<T>(
++    device: &ID3D11Device,
++    data: &[T],
++    bind: D3D11_BIND_FLAG,
++) -> Result<ID3D11Buffer> {
++    anyhow::ensure!(!data.is_empty(), "empty viewport mesh buffer");
++    let desc = D3D11_BUFFER_DESC {
++        ByteWidth: u32::try_from(size_of_val(data))?,
++        Usage: D3D11_USAGE_IMMUTABLE,
++        BindFlags: bind.0 as u32,
++        ..Default::default()
++    };
++    let initial = D3D11_SUBRESOURCE_DATA {
++        pSysMem: data.as_ptr().cast(),
++        ..Default::default()
++    };
++    let mut buffer = None;
++    // The descriptor size matches the initialized slice D3D11 copies in this call.
++    unsafe { device.CreateBuffer(&desc, Some(&initial), Some(&mut buffer)) }?;
++    buffer.context("viewport mesh buffer missing")
++}
++
++impl GpuViewportTarget {
++    fn new(
++        devices: &DirectXRendererDevices,
++        size: Size<DevicePixels>,
++        with_depth: bool,
++    ) -> Result<Self> {
++        let desc = D3D11_TEXTURE2D_DESC {
++            Width: size.width.0 as u32,
++            Height: size.height.0 as u32,
++            MipLevels: 1,
++            ArraySize: 1,
++            Format: RENDER_TARGET_FORMAT,
++            SampleDesc: DXGI_SAMPLE_DESC {
++                Count: 1,
++                Quality: 0,
++            },
++            Usage: D3D11_USAGE_DEFAULT,
++            BindFlags: (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE).0 as u32,
++            ..Default::default()
++        };
++        let mut texture = None;
++        let mut render_view = None;
++        let mut texture_view = None;
++        // Both views retain the texture on the renderer's device.
++        unsafe {
++            devices
++                .device
++                .CreateTexture2D(&desc, None, Some(&mut texture))?;
++            let texture = texture.context("viewport texture missing")?;
++            devices
++                .device
++                .CreateRenderTargetView(&texture, None, Some(&mut render_view))?;
++            devices
++                .device
++                .CreateShaderResourceView(&texture, None, Some(&mut texture_view))?;
++        }
++        let depth = if with_depth {
++            let (_, view) =
++                create_depth_stencil_texture_and_view(&devices.device, desc.Width, desc.Height)?;
++            Some(view.context("viewport depth view missing")?)
++        } else {
++            None
++        };
++        log::info!(
++            "GPU viewport: created offscreen target ({}x{}, depth {with_depth})",
++            desc.Width,
++            desc.Height,
++        );
++        Ok(Self {
++            size,
++            render_view,
++            texture_view,
++            depth,
++            draw: None,
++        })
++    }
++}
++
++#[cfg(test)]
++#[::core::prelude::v1::test]
++#[ignore = "requires a Direct3D 11 device"]
++fn gpu_viewport_reuses_and_resizes_its_target_then_drops_the_pass() -> Result<()> {
++    let devices = DirectXRendererDevices::new(&DirectXDevices::new()?, true)?;
++    set_rasterizer_state(&devices.device, &devices.device_context)?;
++    let shader = Arc::new(GpuViewportShader {
++        source: r#"
++            struct Varying { float4 position : SV_Position; float4 color : TEXCOORD0; };
++            Varying vs(uint id : SV_VertexID, float4 transform : TEXCOORD0, float4 color : TEXCOORD1) {
++                float2 local = float2(id == 2 ? 0 : (id == 0 ? -1 : 1), id == 2 ? 1 : -1);
++                Varying output;
++                output.position = float4(transform.xy + local * transform.zw, 0, 1);
++                output.color = color;
++                return output;
++            }
++            float4 ps(Varying input) : SV_Target { return input.color; }
++        "#
++        .into(),
++        vertex_entry: "vs".into(),
++        pixel_entry: "ps".into(),
++        mesh: None,
++    });
++    let bounds = Bounds::new(
++        point(ScaledPixels(0.0), ScaledPixels(0.0)),
++        size(ScaledPixels(24.0), ScaledPixels(16.0)),
++    );
++    let mut surface = PaintSurface {
++        order: 0,
++        bounds,
++        content_mask: ContentMask { bounds },
++        gpu_viewport: shader.clone(),
++        gpu_viewport_draw: GpuViewportDraw::Triangles(GpuViewportInstances::from_slice(&[
++            GpuViewportInstance {
++                transform: [-0.5, 0.0, 0.3, 0.5],
++                color: [1.0, 0.0, 0.0, 1.0],
++            },
++            GpuViewportInstance {
++                transform: [0.5, 0.0, 0.3, 0.5],
++                color: [0.0, 1.0, 0.0, 1.0],
++            },
++        ])),
++    };
++    let mut pass = None;
++    GpuViewportPass::prepare(&mut pass, &surface, &devices)?;
++    let first = pass.as_ref().unwrap().target.as_ref().unwrap();
++    assert_eq!(first.size, size(DevicePixels(24), DevicePixels(16)));
++    let first_view = first.texture_view.clone();
++    let vertex_shader = pass.as_ref().unwrap().vertex.clone();
++    let input_layout = pass.as_ref().unwrap().layout.clone();
++    let instance_buffer = pass.as_ref().unwrap().instance_buffer.clone();
++    assert_eq!(
++        read_viewport_test_pixels(&devices, first, &[(6, 8), (18, 8), (12, 8)])?,
++        [[0, 0, 255, 255], [0, 255, 0, 255], [0, 0, 0, 0]]
++    );
++    GpuViewportPass::prepare(&mut pass, &surface, &devices)?;
++    assert_eq!(
++        pass.as_ref().unwrap().target.as_ref().unwrap().texture_view,
++        first_view
++    );
++    let GpuViewportDraw::Triangles(instances) = &mut surface.gpu_viewport_draw else {
++        unreachable!()
++    };
++    instances[1].transform = instances[0].transform;
++    GpuViewportPass::prepare(&mut pass, &surface, &devices)?;
++    let overlapping = pass.as_ref().unwrap();
++    assert_eq!(overlapping.instance_buffer, instance_buffer);
++    assert_eq!(
++        overlapping.target.as_ref().unwrap().texture_view,
++        first_view
++    );
++    assert_eq!(
++        read_viewport_test_pixels(
++            &devices,
++            overlapping.target.as_ref().unwrap(),
++            &[(6, 8), (18, 8)]
++        )?,
++        [[0, 255, 0, 255], [0, 0, 0, 0]]
++    );
++
++    surface.bounds.size.width = ScaledPixels(32.0);
++    GpuViewportPass::prepare(&mut pass, &surface, &devices)?;
++    let resized = pass.as_ref().unwrap();
++    assert_eq!(resized.vertex, vertex_shader);
++    assert_eq!(resized.layout, input_layout);
++    assert_eq!(resized.instance_buffer, instance_buffer);
++    assert_eq!(
++        resized.target.as_ref().unwrap().size,
++        size(DevicePixels(32), DevicePixels(16))
++    );
++    assert_ne!(resized.target.as_ref().unwrap().texture_view, first_view);
++
++    surface.bounds.size.width = ScaledPixels(0.0);
++    GpuViewportPass::prepare(&mut pass, &surface, &devices)?;
++    assert!(pass.is_none());
++    assert_eq!(Arc::strong_count(&shader), 2);
++    Ok(())
++}
++
++#[cfg(test)]
++#[::core::prelude::v1::test]
++#[ignore = "requires a Direct3D 11 device"]
++fn gpu_viewport_overlapping_boxes_use_depth_in_either_order() -> Result<()> {
++    let devices = DirectXRendererDevices::new(&DirectXDevices::new()?, true)?;
++    let source = r#"
++        struct Out { float4 p : SV_Position; float4 c : TEXCOORD0; };
++        Out vs(float4 local : TEXCOORD0, float4 x : TEXCOORD1, float4 y : TEXCOORD2,
++               float4 z : TEXCOORD3, float4 w : TEXCOORD4, float4 c : TEXCOORD5) {
++            Out output;
++            output.p = local.x*x + local.y*y + local.z*z + w;
++            output.c = c * local.w;
++            return output;
++        }
++        float4 ps(Out input) : SV_Target { return input.c; }
++    "#;
++    let shader = |indices| {
++        Arc::new(GpuViewportShader {
++            source: source.into(),
++            vertex_entry: "vs".into(),
++            pixel_entry: "ps".into(),
++            mesh: Some(GpuViewportMesh {
++                vertices: vec![
++                    [-0.8, -0.8, 0.1, 1.0],
++                    [0.8, -0.8, 0.1, 1.0],
++                    [0.8, 0.8, 0.1, 1.0],
++                    [-0.8, 0.8, 0.1, 1.0],
++                    [-0.8, -0.8, -0.1, 1.0],
++                    [0.8, -0.8, -0.1, 1.0],
++                    [0.8, 0.8, -0.1, 1.0],
++                    [-0.8, 0.8, -0.1, 1.0],
++                ],
++                indices,
++                first_instance_indices: 0,
++            }),
++        })
++    };
++    let instance = |z, color| GpuViewportMeshInstance {
++        clip_from_model: [
++            [1.0, 0.0, 0.0, 0.0],
++            [0.0, 1.0, 0.0, 0.0],
++            [0.0, 0.0, 1.0, 0.0],
++            [0.0, 0.0, z, 1.0],
++        ],
++        color,
++    };
++    let near = instance(0.8, [1.0, 0.0, 0.0, 1.0]);
++    let far = instance(0.2, [0.0, 0.0, 1.0, 1.0]);
++    let bounds = Bounds::new(
++        Point::default(),
++        size(ScaledPixels(32.0), ScaledPixels(32.0)),
++    );
++    let mut surface = PaintSurface {
++        order: 0,
++        bounds,
++        content_mask: ContentMask { bounds },
++        gpu_viewport: shader(vec![
++            0, 1, 2, 0, 2, 3, 5, 4, 7, 5, 7, 6, 1, 5, 6, 1, 6, 2, 4, 0, 3, 4, 3, 7, 3, 2, 6, 3, 6,
++            7, 4, 5, 1, 4, 1, 0,
++        ]),
++        gpu_viewport_draw: GpuViewportDraw::Mesh(Arc::from([near, far])),
++    };
++    let mut pass = None;
++    GpuViewportPass::prepare(&mut pass, &surface, &devices)?;
++    let initial = pass.as_ref().unwrap();
++    let first_target = initial.target.as_ref().unwrap();
++    let depth = first_target.depth.clone();
++    let geometry = initial.mesh.as_ref().unwrap().vertices.clone();
++    let dynamic = initial.instance_buffer.clone();
++    assert!(depth.is_some());
++    assert_eq!(
++        read_viewport_test_pixels(&devices, first_target, &[(16, 16)])?,
++        [[0, 0, 255, 255]]
++    );
++    surface.gpu_viewport_draw = GpuViewportDraw::Mesh(Arc::from([far, near]));
++    GpuViewportPass::prepare(&mut pass, &surface, &devices)?;
++    let reversed = pass.as_ref().unwrap().target.as_ref().unwrap();
++    assert_eq!(reversed.depth, depth);
++    assert_eq!(
++        read_viewport_test_pixels(&devices, reversed, &[(16, 16)])?,
++        [[0, 0, 255, 255]]
++    );
++
++    surface.bounds.size.width = ScaledPixels(48.0);
++    GpuViewportPass::prepare(&mut pass, &surface, &devices)?;
++    let resized = pass.as_ref().unwrap();
++    let resized_target = resized.target.as_ref().unwrap();
++    assert_ne!(resized_target.depth, depth);
++    assert_eq!(resized.mesh.as_ref().unwrap().vertices, geometry);
++    assert_eq!(resized.instance_buffer, dynamic);
++    let depth_texture: ID3D11Texture2D =
++        unsafe { resized_target.depth.as_ref().unwrap().GetResource()? }.cast()?;
++    let mut desc = D3D11_TEXTURE2D_DESC::default();
++    unsafe { depth_texture.GetDesc(&mut desc) };
++    assert_eq!(
++        (desc.Width, desc.Height, desc.Format),
++        (48, 32, DXGI_FORMAT_D32_FLOAT)
++    );
++
++    surface.gpu_viewport = shader(vec![0, 2, 1]);
++    GpuViewportPass::prepare(&mut pass, &surface, &devices)?;
++    assert_eq!(
++        read_viewport_test_pixels(
++            &devices,
++            pass.as_ref().unwrap().target.as_ref().unwrap(),
++            &[(24, 16)]
++        )?,
++        [[0, 0, 0, 0]]
++    );
++    surface.bounds.size.height = ScaledPixels(0.0);
++    GpuViewportPass::prepare(&mut pass, &surface, &devices)?;
++    assert!(pass.is_none());
++    assert_eq!(Arc::strong_count(&surface.gpu_viewport), 1);
++    Ok(())
++}
++
++#[cfg(test)]
++fn read_viewport_test_pixels(
++    devices: &DirectXRendererDevices,
++    target: &GpuViewportTarget,
++    positions: &[(usize, usize)],
++) -> Result<Vec<[u8; 4]>> {
++    let view = target
++        .texture_view
++        .as_ref()
++        .context("test target missing")?;
++    let source: ID3D11Texture2D = unsafe { view.GetResource()? }.cast()?;
++    let mut desc = D3D11_TEXTURE2D_DESC::default();
++    unsafe { source.GetDesc(&mut desc) };
++    desc.Usage = D3D11_USAGE_STAGING;
++    desc.BindFlags = 0;
++    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
++    let mut staging = None;
++    unsafe {
++        devices
++            .device
++            .CreateTexture2D(&desc, None, Some(&mut staging))?
++    };
++    let staging = staging.context("test staging texture missing")?;
++    let context = &devices.device_context;
++    let mut pixels = Vec::with_capacity(positions.len());
++    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
++    for &(x, y) in positions {
++        assert!(x < desc.Width as usize && y < desc.Height as usize);
++    }
++    // Each pixel is within the mapped staging texture, including per-row padding.
++    unsafe {
++        context.CopyResource(&staging, &source);
++        context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
++        for &(x, y) in positions {
++            let src = mapped
++                .pData
++                .cast::<u8>()
++                .add(y * mapped.RowPitch as usize + x * 4);
++            pixels.push(src.cast::<[u8; 4]>().read());
++        }
++        context.Unmap(&staging, 0);
++    }
++    Ok(pixels)
++}
++
++fn compile_viewport_shader(
++    source: &str,
++    entry: &str,
++    profile: windows::core::PCSTR,
++) -> Result<Vec<u8>> {
++    let entry = std::ffi::CString::new(entry)?;
++    let mut bytecode = None;
++    let mut diagnostics = None;
++    // D3DCompile consumes these slices during the call. Copy the output
++    // before its owning blob is released.
++    unsafe {
++        let result = Fxc::D3DCompile(
++            source.as_ptr().cast(),
++            source.len(),
++            windows::core::s!("GPUI GPU viewport"),
++            None,
++            None,
++            windows::core::PCSTR(entry.as_ptr().cast()),
++            profile,
++            0,
++            0,
++            &mut bytecode,
++            Some(&mut diagnostics),
++        );
++        if let Err(error) = result {
++            if let Some(diagnostics) = diagnostics {
++                let bytes = slice::from_raw_parts(
++                    diagnostics.GetBufferPointer().cast(),
++                    diagnostics.GetBufferSize(),
++                );
++                anyhow::bail!("shader compile failed: {}", String::from_utf8_lossy(bytes));
++            }
++            return Err(error.into());
++        }
++        let blob = bytecode.context("shader bytecode missing")?;
++        Ok(slice::from_raw_parts(blob.GetBufferPointer().cast(), blob.GetBufferSize()).to_vec())
++    }
++}
++
+ struct DirectXRenderPipelines {
+     shadow_pipeline: PipelineState<Shadow>,
+     quad_pipeline: PipelineState<Quad>,
+@@ -189,6 +906,8 @@ impl DirectXRenderer {
+             resources: Some(resources),
+             globals,
+             pipelines,
++            gpu_viewports: Vec::new(),
++            viewport_sprites: Vec::new(),
+             direct_composition,
+             font_info: Self::get_font_info(),
+             width: 1,
+@@ -281,6 +1000,7 @@ impl DirectXRenderer {
+ 
+     fn handle_device_lost_impl(&mut self, directx_devices: &DirectXDevices) -> Result<()> {
+         let disable_direct_composition = self.direct_composition.is_none();
++        self.gpu_viewports.clear();
+ 
+         unsafe {
+             #[cfg(debug_assertions)]
+@@ -372,6 +1092,7 @@ impl DirectXRenderer {
+         background_appearance: WindowBackgroundAppearance,
+     ) -> Result<()> {
+         let depth_scale = quad_depth_scale(scene.quads.len());
++        self.prepare_gpu_viewports(&scene.surfaces);
+         self.pre_draw(
+             &match background_appearance {
+                 WindowBackgroundAppearance::Opaque => [1.0f32; 4],
+@@ -437,7 +1158,9 @@ impl DirectXRenderer {
+                 PrimitiveBatch::PolychromeSprites { texture_id, range } => {
+                     self.draw_polychrome_sprites(texture_id, range.start, range.len())
+                 }
+-                PrimitiveBatch::Surfaces(range) => self.draw_surfaces(&scene.surfaces[range]),
++                PrimitiveBatch::Surfaces(range) => {
++                    self.draw_surfaces(range, scene.polychrome_sprites.len())
++                }
+             }
+             .with_context(|| {
+                 format!(
+@@ -687,7 +1410,19 @@ impl DirectXRenderer {
+             )?;
+         }
+ 
+-        if !scene.polychrome_sprites.is_empty() {
++        if !scene.surfaces.is_empty() {
++            // The surface batch samples its own target via the normal sprite compositor.
++            self.viewport_sprites.clear();
++            self.viewport_sprites
++                .extend_from_slice(&scene.polychrome_sprites);
++            self.viewport_sprites
++                .extend(scene.surfaces.iter().map(surface_sprite));
++            self.pipelines.poly_sprites.update_buffer(
++                &devices.device,
++                &devices.device_context,
++                &self.viewport_sprites,
++            )?;
++        } else if !scene.polychrome_sprites.is_empty() {
+             self.pipelines.poly_sprites.update_buffer(
+                 &devices.device,
+                 &devices.device_context,
+@@ -840,9 +1575,50 @@ impl DirectXRenderer {
+         )
+     }
+ 
+-    fn draw_surfaces(&mut self, surfaces: &[PaintSurface]) -> Result<()> {
+-        if surfaces.is_empty() {
+-            return Ok(());
++    fn prepare_gpu_viewports(&mut self, surfaces: &[PaintSurface]) {
++        self.gpu_viewports.resize_with(surfaces.len(), || None);
++        let Some(devices) = &self.devices else { return };
++        for (slot, surface) in self.gpu_viewports.iter_mut().zip(surfaces) {
++            if let Err(error) = GpuViewportPass::prepare(slot, surface, devices) {
++                log::error!("GPU viewport: {error:#}");
++            }
++        }
++    }
++
++    fn draw_surfaces(&self, range: Range<usize>, sprite_count: usize) -> Result<()> {
++        let devices = self.devices.as_ref().context("devices missing")?;
++        let params = self
++            .globals
++            .batch_params_buffer
++            .as_ref()
++            .context("batch params buffer missing")?;
++        for index in range {
++            let Some(target) = self.gpu_viewports[index]
++                .as_ref()
++                .and_then(|pass| pass.target.as_ref())
++                .filter(|target| target.draw.is_some())
++            else {
++                continue;
++            };
++            let result = self.pipelines.poly_sprites.draw_range_with_texture(
++                &devices.device_context,
++                slice::from_ref(&target.texture_view),
++                params,
++                slice::from_ref(&self.globals.sampler),
++                (sprite_count + index) as u32,
++                1,
++            );
++            // The immediate context retains bound COM resources. Unbind even on error
++            // so dropping a preview's target releases all renderer references.
++            unsafe {
++                devices
++                    .device_context
++                    .VSSetShaderResources(0, Some(&[None]));
++                devices
++                    .device_context
++                    .PSSetShaderResources(0, Some(&[None]));
++            }
++            result?;
+         }
+         Ok(())
+     }
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+index 5d8415af72d0a36a35606c6a5c65f1cc0f16751a..ef69c85a80c5d3810c18639c13925c1c6ffffeec 100644
+--- a/crates/gpui_windows/src/window.rs
++++ b/crates/gpui_windows/src/window.rs
+@@ -1051,6 +1051,10 @@ impl PlatformWindow for WindowsWindow {
+             .render_to_image(scene, self.state.background_appearance.get())
+     }
+ 
++    fn supports_gpu_viewport(&self) -> bool {
++        true
++    }
++
+     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
+         self.state.renderer.borrow().sprite_atlas()
+     }

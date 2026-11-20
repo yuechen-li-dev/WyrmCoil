@@ -42,7 +42,7 @@ if ($head -ne $zed_revision) {
     throw "Expected Zed revision $zed_revision, found $head at $zed_root."
 }
 
-function Apply-ZedPatch([string]$name, [string[]]$paths) {
+function Apply-ZedPatch([string]$name, [string[]]$paths, [string[]]$previous) {
     $patch_path = Join-Path $integration_root "patches/$name.patch"
     $expected_patch = (Get-Content -LiteralPath $patch_path) -join "`n"
     $current_patch = (Invoke-ZedGit diff --no-ext-diff --no-textconv --no-color --no-renames --full-index --src-prefix=a/ --dst-prefix=b/ --diff-algorithm=myers --unified=3 HEAD -- @paths) -join "`n"
@@ -50,16 +50,34 @@ function Apply-ZedPatch([string]$name, [string[]]$paths) {
         Invoke-ZedGit apply --check $patch_path
         Invoke-ZedGit apply $patch_path
     } elseif ($current_patch -cne $expected_patch) {
-        throw "The tracked changes for $name in $zed_root differ from the integration patch."
+        $previous_path = $null
+        foreach ($candidate in $previous) {
+            $candidate_path = Join-Path $integration_root "patches/$candidate.patch"
+            if ($current_patch -ceq ((Get-Content -LiteralPath $candidate_path) -join "`n")) {
+                $previous_path = $candidate_path
+                break
+            }
+        }
+        if (!$previous_path) {
+            throw "The tracked changes for $name in $zed_root differ from the integration patch."
+        }
+        Invoke-ZedGit apply --reverse $previous_path
+        try {
+            Invoke-ZedGit apply --check $patch_path
+            Invoke-ZedGit apply $patch_path
+        } catch {
+            Invoke-ZedGit apply $previous_path
+            throw
+        }
     }
 }
 Apply-ZedPatch 'm0' @('.', ':(exclude)crates/gpui', ':(exclude)crates/gpui_windows')
-Apply-ZedPatch 'm3a' @('crates/gpui', 'crates/gpui_windows')
+Apply-ZedPatch 'm4' @('crates/gpui', 'crates/gpui_windows') @('m3b', 'm3a')
 
 $crate_path = 'crates/wyrmcoil_view'
 $crate_root = Join-Path $zed_root $crate_path
 New-Item -ItemType Directory -Force -Path (Join-Path $crate_root 'src') | Out-Null
-foreach ($file in 'Cargo.toml', 'src/wyrmcoil_view.rs', 'src/viewport.sdslv') {
+foreach ($file in 'Cargo.toml', 'src/wyrmcoil_view.rs', 'src/viewport.sdslv', 'src/room.rs', 'src/room.sdslv') {
     $source = Join-Path $integration_root "wyrmcoil_view/$file"
     $destination = Join-Path $crate_root $file
     if (!(Test-Path -LiteralPath $destination) -or
