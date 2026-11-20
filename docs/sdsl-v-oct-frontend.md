@@ -52,28 +52,35 @@ cargo test --locked --test sdslv_oct_conformance -- --include-ignored
 
 ## VD-MIR in Rust
 
-Port Oct’s VD-MIR semantics and use Rust enums for its representation.
-Oct already has the right boundary. Its compiler resolves and validates source,
-materializes concrete programs, and lowers typed expressions, structured
-blocks, interfaces, resources, and capabilities before HLSL emission. Its
-graphics entries and paired program metadata are useful contracts for
-WyrmCoil. The Go interfaces and record layout are implementation details.
+Both WyrmCoil dialects now use the same backend path.
 
-Use owned structs for functions and ordered module tables. Use enums for
-mutually exclusive choices, such as vertex, pixel, or compute entries and
-location, target, builtin, or binding roles. Use `Option` for optional
-metadata and preserve source spans through lowering. This keeps cases such as a
-resource field carrying a stage location out of the validated representation.
-Keep control structured, including explicit flow terminators and guarded
-loads and stores. Use deterministic source or binding order in dumps and
-manifests.
+~~~text
+source -> AST -> validate and lower -> VdMirModule -> HLSL -> optional DXC
+~~~
 
-The current graphics role enum shares one interpretation of stream declarations
-between validation and HLSL emission. It is a small piece of the proposed
-boundary. The next lowering should produce a self-contained typed graphics
-program, including entry interfaces and resolved resource bindings, using
-the three compiled fixtures as baselines and CanonicalGraphicsProgram as the
-first specialization and material target. Compare Oct and Rust on normalized
-interface and resource facts. Keep HLSL spellings and DXC policy in the backend,
-and migrate the existing emitter through that boundary one supported slice
-at a time.
+`LowerToVdMir` validates a parsed module and produces owned, source-ordered
+items. The IR carries typed declarations and values, structured statements,
+graphics interface roles, nominal spaces, and available source spans. Legacy
+flow targets are state indices with explicit terminators. Lowering resolves
+legacy specialization calls and orders named constructor arguments before
+the backend sees them. Values whose type is left to HLSL by the existing
+frontend carry `Unresolved`.
+
+`EmitVdMirHlsl` consumes the IR, and shader artifacts derive their entry-point
+metadata from the same lowered functions. The existing `EmitHlsl` and
+shader artifact APIs lower internally. HLSL semantic spellings and DXC
+profiles stay on the backend side of the boundary.
+
+Compared with the pre-MIR revision `f10d4b9`, eight fixtures reproduced HLSL
+and entry-point metadata byte for byte. The sampled cyclic flow reproduced its
+diagnostic as well. The six Oct qualification tests, including the three DXC
+and SPIR-V checks, passed through the MIR path. The default suite passed 401
+tests with seven ignored, and all 18 Zed adapter tests passed. The naming
+check reported the eight baseline findings. The opt-in legacy material
+failure described above is still present.
+
+The current lowering covers the existing emitter’s language subset.
+Canonical resource bindings, materials, compute, guarded memory, and
+template specialization still require lowering. The textured
+CanonicalGraphicsProgram fixture remains the concrete target for those
+graphics additions.

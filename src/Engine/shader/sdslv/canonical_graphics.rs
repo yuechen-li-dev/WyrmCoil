@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::ast::*;
 use super::diagnostic::SdslvDiagnostic;
+use super::vdmir::{VdMirBuiltin as Builtin, VdMirInterpolation as Interpolation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GraphicsFieldRole {
@@ -13,21 +14,6 @@ pub(super) enum GraphicsFieldRole {
     ClipPosition,
     Resource,
     Unspecified,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Interpolation {
-    Linear,
-    Flat,
-    NoPerspective,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum Builtin {
-    VertexId,
-    InstanceId,
-    Position,
-    FrontFace,
 }
 
 pub(super) fn ResolveGraphicsField(

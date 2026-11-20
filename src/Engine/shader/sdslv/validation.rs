@@ -289,6 +289,12 @@ fn ValidateTestExpression(expression: &SdslvExpression, diagnostics: &mut Vec<Sd
 }
 
 pub fn ValidateModule(module: &SdslvModule) -> Result<(), Vec<SdslvDiagnostic>> {
+    ValidateForLowering(module).map(|_| ())
+}
+
+pub(super) fn ValidateForLowering(
+    module: &SdslvModule,
+) -> Result<Validator<'_>, Vec<SdslvDiagnostic>> {
     if module.Canonical {
         let mut diagnostics = super::canonical_graphics::ValidateGraphics(module);
         diagnostics.extend(ValidateCanonicalBindings(module));
@@ -299,7 +305,7 @@ pub fn ValidateModule(module: &SdslvModule) -> Result<(), Vec<SdslvDiagnostic>> 
     let mut validator = Validator::New(module);
     validator.Validate();
     if validator.Diagnostics.is_empty() {
-        Ok(())
+        Ok(validator)
     } else {
         Err(validator.Diagnostics)
     }
@@ -399,7 +405,7 @@ fn CheckBlockBindings<'a>(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum TypeRef {
+pub(super) enum TypeRef {
     Named(String),
     Array {
         Element: Box<TypeRef>,
@@ -426,7 +432,7 @@ struct FunctionSignature {
     IsFallible: bool,
 }
 
-struct Validator<'a> {
+pub(super) struct Validator<'a> {
     Module: &'a SdslvModule,
     Diagnostics: Vec<SdslvDiagnostic>,
     TopLevelKinds: HashMap<String, &'static str>,
@@ -1067,7 +1073,7 @@ impl<'a> Validator<'a> {
         }
         None
     }
-    fn ResolveFlowExpressionType(
+    pub(super) fn ResolveFlowExpressionType(
         &self,
         locals: &HashMap<String, TypeRef>,
         expression: &SdslvExpression,
@@ -1914,7 +1920,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn ResolveExpressionType(
+    pub(super) fn ResolveExpressionType(
         &self,
         shader: &SdslvShaderDecl,
         locals: &HashMap<String, TypeRef>,
@@ -2776,7 +2782,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn TypeRefToType(&self, type_ref: &SdslvTypeRef) -> TypeRef {
+    pub(super) fn TypeRefToType(&self, type_ref: &SdslvTypeRef) -> TypeRef {
         match type_ref {
             SdslvTypeRef::Named(path) => TypeRef::Named(path.Segments.join(".")),
             SdslvTypeRef::Array {

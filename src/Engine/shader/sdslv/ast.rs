@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use super::token::SdslvSpan;
+pub use super::vdmir::{SdslvBinaryOperator, SdslvUnaryOperator};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvPath {
@@ -550,35 +551,6 @@ pub struct SdslvUtilityCase {
 pub struct SdslvWithUpdate {
     pub Field: String,
     pub Value: SdslvExpression,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SdslvBinaryOperator {
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    Equal,
-    NotEqual,
-    Less,
-    LessEqual,
-    Greater,
-    GreaterEqual,
-    Or,
-    And,
-    BitOr,
-    BitXor,
-    BitAnd,
-    ShiftLeft,
-    ShiftRight,
-    Remainder,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SdslvUnaryOperator {
-    Negate,
-    Not,
-    BitNot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
