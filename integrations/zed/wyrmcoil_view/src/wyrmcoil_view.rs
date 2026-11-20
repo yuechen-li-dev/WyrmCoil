@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -10,6 +11,7 @@ use gpui::{
 };
 use workspace::{Item, MultiWorkspace, Workspace};
 use wyrmcoil::Demo::{DemoWorld, InputEvent};
+use wyrmcoil::Engine::shader::sdslv::{CompileCanonicalSourceToShaderArtifact, SdslvShaderStage};
 use wyrmcoil::Engine::{Engine, EntityId, RenderSnapshot, Vec2};
 
 actions!(
@@ -40,6 +42,7 @@ struct Preview {
     title: SharedString,
     session: PreviewSession,
     camera: Vec2,
+    gpu_shader: Option<Arc<gpui::GpuViewportShader>>,
     paused: bool,
     pending_frame: Option<WindowId>,
     window_observers: Option<[Subscription; 4]>,
@@ -52,6 +55,7 @@ impl Preview {
             title: format!("{} Preview", wyrmcoil::ProjectName()).into(),
             session: PreviewSession::New(),
             camera: Vec2::Zero(),
+            gpu_shader: NewViewportShader(),
             paused: false,
             pending_frame: None,
             window_observers: None,
@@ -147,6 +151,36 @@ impl Preview {
     fn KeyUp(&mut self, event: &KeyUpEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.TakesInput(window) && self.session.input.KeyUp(&event.keystroke) {
             cx.stop_propagation();
+        }
+    }
+}
+
+fn BuildViewportShader() -> Result<gpui::GpuViewportShader, String> {
+    let artifact =
+        CompileCanonicalSourceToShaderArtifact("viewport.sdslv", include_str!("viewport.sdslv"))
+            .map_err(|errors| format!("{errors:?}"))?;
+    let [vertex, pixel] = artifact.EntryPoints.as_slice() else {
+        return Err("expected exactly two viewport shader entries".to_string());
+    };
+    if vertex.Stage != SdslvShaderStage::Vertex || pixel.Stage != SdslvShaderStage::Pixel {
+        return Err("expected a vertex and pixel pair".to_string());
+    }
+    Ok(gpui::GpuViewportShader {
+        source: artifact.Hlsl,
+        vertex_entry: vertex.Name.clone(),
+        pixel_entry: pixel.Name.clone(),
+    })
+}
+
+fn NewViewportShader() -> Option<Arc<gpui::GpuViewportShader>> {
+    if !cfg!(target_os = "windows") || std::env::var_os("WYRMCOIL_GPUI_MARKER").is_some() {
+        return None;
+    }
+    match BuildViewportShader() {
+        Ok(shader) => Some(Arc::new(shader)),
+        Err(error) => {
+            eprintln!("WyrmCoil viewport shader: {error}");
+            None
         }
     }
 }
@@ -303,6 +337,7 @@ impl Render for Preview {
         let guard = self.session.engine.Guard;
         let snapshot = self.session.snapshot.clone();
         let camera = self.camera;
+        let gpu_shader = self.gpu_shader.clone();
         let controls = if self.TakesInput(window) {
             "Game focused · WASD / arrows · Esc pauses"
         } else if self.paused {
@@ -366,6 +401,9 @@ impl Render for Preview {
                 canvas(
                     |_, _, _| (),
                     move |bounds, (), window, _| {
+                        if bounds.is_empty() {
+                            return;
+                        }
                         let viewport = Viewport::New(bounds, camera);
                         viewport.PaintGrid(bounds, window);
                         for item in &snapshot.Items {
@@ -379,10 +417,14 @@ impl Render for Preview {
                             };
                             let side = viewport.marker_size;
                             let origin = point(center.x - side * 0.5, center.y - side * 0.5);
-                            window.paint_quad(fill(
-                                Bounds::new(origin, size(side, side)),
-                                rgb(color),
-                            ));
+                            let marker = Bounds::new(origin, size(side, side));
+                            if item.Entity == player
+                                && let Some(shader) = &gpu_shader
+                                && window.paint_gpu_viewport(marker, shader)
+                            {
+                                continue;
+                            }
+                            window.paint_quad(fill(marker, rgb(color)));
                         }
                     },
                 )
@@ -508,6 +550,14 @@ impl Item for Preview {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_viewport_shader_uses_vertex_id_and_two_real_entries() {
+        let shader = super::BuildViewportShader().unwrap();
+        assert_eq!(shader.vertex_entry, "PreviewTriangle_VS");
+        assert_eq!(shader.pixel_entry, "PreviewTriangle_PS");
+        assert!(shader.source.contains("SV_VertexID"));
+        assert!(shader.source.contains("SV_Target"));
+    }
     use super::*;
 
     fn Key(name: &str) -> Keystroke {

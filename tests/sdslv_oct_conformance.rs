@@ -270,3 +270,26 @@ fn RunSpirvTool(tool: &str, arguments: &[&str], spirv: &[u8]) -> String {
     );
     String::from_utf8(result.stdout).unwrap()
 }
+
+#[test]
+#[ignore = "requires DXC and SPIRV-Tools"]
+fn zed_viewport_source_also_compiles_and_validates_with_dxc() {
+    let source = include_str!("../integrations/zed/wyrmcoil_view/src/viewport.sdslv");
+    let artifact = CompileCanonicalSourceToShaderArtifact("viewport.sdslv", source).unwrap();
+    assert_eq!(artifact.EntryPoints.len(), 2);
+    for entry in &artifact.EntryPoints {
+        let compiled = CompileArtifactEntryWithDxc(&artifact, entry, &DxcOptions::default())
+            .unwrap_or_else(|error| panic!("{}: {error:?}", entry.Name));
+        RunSpirvTool(
+            "spirv-val",
+            &["--target-env", "vulkan1.0", "-"],
+            &compiled.OutputBytes,
+        );
+        let disassembly = RunSpirvTool("spirv-dis", &["--no-header", "-"], &compiled.OutputBytes);
+        assert!(disassembly.contains(&format!("\"{}\"", entry.Name)));
+        if entry.Stage == SdslvShaderStage::Vertex {
+            assert!(disassembly.contains("BuiltIn VertexIndex"));
+            assert!(disassembly.contains("BuiltIn Position"));
+        }
+    }
+}

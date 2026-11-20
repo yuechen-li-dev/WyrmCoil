@@ -10,7 +10,6 @@ $zed_url = 'https://github.com/zed-industries/zed.git'
 $repo_root = Split-Path -Parent $PSScriptRoot
 $integration_root = Join-Path $repo_root 'integrations/zed'
 $zed_root = Join-Path $repo_root 'vendor/zed'
-$patch_path = Join-Path $integration_root 'patches/m0.patch'
 
 function Invoke-ZedGit {
     & git -C $zed_root -c core.longpaths=true @args
@@ -43,19 +42,24 @@ if ($head -ne $zed_revision) {
     throw "Expected Zed revision $zed_revision, found $head at $zed_root."
 }
 
-$expected_patch = (Get-Content -LiteralPath $patch_path) -join "`n"
-$current_patch = (Invoke-ZedGit diff --no-ext-diff --no-textconv --no-color --no-renames --full-index --src-prefix=a/ --dst-prefix=b/ --diff-algorithm=myers --unified=3 HEAD --) -join "`n"
-if (!$current_patch) {
-    Invoke-ZedGit apply --check $patch_path
-    Invoke-ZedGit apply $patch_path
-} elseif ($current_patch -cne $expected_patch) {
-    throw "The tracked changes in $zed_root differ from the M0 patch. Use a pristine checkout at the pinned revision."
+function Apply-ZedPatch([string]$name, [string[]]$paths) {
+    $patch_path = Join-Path $integration_root "patches/$name.patch"
+    $expected_patch = (Get-Content -LiteralPath $patch_path) -join "`n"
+    $current_patch = (Invoke-ZedGit diff --no-ext-diff --no-textconv --no-color --no-renames --full-index --src-prefix=a/ --dst-prefix=b/ --diff-algorithm=myers --unified=3 HEAD -- @paths) -join "`n"
+    if (!$current_patch) {
+        Invoke-ZedGit apply --check $patch_path
+        Invoke-ZedGit apply $patch_path
+    } elseif ($current_patch -cne $expected_patch) {
+        throw "The tracked changes for $name in $zed_root differ from the integration patch."
+    }
 }
+Apply-ZedPatch 'm0' @('.', ':(exclude)crates/gpui', ':(exclude)crates/gpui_windows')
+Apply-ZedPatch 'm3a' @('crates/gpui', 'crates/gpui_windows')
 
 $crate_path = 'crates/wyrmcoil_view'
 $crate_root = Join-Path $zed_root $crate_path
 New-Item -ItemType Directory -Force -Path (Join-Path $crate_root 'src') | Out-Null
-foreach ($file in 'Cargo.toml', 'src/wyrmcoil_view.rs') {
+foreach ($file in 'Cargo.toml', 'src/wyrmcoil_view.rs', 'src/viewport.sdslv') {
     $source = Join-Path $integration_root "wyrmcoil_view/$file"
     $destination = Join-Path $crate_root $file
     if (!(Test-Path -LiteralPath $destination) -or
