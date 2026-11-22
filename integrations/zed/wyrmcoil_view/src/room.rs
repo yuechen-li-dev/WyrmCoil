@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::{
     Canvas, Div, GpuViewportDraw, GpuViewportMesh, GpuViewportMeshInstance, GpuViewportShader,
@@ -8,9 +8,10 @@ use gpui::{
 };
 use wyrmcoil::Demo::room::{
     BuiltinRoomScene, NewRoomEngineFromScene, RoomCube, RoomInput, RoomSnapshot, RoomWorld,
+    TryNewRoomEngineFromScene,
 };
 use wyrmcoil::Engine::Engine;
-use wyrmcoil::Scene::ReadArtifact;
+use wyrmcoil::Scene::{CompiledScene, ReadArtifact};
 
 use super::{BuildShader, FixedStep, MovementInput, Status};
 
@@ -46,36 +47,78 @@ impl RoomPreview {
         }
     }
 
-    pub fn Reload(&mut self, path: Result<&Path, String>) {
-        let start = Instant::now();
-        match path.and_then(ReadArtifact) {
-            Err(error) => {
-                self.notice = format!("Scene reload failed · {}", error.replace(['\r', '\n'], " "))
-            }
-            Ok(scene) => {
-                if self.identity == scene.Identity() {
-                    self.notice = format!(
-                        "Scene already current · {} · {}",
-                        scene.Data().name,
-                        scene.Identity()
-                    );
-                    return;
-                }
-                let mut engine = NewRoomEngineFromScene(&scene);
-                let snapshot = engine.RenderSnapshot();
-                self.engine = engine;
-                self.snapshot = snapshot;
-                self.applied = RoomInput::default();
-                self.Suspend();
-                self.identity = scene.Identity().to_owned();
-                self.notice = format!(
-                    "Scene loaded · {} · {} · {:.2} ms",
-                    scene.Data().name,
-                    scene.Identity(),
-                    start.elapsed().as_secs_f64() * 1000.0
-                );
-            }
+    pub fn SetNotice(&mut self, notice: String) -> bool {
+        if self.notice == notice {
+            return false;
         }
+        self.notice = notice;
+        true
+    }
+
+    pub fn Reload(&mut self, path: Result<&Path, String>) -> bool {
+        let start = Instant::now();
+        let scene = match path.and_then(ReadArtifact) {
+            Ok(scene) => scene,
+            Err(error) => return self.ReloadError(&error),
+        };
+        let read_time = start.elapsed();
+        if self.identity == scene.Identity() {
+            return self.SetNotice(format!(
+                "Scene already current · {} · {}",
+                scene.Data().name,
+                scene.Identity()
+            ));
+        }
+        let mount_start = Instant::now();
+        let engine = TryNewRoomEngineFromScene(&scene);
+        self.Mount(&scene, engine, read_time, mount_start)
+    }
+
+    pub fn ReloadWatched(&mut self, path: &Path, saw_artifact: &mut bool) -> bool {
+        if matches!(path.try_exists(), Ok(false)) {
+            if !*saw_artifact {
+                return false;
+            }
+            return self.ReloadError(&format!(
+                "Compiled artifact missing or deleted · {}",
+                path.display()
+            ));
+        }
+        *saw_artifact = true;
+        self.Reload(Ok(path))
+    }
+
+    fn ReloadError(&mut self, error: &str) -> bool {
+        self.SetNotice(format!(
+            "Scene reload failed · {}",
+            error.replace(['\r', '\n'], " ")
+        ))
+    }
+
+    fn Mount(
+        &mut self,
+        scene: &CompiledScene,
+        engine: Result<Engine<RoomWorld, RoomInput>, &'static str>,
+        read_time: Duration,
+        mount_start: Instant,
+    ) -> bool {
+        let mut engine = match engine {
+            Ok(engine) => engine,
+            Err(error) => return self.ReloadError(error),
+        };
+        let snapshot = engine.RenderSnapshot();
+        self.engine = engine;
+        self.snapshot = snapshot;
+        self.applied = RoomInput::default();
+        self.Suspend();
+        self.identity = scene.Identity().to_owned();
+        self.SetNotice(format!(
+            "Scene loaded · {} · {} · read and validate {:.2} ms · mount {:.2} ms",
+            scene.Data().name,
+            scene.Identity(),
+            read_time.as_secs_f64() * 1000.0,
+            mount_start.elapsed().as_secs_f64() * 1000.0,
+        ))
     }
 
     pub fn Advance(&mut self, now: Instant) -> bool {
@@ -309,7 +352,9 @@ mod tests {
             ],
         );
         let compiled = BuildArtifact(&document, &path).unwrap();
-        room.Reload(Ok(&path));
+        let mut saw_artifact = false;
+        assert!(room.ReloadWatched(&path, &mut saw_artifact));
+        assert!(saw_artifact);
         assert_eq!(room.identity, compiled.Identity());
         assert_eq!(room.snapshot.Camera.Eye.x, 2.0);
         assert_eq!(room.applied, RoomInput::default());
@@ -335,6 +380,82 @@ mod tests {
         room.Reload(Ok(&path));
         assert!(room.notice.contains("already current"));
         assert_eq!(room.snapshot, mounted);
+        assert!(!room.ReloadWatched(&path, &mut saw_artifact));
+        assert_eq!(room.snapshot, mounted);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn watched_file_probe_handles_first_publish_truncation_removal_and_recovery() {
+        use wyrmcoil::Scene::EncodeArtifact;
+
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target")
+            .join(format!("watch-probe-test-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("wyrmcoil-scene.toml");
+        let temporary = directory.join("wyrmcoil-scene.tmp");
+        let mut room = RoomPreview::New();
+        let mut saw_artifact = false;
+        let start = Instant::now();
+        room.Advance(start);
+        room.Advance(start + Duration::from_millis(17));
+        let clock = room.engine.Clock();
+        let snapshot = room.snapshot.clone();
+
+        assert!(!room.ReloadWatched(&path, &mut saw_artifact));
+        assert!(!saw_artifact);
+        let text = EncodeArtifact(BuiltinRoomScene()).unwrap();
+        std::fs::write(&temporary, &text).unwrap();
+        std::fs::rename(&temporary, &path).unwrap();
+        assert!(room.ReloadWatched(&path, &mut saw_artifact));
+        assert!(saw_artifact);
+        assert!(room.notice.contains("already current"));
+
+        std::fs::write(&path, b"version = ").unwrap();
+        assert!(room.ReloadWatched(&path, &mut saw_artifact));
+        assert!(room.notice.contains("invalid scene artifact"));
+        assert!(!room.ReloadWatched(&path, &mut saw_artifact));
+        std::fs::remove_file(&path).unwrap();
+        assert!(room.ReloadWatched(&path, &mut saw_artifact));
+        assert!(room.notice.contains("missing or deleted"));
+        assert!(!room.ReloadWatched(&path, &mut saw_artifact));
+        assert!(room.ReloadWatched(&directory, &mut saw_artifact));
+        assert!(room.notice.contains("reload failed"));
+
+        std::fs::write(&temporary, &text).unwrap();
+        std::fs::rename(&temporary, &path).unwrap();
+        assert!(room.ReloadWatched(&path, &mut saw_artifact));
+        assert!(room.notice.contains("already current"));
+        assert_eq!(room.engine.Clock(), clock);
+        assert_eq!(room.snapshot, snapshot);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_engine_construction_leaves_the_running_room_intact() {
+        use wyrmcoil::{DwFrameId, DwFrameRegistry, DwMessage};
+
+        let mut room = RoomPreview::New();
+        let start = Instant::now();
+        room.Advance(start);
+        room.Advance(start + Duration::from_millis(17));
+        let running = room.snapshot.clone();
+        let clock = room.engine.Clock();
+        let engine = Engine::TryConstruct(
+            DwFrameRegistry::New,
+            DwFrameId {
+                Domain: 0,
+                Local: 0,
+            },
+            room.engine.World.clone(),
+            |_| DwMessage::PairI32(0, 0, 0),
+        );
+        assert!(room.Mount(BuiltinRoomScene(), engine, Duration::ZERO, Instant::now()));
+        assert!(room.notice.contains("root frame not found"));
+        assert_eq!(room.engine.Clock(), clock);
+        assert_eq!(room.snapshot, running);
+        assert_eq!(room.identity, BuiltinRoomScene().Identity());
     }
 }

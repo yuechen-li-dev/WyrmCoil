@@ -89,10 +89,16 @@ pub fn BuiltinRoomScene() -> &'static CompiledScene {
 }
 
 pub fn NewRoomEngineFromScene(scene: &CompiledScene) -> Engine<RoomWorld, RoomInput> {
+    TryNewRoomEngineFromScene(scene).expect("room control session should construct")
+}
+
+pub fn TryNewRoomEngineFromScene(
+    scene: &CompiledScene,
+) -> Result<Engine<RoomWorld, RoomInput>, &'static str> {
     let scene = scene.Data();
     let [x, y, z] = scene.player.eye;
     let camera = scene.player.camera;
-    Engine::Construct(
+    Engine::TryConstruct(
         Registry,
         FRAME,
         RoomWorld {

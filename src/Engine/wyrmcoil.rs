@@ -56,9 +56,18 @@ impl<W: World, I: Copy> Engine<W, I> {
         world: W,
         input_to_message: fn(I) -> DwMessage,
     ) -> Self {
-        let session = DwSession::New(build_registry(), root_frame, 0)
-            .expect("WyrmCoil session should construct");
-        Self {
+        Self::TryConstruct(build_registry, root_frame, world, input_to_message)
+            .expect("WyrmCoil session should construct")
+    }
+
+    pub fn TryConstruct(
+        build_registry: fn() -> crate::DwFrameRegistry,
+        root_frame: DwFrameId,
+        world: W,
+        input_to_message: fn(I) -> DwMessage,
+    ) -> Result<Self, &'static str> {
+        let session = DwSession::New(build_registry(), root_frame, 0)?;
+        Ok(Self {
             Session: session,
             World: world,
             Player: crate::Engine::EntityId(0),
@@ -68,7 +77,7 @@ impl<W: World, I: Copy> Engine<W, I> {
             _root_frame: root_frame,
             _build_registry: build_registry,
             input_to_message,
-        }
+        })
     }
     pub fn EnqueueInput(&mut self, event: I) {
         self.InputQueue.push(event);

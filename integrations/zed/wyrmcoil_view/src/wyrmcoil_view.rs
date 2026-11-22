@@ -1,14 +1,15 @@
 #![allow(non_snake_case)]
 
-use std::path::PathBuf;
+use std::future::poll_fn;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
     App, AppContext, Bounds, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, MouseButton, ParentElement, Pixels, Point,
-    Render, SharedString, Styled, Subscription, Window, WindowId, actions, canvas, div, fill,
-    point, px, rgb, size,
+    Render, SharedString, Styled, Subscription, Task, WeakEntity, Window, WindowId, actions,
+    canvas, div, fill, point, px, rgb, size,
 };
 use workspace::{Item, MultiWorkspace, Workspace};
 use wyrmcoil::Demo::{DemoWorld, InputEvent};
@@ -18,6 +19,8 @@ use wyrmcoil::Scene::ARTIFACT_PATH;
 
 mod room;
 use room::RoomPreview;
+
+const SCENE_SETTLE: Duration = Duration::from_millis(100);
 
 actions!(
     wyrmcoil,
@@ -70,18 +73,18 @@ fn Open(
     });
     if mode == Mode::Room && (created || reload) {
         let artifact = ProjectArtifact(workspace, cx);
-        if reload
-            || artifact
-                .as_ref()
-                .is_ok_and(|path| !matches!(path.try_exists(), Ok(false)))
-        {
-            preview.update(cx, |preview, cx| {
-                if let Scene::Room(room) = &mut preview.scene {
-                    room.Reload(artifact.as_deref().map_err(Clone::clone));
+        let workspace_handle = cx.weak_entity();
+        preview.update(cx, |preview, cx| {
+            if created && let Ok(path) = &artifact {
+                preview.scene_watch =
+                    Some(WatchScene(workspace, workspace_handle, path.clone(), cx));
+            }
+            if reload && let Scene::Room(room) = &mut preview.scene {
+                if room.Reload(artifact.as_deref().map_err(Clone::clone)) {
                     cx.notify();
                 }
-            });
-        }
+            }
+        });
     }
     if !created {
         workspace.activate_item(&preview, true, true, window, cx);
@@ -103,6 +106,80 @@ fn ProjectArtifact(workspace: &Workspace, cx: &App) -> Result<PathBuf, String> {
         );
     }
     Ok(root.join(ARTIFACT_PATH))
+}
+
+fn WatchScene(
+    workspace: &Workspace,
+    workspace_handle: WeakEntity<Workspace>,
+    artifact: PathBuf,
+    cx: &Context<Preview>,
+) -> Task<()> {
+    let fs = workspace.project().read(cx).fs().clone();
+    cx.spawn(async move |preview, cx| {
+        let target = artifact.parent().expect("scene artifact has a parent");
+        let root = target.parent().expect("scene artifact has a project root");
+        let mut saw_artifact = false;
+        let error = 'register: loop {
+            let directory = if target.is_dir() { target } else { root };
+            if fs.requires_poll_watcher(directory) {
+                break "Native notifications unavailable for this filesystem".into();
+            }
+            let (mut events, watcher) = fs.watch(directory, SCENE_SETTLE).await;
+            // Zed logs failures from watch(); add also returns a registration error to the caller.
+            if let Err(error) = watcher.add(directory) {
+                break format!("{} · {error:#}", directory.display());
+            }
+            'read: loop {
+                if (directory == target) != target.is_dir() {
+                    continue 'register;
+                }
+                let current = workspace_handle.read_with(cx, ProjectArtifact);
+                if !matches!(current, Ok(Ok(path)) if path == artifact) {
+                    break 'register "Project folder changed · reopen the preview to watch it"
+                        .into();
+                }
+                if preview
+                    .update(cx, |preview, cx| {
+                        if let Scene::Room(room) = &mut preview.scene
+                            && room.ReloadWatched(&artifact, &mut saw_artifact)
+                        {
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                while let Some(batch) = poll_fn(|cx| events.as_mut().poll_next(cx)).await {
+                    if SceneBatchMatches(
+                        &artifact,
+                        directory,
+                        batch.iter().map(|event| event.path.as_path()),
+                    ) {
+                        continue 'read;
+                    }
+                }
+                break 'register "Filesystem notification stream closed".into();
+            }
+        };
+        let _ = preview.update(cx, |preview, cx| {
+            if let Scene::Room(room) = &mut preview.scene
+                && room.SetNotice(format!("Scene watcher stopped · {error}"))
+            {
+                cx.notify();
+            }
+        });
+    })
+}
+
+fn SceneBatchMatches<'a>(
+    artifact: &Path,
+    directory: &Path,
+    paths: impl IntoIterator<Item = &'a Path>,
+) -> bool {
+    paths
+        .into_iter()
+        .any(|path| path == artifact || path == directory || Some(path) == artifact.parent())
 }
 
 enum Scene {
@@ -167,6 +244,7 @@ struct Preview {
     paused: bool,
     pending_frame: Option<WindowId>,
     window_observers: Option<[Subscription; 4]>,
+    scene_watch: Option<Task<()>>,
 }
 
 impl Preview {
@@ -191,6 +269,7 @@ impl Preview {
             paused: false,
             pending_frame: None,
             window_observers: None,
+            scene_watch: None,
         }
     }
 
@@ -758,6 +837,46 @@ mod tests {
         assert!(shader.source.contains("Color : TEXCOORD1"));
     }
     use super::*;
+
+    #[test]
+    fn artifact_watch_filters_source_and_atomic_publish_temporary_files() {
+        let root = Path::new("training-room");
+        let artifact = root.join(ARTIFACT_PATH);
+        let target = artifact.parent().unwrap();
+        let source = root.join("src/scene.rs");
+        let temporary = artifact.with_extension("tmp.42.1");
+        let binary = target.join("debug/training-room.exe");
+        for directory in [root, target] {
+            assert!(!SceneBatchMatches(
+                &artifact,
+                directory,
+                [&*source, &*temporary, &*binary]
+            ));
+            assert!(SceneBatchMatches(
+                &artifact,
+                directory,
+                [&*temporary, &*artifact]
+            ));
+            assert!(SceneBatchMatches(&artifact, directory, [&*artifact]));
+        }
+        assert!(SceneBatchMatches(&artifact, root, [target]));
+        assert!(SceneBatchMatches(&artifact, target, [target]));
+    }
+
+    #[test]
+    fn a_burst_with_duplicate_artifact_events_requests_one_read() {
+        let artifact = Path::new(ARTIFACT_PATH);
+        let target = artifact.parent().unwrap();
+        let temporary = artifact.with_extension("tmp.42.1");
+        let unrelated = [&*temporary; 32];
+        let burst = [artifact; 256];
+        let batches: [&[&Path]; 3] = [&unrelated, &burst, &unrelated];
+        let reads = batches
+            .iter()
+            .filter(|batch| SceneBatchMatches(artifact, target, batch.iter().copied()))
+            .count();
+        assert_eq!(reads, 1);
+    }
 
     fn Key(name: &str) -> Keystroke {
         Keystroke {
