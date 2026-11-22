@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -13,6 +14,7 @@ use workspace::{Item, MultiWorkspace, Workspace};
 use wyrmcoil::Demo::{DemoWorld, InputEvent};
 use wyrmcoil::Engine::shader::sdslv::{CompileCanonicalSourceToShaderArtifact, SdslvShaderStage};
 use wyrmcoil::Engine::{Engine, EntityId, RenderItem, RenderSnapshot, Vec2};
+use wyrmcoil::Scene::ARTIFACT_PATH;
 
 mod room;
 use room::RoomPreview;
@@ -23,17 +25,22 @@ actions!(
         /// Open the 3D WyrmCoil Preview tab.
         OpenPreview,
         /// Open the original 2D WyrmCoil Preview tab.
-        OpenPlanarPreview
+        OpenPlanarPreview,
+        /// Mount the compiled scene artifact from the local project.
+        ReloadScene
     ]
 );
 
 pub fn Init(cx: &mut App) {
     cx.observe_new(|workspace: &mut Workspace, _, _| {
         workspace.register_action(|workspace, _: &OpenPreview, window, cx| {
-            Open(workspace, Mode::Room, window, cx);
+            Open(workspace, Mode::Room, false, window, cx);
         });
         workspace.register_action(|workspace, _: &OpenPlanarPreview, window, cx| {
-            Open(workspace, Mode::Planar, window, cx);
+            Open(workspace, Mode::Planar, false, window, cx);
+        });
+        workspace.register_action(|workspace, _: &ReloadScene, window, cx| {
+            Open(workspace, Mode::Room, true, window, cx);
         });
     })
     .detach();
@@ -45,16 +52,57 @@ enum Mode {
     Room,
 }
 
-fn Open(workspace: &mut Workspace, mode: Mode, window: &mut Window, cx: &mut Context<Workspace>) {
+fn Open(
+    workspace: &mut Workspace,
+    mode: Mode,
+    reload: bool,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
     let existing = workspace
         .items_of_type::<Preview>(cx)
         .find(|item| item.read(cx).scene.Mode() == mode);
-    if let Some(preview) = existing {
-        workspace.activate_item(&preview, true, true, window, cx);
-    } else {
+    let created = existing.is_none();
+    let preview = existing.unwrap_or_else(|| {
         let preview = cx.new(|cx| Preview::New(mode, cx));
-        workspace.add_item_to_active_pane(Box::new(preview), None, true, window, cx);
+        workspace.add_item_to_active_pane(Box::new(preview.clone()), None, true, window, cx);
+        preview
+    });
+    if mode == Mode::Room && (created || reload) {
+        let artifact = ProjectArtifact(workspace, cx);
+        if reload
+            || artifact
+                .as_ref()
+                .is_ok_and(|path| !matches!(path.try_exists(), Ok(false)))
+        {
+            preview.update(cx, |preview, cx| {
+                if let Scene::Room(room) = &mut preview.scene {
+                    room.Reload(artifact.as_deref().map_err(Clone::clone));
+                    cx.notify();
+                }
+            });
+        }
     }
+    if !created {
+        workspace.activate_item(&preview, true, true, window, cx);
+    }
+}
+
+fn ProjectArtifact(workspace: &Workspace, cx: &App) -> Result<PathBuf, String> {
+    let mut roots = workspace.visible_worktrees(cx).filter_map(|worktree| {
+        let worktree = worktree.read(cx);
+        let path = worktree.abs_path();
+        (worktree.is_local() && path.is_dir()).then_some(path)
+    });
+    let Some(root) = roots.next() else {
+        return Err("Open the local game project folder to reload its scene.".into());
+    };
+    if roots.next().is_some() {
+        return Err(
+            "Open the game project in a window with one local folder to reload its scene.".into(),
+        );
+    }
+    Ok(root.join(ARTIFACT_PATH))
 }
 
 enum Scene {

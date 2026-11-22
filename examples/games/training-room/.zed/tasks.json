@@ -1,0 +1,10 @@
+[
+  {
+    "label": "Build WyrmCoil Scene",
+    "command": "cargo",
+    "args": ["run", "--locked"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "allow_concurrent_runs": false,
+    "reveal": "always"
+  }
+]

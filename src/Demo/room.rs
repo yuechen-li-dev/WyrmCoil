@@ -1,11 +1,19 @@
 #![allow(non_snake_case)]
 
+use std::sync::{Arc, OnceLock};
+
 use crate::Engine::{Engine, World};
+pub use crate::Scene::SceneMatrix as RoomMatrix;
+use crate::Scene::{CompileScene, CompiledScene, Patrol, PlacedMesh, WalkBounds};
 use crate::{
     Dw, DwActId, DwActRequest, DwBoard, DwControl, DwFrameCtx, DwFrameDef, DwFrameId,
     DwFrameRegistry, DwKey, DwMessage, DwMessagePayload,
 };
 pub use margaret_core::math::Vec3;
+
+use crate::Scene as scene_authoring;
+#[path = "../../examples/games/training-room/src/scene.rs"]
+mod training_room;
 
 const FRAME: DwFrameId = DwFrameId {
     Domain: 0x524f4f4d,
@@ -70,20 +78,39 @@ fn Registry() -> DwFrameRegistry {
 }
 
 pub fn NewRoomEngine() -> Engine<RoomWorld, RoomInput> {
+    NewRoomEngineFromScene(BuiltinRoomScene())
+}
+
+pub fn BuiltinRoomScene() -> &'static CompiledScene {
+    static ROOM: OnceLock<CompiledScene> = OnceLock::new();
+    ROOM.get_or_init(|| {
+        CompileScene(&training_room::BuildScene()).expect("valid built-in training room")
+    })
+}
+
+pub fn NewRoomEngineFromScene(scene: &CompiledScene) -> Engine<RoomWorld, RoomInput> {
+    let scene = scene.Data();
+    let [x, y, z] = scene.player.eye;
+    let camera = scene.player.camera;
     Engine::Construct(
         Registry,
         FRAME,
         RoomWorld {
             camera: RoomCamera {
-                Eye: Vec3::New(0.0, 1.65, 8.8),
-                Yaw: 0.0,
-                Pitch: -0.13,
-                VerticalFov: std::f32::consts::FRAC_PI_3,
-                Near: 0.10,
-                Far: 70.0,
+                Eye: Vec3::New(x, y, z),
+                Yaw: scene.player.yaw,
+                Pitch: camera.pitch,
+                VerticalFov: camera.vertical_fov,
+                Near: camera.near,
+                Far: camera.far,
             },
             input: RoomInput::default(),
-            patrol: 120,
+            bounds: scene.bounds,
+            floor: RoomObject::FromMesh(&scene.floor),
+            boxes: scene.boxes.iter().map(RoomObject::FromMesh).collect(),
+            guard: RoomObject::FromMesh(&scene.guard.body),
+            patrol: scene.guard.patrol,
+            patrol_tick: scene.guard.patrol.phase_ticks,
         },
         InputMessage,
     )
@@ -160,64 +187,59 @@ impl RoomCamera {
     }
 }
 
-/// Columns of a matrix acting on column vectors.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RoomMatrix(pub [[f32; 4]; 4]);
-
 impl RoomMatrix {
     pub fn Model(position: Vec3, scale: Vec3) -> Self {
-        Self([
-            [scale.x, 0.0, 0.0, 0.0],
-            [0.0, scale.y, 0.0, 0.0],
-            [0.0, 0.0, scale.z, 0.0],
-            [position.x, position.y, position.z, 1.0],
-        ])
-    }
-
-    pub fn Transform(self, vector: [f32; 4]) -> [f32; 4] {
-        let mut result = [0.0; 4];
-        for (column, scale) in self.0.into_iter().zip(vector) {
-            for (output, element) in result.iter_mut().zip(column) {
-                *output += element * scale;
-            }
-        }
-        result
-    }
-
-    pub fn Multiply(self, rhs: Self) -> Self {
-        Self(rhs.0.map(|column| self.Transform(column)))
+        Self::Placement(
+            [position.x, position.y, position.z],
+            [scale.x, scale.y, scale.z],
+            0.0,
+        )
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RoomObject {
+    pub Id: Arc<str>,
     pub Position: Vec3,
     pub Scale: Vec3,
+    pub Model: RoomMatrix,
     pub Color: [f32; 4],
 }
 
-fn BoxAt(position: [f32; 3], scale: [f32; 3], color: [f32; 3]) -> RoomObject {
-    RoomObject {
-        Position: Vec3::New(position[0], position[1], position[2]),
-        Scale: Vec3::New(scale[0], scale[1], scale[2]),
-        Color: [color[0], color[1], color[2], 1.0],
+impl RoomObject {
+    fn FromMesh(mesh: &PlacedMesh) -> Self {
+        let [x, y, z, position] = mesh.model.0;
+        let length = |[x, y, z, _]: [f32; 4]| Vec3::New(x, y, z).Length();
+        let [r, g, b] = mesh.color;
+        Self {
+            Id: Arc::from(mesh.id.as_str()),
+            Position: Vec3::New(position[0], position[1], position[2]),
+            Scale: Vec3::New(length(x), length(y), length(z)),
+            Model: mesh.model,
+            Color: [r, g, b, 1.0],
+        }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RoomSnapshot {
     pub Frame: u64,
     pub Camera: RoomCamera,
     pub Floor: RoomObject,
-    pub Boxes: [RoomObject; 6],
+    pub Boxes: Arc<[RoomObject]>,
     pub Guard: RoomObject,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RoomWorld {
     camera: RoomCamera,
     input: RoomInput,
-    patrol: u32,
+    bounds: WalkBounds,
+    floor: RoomObject,
+    boxes: Arc<[RoomObject]>,
+    guard: RoomObject,
+    patrol: Patrol,
+    patrol_tick: u32,
 }
 
 impl World for RoomWorld {
@@ -249,31 +271,29 @@ impl World for RoomWorld {
         let forward = Vec3::New(right.z, 0.0, -right.x);
         let direction = right * input.Strafe as f32 + forward * input.Forward as f32;
         self.camera.Eye = self.camera.Eye + direction.Normalized() * (3.2 * STEP);
-        self.camera.Eye.x = self.camera.Eye.x.clamp(-7.1, 7.1);
-        self.camera.Eye.z = self.camera.Eye.z.clamp(-9.2, 10.8);
-        self.patrol = (self.patrol + 1) % 480;
+        self.camera.Eye.x = self.camera.Eye.x.clamp(self.bounds.x[0], self.bounds.x[1]);
+        self.camera.Eye.z = self.camera.Eye.z.clamp(self.bounds.z[0], self.bounds.z[1]);
+        self.patrol_tick = (self.patrol_tick + 1) % (self.patrol.half_period_ticks * 2);
     }
 
     fn ExtractRenderSnapshot(&self, frame: u64) -> RoomSnapshot {
-        let guard_x = (self.patrol.min(480 - self.patrol) as f32 / 120.0 - 1.0) * 3.6;
+        let half_period = self.patrol.half_period_ticks;
+        let tick = self.patrol_tick.min(half_period * 2 - self.patrol_tick);
+        let offset = (tick as f32 / (half_period as f32 * 0.5) - 1.0) * self.patrol.half_span;
+        let mut guard = self.guard.clone();
+        guard.Position.x += offset;
+        guard.Model.0[3][0] = guard.Position.x;
         RoomSnapshot {
             Frame: frame,
             Camera: self.camera,
-            Floor: BoxAt([0.0, 0.0, 0.5], [15.4, 0.0, 21.4], [0.26, 0.33, 0.38]),
-            Boxes: [
-                BoxAt([-2.2, 0.82, 2.4], [1.8, 1.64, 1.6], [0.23, 0.74, 0.87]),
-                BoxAt([2.1, 1.0, -0.7], [1.7, 2.0, 1.7], [0.84, 0.40, 0.54]),
-                BoxAt([-0.9, 1.1, -4.7], [2.2, 2.2, 1.8], [0.46, 0.69, 0.43]),
-                BoxAt([0.0, 1.65, -9.9], [15.4, 3.3, 0.32], [0.29, 0.34, 0.45]),
-                BoxAt([-7.5, 1.65, 0.5], [0.32, 3.3, 21.0], [0.36, 0.40, 0.52]),
-                BoxAt([7.5, 1.65, 0.5], [0.32, 3.3, 21.0], [0.30, 0.35, 0.46]),
-            ],
-            Guard: BoxAt([guard_x, 0.47, -2.8], [0.94, 0.94, 0.94], [1.0, 0.65, 0.22]),
+            Floor: self.floor.clone(),
+            Boxes: self.boxes.clone(),
+            Guard: guard,
         }
     }
 
     fn ExportChunk(&self) -> Self {
-        *self
+        self.clone()
     }
     fn FromChunk(chunk: Self) -> Self {
         chunk
