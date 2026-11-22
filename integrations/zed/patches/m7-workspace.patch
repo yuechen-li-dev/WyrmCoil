@@ -1,0 +1,37 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 71de74a9d5f262e6d491a55594ce25dc74a486e1..2a30aed4d1d890403c2db4b706dfb71c0592c0dc 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -22798,6 +22798,24 @@ dependencies = [
+  "toml 0.8.23",
+  "wgpu 24.0.5",
+  "winit",
++ "wyrmcoil-game",
++]
++
++[[package]]
++name = "wyrmcoil-game"
++version = "0.1.0"
++dependencies = [
++ "serde",
++ "serde_json",
++ "wyrmcoil-scene",
++]
++
++[[package]]
++name = "wyrmcoil-scene"
++version = "0.1.0"
++dependencies = [
++ "serde",
++ "toml 0.8.23",
+ ]
+ 
+ [[package]]
+@@ -22806,6 +22824,7 @@ version = "0.1.0"
+ dependencies = [
+  "gpui",
+  "log",
++ "project",
+  "workspace",
+  "wyrmcoil",
+ ]

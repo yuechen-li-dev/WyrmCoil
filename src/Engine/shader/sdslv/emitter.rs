@@ -50,6 +50,18 @@ impl HlslEmitter {
                     self.Lines
                         .push(format!("// interface {name} omitted in HLSL M3"));
                 }
+                VdMirItem::StorageBinding(binding) => {
+                    let ty = HlslStorageType(binding.Element, binding.Writable);
+                    let register = if binding.Writable { 'u' } else { 't' };
+                    self.Lines.push("#ifdef __spirv__".to_string());
+                    self.Lines
+                        .push(format!("[[vk::binding({}, 0)]]", binding.Binding));
+                    self.Lines.push("#endif".to_string());
+                    self.Lines.push(format!(
+                        "{ty} {} : register({register}{});",
+                        binding.Name, binding.Binding
+                    ));
+                }
                 VdMirItem::Function(function) => self.EmitFunction(function),
                 VdMirItem::Flow(flow) => self.EmitFlow(flow),
             }
@@ -108,6 +120,10 @@ impl HlslEmitter {
             VdMirFieldRole::Builtin(VdMirBuiltin::VertexId) => "SV_VertexID".to_string(),
             VdMirFieldRole::Builtin(VdMirBuiltin::InstanceId) => "SV_InstanceID".to_string(),
             VdMirFieldRole::Builtin(VdMirBuiltin::FrontFace) => "SV_IsFrontFace".to_string(),
+            VdMirFieldRole::Builtin(VdMirBuiltin::DispatchId) => "SV_DispatchThreadID".to_string(),
+            VdMirFieldRole::Builtin(VdMirBuiltin::GroupId) => "SV_GroupID".to_string(),
+            VdMirFieldRole::Builtin(VdMirBuiltin::GroupThreadId) => "SV_GroupThreadID".to_string(),
+            VdMirFieldRole::Builtin(VdMirBuiltin::GroupIndex) => "SV_GroupIndex".to_string(),
             VdMirFieldRole::Builtin(VdMirBuiltin::Position) | VdMirFieldRole::ClipPosition => {
                 "SV_Position".to_string()
             }
@@ -119,7 +135,11 @@ impl HlslEmitter {
     fn EmitFunction(&mut self, function: &VdMirFunction) {
         let target = match function.Entry.as_ref().map(|entry| entry.Kind) {
             Some(VdMirEntryKind::Pixel(VdMirPixelOutput::Scalar)) => " : SV_Target",
-            Some(VdMirEntryKind::Compute) => {
+            Some(VdMirEntryKind::Compute(Some([x, y, z]))) => {
+                self.Lines.push(format!("[numthreads({x}, {y}, {z})]"));
+                ""
+            }
+            Some(VdMirEntryKind::Compute(None)) => {
                 let program = &function.Entry.as_ref().unwrap().Program;
                 self.ErrorAt(
                     &format!(
@@ -830,6 +850,15 @@ fn HlslParameters(parameters: &[VdMirParameter]) -> String {
     values.join(", ")
 }
 
+fn HlslStorageType(element: VdMirScalar, writable: bool) -> String {
+    let buffer = if writable {
+        "RWStructuredBuffer"
+    } else {
+        "StructuredBuffer"
+    };
+    format!("{buffer}<{}>", HlslType(&VdMirType::Scalar(element)))
+}
+
 fn HlslType(ty: &VdMirType) -> String {
     let spelling = match ty.Physical() {
         VdMirType::Void => "void",
@@ -838,6 +867,10 @@ fn HlslType(ty: &VdMirType) -> String {
         VdMirType::Scalar(VdMirScalar::U32) => "uint",
         VdMirType::Scalar(VdMirScalar::F32) => "float",
         VdMirType::FloatVector(width) => return format!("float{width}"),
+        VdMirType::UintVector(width) => return format!("uint{width}"),
+        VdMirType::StorageArray { Element, Writable } => {
+            return HlslStorageType(*Element, *Writable);
+        }
         VdMirType::Float4x4 => "float4x4",
         VdMirType::Aggregate(name) => name,
         VdMirType::Array { Element, Length } => return format!("{}[{Length}]", HlslType(Element)),

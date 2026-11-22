@@ -46,6 +46,14 @@ enum Scope<'a> {
 impl Lowerer<'_> {
     fn Lower(&self) -> LowerResult<VdMirModule> {
         let mut items = vec![];
+        if let Some(interface) = &self.Validator.Compute {
+            for binding in &interface.Bindings {
+                items.push(VdMirItem::StorageBinding(VdMirStorageBinding {
+                    Name: StorageName(&binding.Name),
+                    ..binding.clone()
+                }));
+            }
+        }
         for declaration in &self.Module.Declarations {
             match declaration {
                 SdslvDecl::TypeAlias(alias) => items.push(VdMirItem::TypeAlias {
@@ -54,6 +62,20 @@ impl Lowerer<'_> {
                     Space: alias.SpaceAnnotation.as_ref().map(PathText),
                 }),
                 SdslvDecl::Stream(stream) => {
+                    if self
+                        .Validator
+                        .Compute
+                        .as_ref()
+                        .and_then(|interface| interface.ResourceStream.as_deref())
+                        == Some(&stream.Name)
+                    {
+                        continue;
+                    }
+                    let is_compute_input = self
+                        .Validator
+                        .Compute
+                        .as_ref()
+                        .is_some_and(|interface| interface.Input == stream.Name);
                     let roles = self.LowerStreamRoles(stream)?;
                     let fields = stream
                         .Fields
@@ -64,7 +86,7 @@ impl Lowerer<'_> {
                     items.push(VdMirItem::Aggregate(VdMirAggregate {
                         Name: stream.Name.clone(),
                         Fields: fields,
-                        HasConstructor: self.Module.Canonical,
+                        HasConstructor: self.Module.Canonical && !is_compute_input,
                     }));
                 }
                 SdslvDecl::Record(record) => {
@@ -115,7 +137,16 @@ impl Lowerer<'_> {
         let mut next_location = 0;
         let mut has_position = false;
         for field in &stream.Fields {
-            let role = if self.Module.Canonical {
+            let role = if self
+                .Validator
+                .Compute
+                .as_ref()
+                .is_some_and(|interface| interface.Input == stream.Name)
+            {
+                let builtin = super::canonical_compute::ComputeBuiltin(&field.Name)
+                    .ok_or_else(|| Diagnostic("unresolved compute builtin", Some(field.Span)))?;
+                VdMirFieldRole::Builtin(builtin)
+            } else if self.Module.Canonical {
                 match ResolveGraphicsField(self.Module, field)? {
                     GraphicsFieldRole::Location(index, interpolation) => {
                         VdMirFieldRole::Location(index, interpolation)
@@ -258,7 +289,12 @@ impl Lowerer<'_> {
         let return_type = self.LowerType(&method.ReturnType, Some(method.ReturnTypeSpan))?;
         let kind = match method.Stage.as_deref() {
             Some("vertex") => Some(VdMirEntryKind::Vertex),
-            Some("compute") => Some(VdMirEntryKind::Compute),
+            Some("compute") => Some(VdMirEntryKind::Compute(
+                self.Validator
+                    .Compute
+                    .as_ref()
+                    .map(|interface| interface.Threads),
+            )),
             Some("pixel") => {
                 let stream = self.Module.Canonical
                     && self
@@ -437,7 +473,14 @@ impl Lowerer<'_> {
                 .collect::<LowerResult<Vec<_>>>()
         };
         let kind = match expression {
-            SdslvExpression::Identifier(name) => Kind::Name(name.clone()),
+            SdslvExpression::Identifier(name) => {
+                let name = if matches!(inferred, TypeRef::Storage { .. }) {
+                    StorageName(name)
+                } else {
+                    name.clone()
+                };
+                Kind::Name(name)
+            }
             SdslvExpression::IntegerLiteral(value) => Kind::IntegerLiteral(value.clone()),
             SdslvExpression::FloatLiteral(value) => Kind::FloatLiteral(value.clone()),
             SdslvExpression::StringLiteral(value) => Kind::StringLiteral(value.clone()),
@@ -667,6 +710,9 @@ impl Lowerer<'_> {
             "float2" => Type::FloatVector(2),
             "float3" => Type::FloatVector(3),
             "float4" => Type::FloatVector(4),
+            "uint2" => Type::UintVector(2),
+            "uint3" => Type::UintVector(3),
+            "uint4" => Type::UintVector(4),
             "float4x4" => Type::Float4x4,
             _ => {
                 if let Some(alias) = self.FindAlias(name) {
@@ -704,6 +750,10 @@ impl Lowerer<'_> {
             TypeRef::Array { Element, Length } => VdMirType::Array {
                 Element: Box::new(self.ResolveInferredType(Element)),
                 Length: *Length,
+            },
+            TypeRef::Storage { Element, Writable } => VdMirType::StorageArray {
+                Element: *Element,
+                Writable: *Writable,
             },
             TypeRef::Unknown => VdMirType::Unresolved,
         }
@@ -756,6 +806,10 @@ impl Lowerer<'_> {
             .iter()
             .any(|declaration| matches!(declaration, SdslvDecl::Enum(value) if value.Name == name))
     }
+}
+
+fn StorageName(name: &str) -> String {
+    format!("__sdslv_storage_{name}")
 }
 
 fn PathText(path: &SdslvPath) -> String {

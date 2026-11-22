@@ -1,0 +1,118 @@
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index ed567abeb87bc924adfb31e448ef749e26fde56b..5b258922e1fa43b1ffdd72f81804eb301a835e44 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -1139,6 +1139,8 @@ pub struct GpuViewportMeshInstance {
+     pub clip_from_model: [[f32; 4]; 4],
+     /// Opaque RGBA color.
+     pub color: [f32; 4],
++    /// First index, index count and base vertex. A zero count uses the default mesh.
++    pub indices: [u32; 3],
+ }
+ 
+ /// Owned viewport draw data. Mesh instances are shared with the cached surface.
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+index 0211d935b2a40b0a1d9a6802fc94373638613231..57137a81bfb322657062f0f42b7be1da3c658897 100644
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -445,16 +445,28 @@ impl GpuViewportPass {
+         if pass.target.as_ref().and_then(|target| target.draw.as_ref()) != Some(draw) {
+             match draw {
+                 GpuViewportDraw::Triangles(instances) => {
+-                    pass.render(devices, instances.as_slice())?
++                    pass.render(devices, instances.as_slice(), &[])?
+                 }
+-                GpuViewportDraw::Mesh(instances) => pass.render(devices, instances)?,
++                GpuViewportDraw::Mesh(instances) => pass.render(devices, instances, instances)?,
+             }
+             pass.target.as_mut().unwrap().draw = Some(draw.clone());
+         }
+         Ok(())
+     }
+ 
+-    fn render<T>(&mut self, devices: &DirectXRendererDevices, instances: &[T]) -> Result<()> {
++    fn render<T>(
++        &mut self, devices: &DirectXRendererDevices, instances: &[T],
++        mesh_instances: &[GpuViewportMeshInstance],
++    ) -> Result<()> {
++        let explicit = mesh_instances.iter().any(|instance| instance.indices[1] > 0);
++        if explicit {
++            let mesh = self.mesh.as_ref().context("indexed viewport mesh missing")?;
++            anyhow::ensure!(mesh_instances.iter().all(|instance| {
++                let [start, count, base] = instance.indices;
++                count > 0 && count % 3 == 0 && base <= i32::MAX as u32
++                    && start.checked_add(count).is_some_and(|end| end <= mesh.index_count)
++            }), "invalid viewport draw range");
++        }
+         let target = self.target.as_mut().context("viewport target missing")?;
+         target.draw = None;
+         let stride = size_of::<T>() as u32;
+@@ -532,13 +544,26 @@ impl GpuViewportPass {
+                     Some(offsets.as_ptr()),
+                 );
+                 context.IASetIndexBuffer(&mesh.indices, DXGI_FORMAT_R16_UINT, 0);
+-                let first = u32::from(mesh.first_instance_indices > 0);
+-                if first == 1 {
+-                    context.DrawIndexedInstanced(mesh.first_instance_indices, 1, 0, 0, 0);
+-                }
+-                if count > first {
+-                    context.DrawIndexedInstanced(mesh.index_count, count - first, 0, 0, first);
+-                    draw_calls += first;
++                if explicit {
++                    draw_calls = 0;
++                    let mut first = 0;
++                    while first < mesh_instances.len() {
++                        let [start, index_count, base] = mesh_instances[first].indices;
++                        let mut end = first + 1;
++                        while end < mesh_instances.len() && mesh_instances[end].indices == [start, index_count, base] { end += 1; }
++                        context.DrawIndexedInstanced(index_count, (end - first) as u32, start, base as i32, first as u32);
++                        first = end;
++                        draw_calls += 1;
++                    }
++                } else {
++                    let first = u32::from(mesh.first_instance_indices > 0);
++                    if first == 1 {
++                        context.DrawIndexedInstanced(mesh.first_instance_indices, 1, 0, 0, 0);
++                    }
++                    if count > first {
++                        context.DrawIndexedInstanced(mesh.index_count, count - first, 0, 0, first);
++                        draw_calls += first;
++                    }
+                 }
+                 context.IASetIndexBuffer(None, DXGI_FORMAT_R16_UINT, 0);
+                 context.IASetVertexBuffers(
+@@ -882,6 +907,7 @@ fn gpu_viewport_overlapping_boxes_use_depth_in_either_order() -> Result<()> {
+             [0.0, 0.0, z, 1.0],
+         ],
+         color,
++        indices: [0; 3],
+     };
+     let near = instance(0.8, [1.0, 0.0, 0.0, 1.0]);
+     let far = instance(0.2, [0.0, 0.0, 1.0, 1.0]);
+@@ -911,7 +937,11 @@ fn gpu_viewport_overlapping_boxes_use_depth_in_either_order() -> Result<()> {
+         read_viewport_test_pixels(&devices, first_target, &[(16, 16)])?,
+         [[0, 0, 255, 255]]
+     );
+-    surface.gpu_viewport_draw = GpuViewportDraw::Mesh(Arc::from([far, near]));
++    let full = [0, 36, 0];
++    surface.gpu_viewport_draw = GpuViewportDraw::Mesh(Arc::from([
++        GpuViewportMeshInstance { indices: full, ..far },
++        GpuViewportMeshInstance { indices: full, ..near },
++    ]));
+     GpuViewportPass::prepare(&mut pass, &surface, &devices)?;
+     let reversed = pass.as_ref().unwrap().target.as_ref().unwrap();
+     assert_eq!(reversed.depth, depth);
+@@ -937,6 +967,13 @@ fn gpu_viewport_overlapping_boxes_use_depth_in_either_order() -> Result<()> {
+     );
+ 
+     surface.gpu_viewport = shader(vec![0, 2, 1]);
++    assert!(
++        GpuViewportPass::prepare(&mut pass, &surface, &devices)
++            .unwrap_err()
++            .to_string()
++            .contains("invalid viewport draw range")
++    );
++    surface.gpu_viewport_draw = GpuViewportDraw::Mesh(Arc::from([far, near]));
+     GpuViewportPass::prepare(&mut pass, &surface, &devices)?;
+     assert_eq!(
+         read_viewport_test_pixels(

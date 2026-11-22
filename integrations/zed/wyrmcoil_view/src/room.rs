@@ -1,19 +1,23 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Canvas, Div, GpuViewportDraw, GpuViewportMesh, GpuViewportMeshInstance, GpuViewportShader,
-    ParentElement, Styled, canvas, div,
+    App, Bounds, Canvas, Div, GpuViewportDraw, GpuViewportMesh, GpuViewportMeshInstance,
+    GpuViewportShader, ParentElement, Pixels, Styled, canvas, div,
 };
 use wyrmcoil::Demo::room::{
     BuiltinRoomScene, NewRoomEngineFromScene, RoomCube, RoomInput, RoomSnapshot, RoomWorld,
     TryNewRoomEngineFromScene,
 };
-use wyrmcoil::Engine::Engine;
+use wyrmcoil::Engine::shader::sdslv::CompileCanonicalSourceToShaderArtifact;
+use wyrmcoil::Engine::{Engine, EngineClock};
+use wyrmcoil::GameRuntime::{GameSession, Observation, TacticalArt};
 use wyrmcoil::Scene::{CompiledScene, ReadArtifact};
 
-use super::{BuildShader, FixedStep, MovementInput, Status};
+use super::tactical::{self, TacticalPreview};
+use super::tactical_art::TacticalGraphics;
+use super::{FixedStep, MovementInput, Status, ViewportShader};
 
 pub(super) struct RoomPreview {
     engine: Engine<RoomWorld, RoomInput>,
@@ -24,6 +28,13 @@ pub(super) struct RoomPreview {
     shader: Result<Arc<GpuViewportShader>, String>,
     identity: String,
     notice: String,
+    game: Option<GameSession>,
+    game_notice: Option<String>,
+    game_observation: Option<Observation>,
+    game_clock: Option<EngineClock>,
+    pub tactical: Option<TacticalPreview>,
+    game_art: Option<(PathBuf, TacticalArt, Arc<TacticalGraphics>)>,
+    art_error: Option<String>,
 }
 
 impl RoomPreview {
@@ -39,6 +50,13 @@ impl RoomPreview {
             applied: RoomInput::default(),
             identity: scene.Identity().to_owned(),
             notice: format!("Built-in {} · {}", scene.Data().name, scene.Identity()),
+            game: None,
+            game_notice: None,
+            game_observation: None,
+            game_clock: None,
+            tactical: None,
+            game_art: None,
+            art_error: None,
             shader: if cfg!(target_os = "windows") {
                 BuildRoomShader().map(Arc::new)
             } else {
@@ -75,6 +93,9 @@ impl RoomPreview {
     }
 
     pub fn ReloadWatched(&mut self, path: &Path, saw_artifact: &mut bool) -> bool {
+        if self.game_notice.is_some() {
+            return false;
+        }
         if matches!(path.try_exists(), Ok(false)) {
             if !*saw_artifact {
                 return false;
@@ -122,6 +143,15 @@ impl RoomPreview {
     }
 
     pub fn Advance(&mut self, now: Instant) -> bool {
+        if self.game_notice.is_some() {
+            return match self.AdvanceGame(now) {
+                Ok(changed) => changed,
+                Err(error) => {
+                    self.GameError(&error);
+                    true
+                }
+            };
+        }
         let steps = self.step.Steps(now);
         for _ in 0..steps {
             let input = Navigation(self.input.TakeActive());
@@ -139,36 +169,196 @@ impl RoomPreview {
         true
     }
 
+    pub fn StartGame(&mut self, root: Result<&Path, String>) {
+        self.Suspend();
+        match root.and_then(GameSession::Start) {
+            Ok(game) => {
+                self.game = Some(game);
+                self.game_notice = Some("Starting game…".into());
+            }
+            Err(error) => self.GameError(&error),
+        }
+    }
+
+    fn GameError(&mut self, error: &str) {
+        self.game = None;
+        let message = error.replace(['\r', '\n'], " ");
+        log::warn!("WyrmCoil game: {message}");
+        self.game_notice = Some(format!("Game failed · {message}"));
+        self.Suspend();
+    }
+
+    pub fn StopGame(&mut self) {
+        if self.game_notice.is_some() {
+            self.game = None;
+            self.game_notice = Some("Game stopped · Run Game to play".into());
+            self.Suspend();
+        }
+    }
+
+    pub fn UseRoom(&mut self) {
+        if self.game_notice.take().is_some() {
+            self.game = None;
+            self.game_clock = None;
+            self.game_observation = None;
+            self.tactical = None;
+            self.game_art = None;
+            self.art_error = None;
+            self.snapshot = self.engine.RenderSnapshot();
+            self.Suspend();
+        }
+    }
+
+    pub fn CanAdvance(&self) -> bool {
+        self.game_notice.is_none()
+            || self
+                .game
+                .as_ref()
+                .is_some_and(|game| game.Busy() || game.Playing())
+    }
+
+    fn AdvanceGame(&mut self, now: Instant) -> Result<bool, String> {
+        let Some(game) = &mut self.game else {
+            return Ok(false);
+        };
+        let mut changed = game.Poll(Duration::ZERO)?;
+        if game.Busy() {
+            self.step.Pause();
+            return Ok(false);
+        }
+        let mounting = self.game_notice.as_deref() == Some("Starting game…") && changed;
+        let steps = self.step.Steps(now);
+        let mut camera_changed = false;
+        for _ in 0..if mounting { 0 } else { steps } {
+            if !game.Playing() {
+                break;
+            }
+            let navigation = Navigation(self.input.TakeActive());
+            if game.Tactical().is_some() {
+                let commands = if let Some(tactical) = &mut self.tactical {
+                    camera_changed |= tactical.Pan(navigation.Strafe, navigation.Forward);
+                    tactical.TakeCommands()
+                } else {
+                    Vec::new()
+                };
+                if commands.is_empty() && game.Tactical().is_some_and(|view| view.Paused) {
+                    continue;
+                }
+                game.BeginTacticalTick(commands)?;
+            } else {
+                game.BeginTick(navigation)?;
+            }
+            if game.Poll(Duration::from_millis(1))? {
+                changed = true;
+            } else {
+                self.step.Pause();
+                break;
+            }
+        }
+        if changed {
+            if let Some(snapshot) = game.Snapshot() {
+                self.snapshot = snapshot;
+            }
+            if let Some(view) = game.Tactical() {
+                if mounting {
+                    self.tactical = Some(TacticalPreview::New(view.clone(), self.snapshot.Camera));
+                    self.art_error = None;
+                    if let Some(art) = game.TacticalArt() {
+                        let root = game.Project();
+                        let cached = self
+                            .game_art
+                            .as_ref()
+                            .is_some_and(|(path, config, _)| path == root && config == art);
+                        if !cached {
+                            self.game_art = None;
+                            match TacticalGraphics::New(root, art) {
+                                Ok(graphics) => {
+                                    self.game_art =
+                                        Some((root.to_path_buf(), art.clone(), Arc::new(graphics)))
+                                }
+                                Err(error) => {
+                                    log::warn!("WyrmCoil tactical art: {error}");
+                                    self.art_error = Some(error);
+                                }
+                            }
+                        }
+                    } else {
+                        self.game_art = None;
+                    }
+                    self.step.Pause();
+                } else if let Some(tactical) = &mut self.tactical {
+                    tactical.view = view.clone();
+                }
+            } else {
+                self.tactical = None;
+                self.game_art = None;
+                self.art_error = None;
+            }
+            self.game_clock = game.Clock();
+            self.game_observation = game.Observation().cloned();
+            self.game_notice = Some(format!("Game · {}", game.Name()));
+        }
+        Ok(changed || camera_changed)
+    }
+
     pub fn Suspend(&mut self) {
-        self.input.Cancel();
+        self.CancelInput();
         self.step.Pause();
     }
 
-    pub fn Draw(&self, controls: &'static str) -> (Div, Canvas<()>) {
-        let snapshot = self.snapshot.clone();
+    pub fn CancelInput(&mut self) {
+        self.input.Cancel();
+        if let Some(tactical) = &mut self.tactical {
+            tactical.Cancel();
+        }
+    }
+
+    pub fn Draw(
+        &self,
+        controls: &'static str,
+        record_bounds: impl FnOnce(Bounds<Pixels>, &mut App) + 'static,
+    ) -> (Div, Canvas<()>) {
+        let mut snapshot = self.snapshot.clone();
+        let tactical_view = self.tactical.as_ref().map(|tactical| {
+            snapshot.Camera = tactical.camera;
+            tactical.view.clone()
+        });
+        let tactical_graphics = self
+            .game_art
+            .as_ref()
+            .map(|(_, _, graphics)| graphics.clone());
+        let shader = tactical_graphics
+            .as_ref()
+            .map(|graphics| graphics.shader.clone())
+            .or_else(|| self.shader.as_ref().ok().cloned());
         let pose = snapshot.Camera;
         let guard = snapshot.Guard.Position;
+        let notice = match (&self.game_notice, &self.game_observation) {
+            (Some(notice), Some(game)) => format!(
+                "{notice} · {:?} · {} remaining · {}",
+                game.State, game.Remaining, game.Objective,
+            ),
+            (Some(notice), None) => notice.clone(),
+            (None, _) => self.notice.clone(),
+        };
         // Keep changing counters and status text from resizing the GPU target.
         let mut status = div()
             .flex_none()
             .child(
-                Status(controls, self.engine.Clock(), snapshot.Frame)
-                    .flex_nowrap()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .child(format!(
-                        "Eye ({:.2}, {:.2}, {:.2}) · yaw {:.2} · pitch {:.2} · guard x {:.2}",
-                        pose.Eye.x, pose.Eye.y, pose.Eye.z, pose.Yaw, pose.Pitch, guard.x
-                    )),
+                Status(
+                    controls,
+                    self.game_clock.unwrap_or_else(|| self.engine.Clock()),
+                    snapshot.Frame,
+                )
+                .flex_nowrap()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(format!(
+                    "Eye ({:.2}, {:.2}, {:.2}) · yaw {:.2} · pitch {:.2} · guard ({:.2}, {:.2})",
+                    pose.Eye.x, pose.Eye.y, pose.Eye.z, pose.Yaw, pose.Pitch, guard.x, guard.z
+                )),
             )
-            .child(
-                div()
-                    .truncate()
-                    .px_3()
-                    .pb_2()
-                    .text_sm()
-                    .child(self.notice.clone()),
-            );
+            .child(div().truncate().px_3().pb_2().text_sm().child(notice));
         if let Err(error) = &self.shader {
             status = status.child(
                 div()
@@ -179,11 +369,33 @@ impl RoomPreview {
                     .child(error.clone()),
             );
         }
-        let shader = self.shader.as_ref().ok().cloned();
+        if let Some(view) = &tactical_view {
+            status = tactical::Status(view, controls);
+            if let Some(notice) = self.game_notice.as_ref() {
+                if notice.starts_with("Game stopped")
+                    || notice.starts_with("Game failed")
+                    || notice.starts_with("Starting")
+                {
+                    status = status.child(notice.clone());
+                }
+            }
+            if let Some(error) = &self.art_error {
+                status = status.child(format!("Art unavailable · diagnostic geometry · {error}"));
+            }
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(shader) = &shader {
+            let backend = shader
+                .producer
+                .as_ref()
+                .map(|producer| producer.status())
+                .unwrap_or_else(|| "D3D11 · selected explicitly".into());
+            status = status.child(div().truncate().px_3().pb_2().text_sm().child(backend));
+        }
         (
             status,
             canvas(
-                |_, _, _| (),
+                move |bounds, _, app| record_bounds(bounds, app),
                 move |bounds, (), window, _| {
                     let Some(shader) = &shader else {
                         return;
@@ -192,12 +404,25 @@ impl RoomPreview {
                     if size.width.0 <= 0.0 || size.height.0 <= 0.0 {
                         return;
                     }
-                    if let Some(instances) = Instances(&snapshot, size.width.0 / size.height.0) {
+                    let aspect = size.width.0 / size.height.0;
+                    if let Some(mut instances) = Instances(&snapshot, aspect) {
+                        let projection = snapshot.Camera.ViewProjection(aspect);
+                        if let (Some(view), Some(projection)) = (&tactical_view, projection) {
+                            if let Some(graphics) = &tactical_graphics {
+                                instances = graphics.Instances(view, projection);
+                            } else {
+                                instances.pop();
+                                tactical::AppendInstances(view, projection, &mut instances);
+                            }
+                        }
                         window.paint_gpu_viewport(
                             bounds,
                             shader,
                             GpuViewportDraw::Mesh(Arc::from(instances)),
                         );
+                        if let (Some(view), Some(projection)) = (&tactical_view, projection) {
+                            tactical::PaintHealth(window, bounds, projection, view);
+                        }
                     }
                 },
             ),
@@ -216,13 +441,21 @@ fn Navigation(active: u8) -> RoomInput {
 }
 
 fn BuildRoomShader() -> Result<GpuViewportShader, String> {
-    let mut shader = BuildShader("room.sdslv", include_str!("room.sdslv"))?;
+    let artifact = CompileCanonicalSourceToShaderArtifact("room.sdslv", include_str!("room.sdslv"))
+        .map_err(|errors| format!("room.sdslv: {errors:?}"))?;
+    let mut shader = ViewportShader(&artifact)?;
     let (vertices, indices) = RoomCube();
     shader.mesh = Some(GpuViewportMesh {
         vertices: vertices.to_vec(),
         indices: indices.to_vec(),
         first_instance_indices: 6,
     });
+    #[cfg(target_os = "windows")]
+    if !std::env::var("WYRMCOIL_GRAPHICS_BACKEND")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("d3d11"))
+    {
+        shader.producer = Some(Arc::new(super::vulkan::RoomProducer::New(artifact)));
+    }
     Ok(shader)
 }
 
@@ -236,6 +469,7 @@ fn Instances(snapshot: &RoomSnapshot, aspect: f32) -> Option<Vec<GpuViewportMesh
         instances.push(GpuViewportMeshInstance {
             clip_from_model: view_projection.Multiply(object.Model).0,
             color: object.Color,
+            indices: [0; 3],
         });
     }
     Some(instances)

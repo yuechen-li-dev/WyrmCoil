@@ -1,0 +1,361 @@
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index 21410b2f8fb352d849a4d4424287fa6287f2b8e3..ed567abeb87bc924adfb31e448ef749e26fde56b 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -1069,6 +1069,42 @@ pub struct GpuViewportShader {
+     pub pixel_entry: String,
+     /// Static indexed geometry for the depth-tested pass, when supplied.
+     pub mesh: Option<GpuViewportMesh>,
++    /// Optional external producer for the Windows shared-texture viewport.
++    #[cfg(target_os = "windows")]
++    pub producer: Option<std::sync::Arc<dyn GpuViewportProducer>>,
++}
++
++/// Creates one producer on the physical adapter selected by the compositor.
++#[cfg(target_os = "windows")]
++pub trait GpuViewportProducer: std::fmt::Debug + Send + Sync {
++    /// Creates a session compatible with the compositor's DXGI adapter.
++    fn create(&self, adapter_luid: [u8; 8]) -> Result<Box<dyn GpuViewportProducerSession>, String>;
++    /// Publishes composition status and whether a subsequent frame should poll.
++    fn report(&self, status: String, pending: bool);
++    /// Returns the current composition status for the viewport UI.
++    fn status(&self) -> String;
++    /// Checks whether the painted viewport needs another frame.
++    fn pending(&self) -> bool;
++}
++
++/// An external producer of pixels for a GPU viewport.
++#[cfg(target_os = "windows")]
++pub trait GpuViewportProducerSession {
++    /// Display name for the active backend and device.
++    fn name(&self) -> &str;
++    /// Polls completion of the last submission without waiting.
++    fn ready(&self) -> Result<bool, String>;
++    /// Imports a single-mip BGRA8 UNORM texture with NT and keyed sharing.
++    ///
++    /// # Safety
++    /// The handle must describe a live, compatible texture of the given size,
++    /// and the previous texture must no longer be in use.
++    unsafe fn attach(&mut self, nt_handle: usize, width: u32, height: u32) -> Result<(), String>;
++    /// Submits work with keyed-mutex acquire at key 0 and release at key 1.
++    ///
++    /// # Safety
++    /// The compositor must have finished handing off the attached texture at key 0.
++    unsafe fn submit(&mut self, instances: &[GpuViewportMeshInstance]) -> Result<bool, String>;
+ }
+ 
+ /// One GPU viewport instance, in input-layout order.
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 11202de19c28e5ca74d49d2bd88760887fcdd0e0..eab5537f3781d9d1569546f3ff586c824562c5cd 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5642,6 +5642,14 @@ impl Window {
+             let bounds = self.snap_bounds(bounds);
+             let content_mask = self.snapped_content_mask();
+             if !draw.is_empty() && !bounds.intersect(&content_mask.bounds).is_empty() {
++                if let Some(producer) = shader.producer.clone() {
++                    let view = self.current_view();
++                    self.on_next_frame(move |_, cx| {
++                        if producer.pending() {
++                            cx.notify(view);
++                        }
++                    });
++                }
+                 self.next_frame.scene.insert_primitive(crate::PaintSurface {
+                     order: 0,
+                     bounds,
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+index f87c98b0ea9b11255869416938f8e2636e290cb9..0211d935b2a40b0a1d9a6802fc94373638613231 100644
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -1,5 +1,6 @@
+ use std::{
+     ops::Range,
++    os::windows::io::{FromRawHandle, OwnedHandle},
+     slice,
+     sync::{Arc, OnceLock},
+ };
+@@ -8,7 +9,7 @@ use anyhow::{Context, Result};
+ use gpui_util::ResultExt;
+ use windows::{
+     Win32::{
+-        Foundation::HWND,
++        Foundation::{HWND, S_FALSE, S_OK, WAIT_TIMEOUT},
+         Graphics::{
+             Direct3D::*,
+             Direct3D11::*,
+@@ -90,6 +91,203 @@ struct GpuViewportPass {
+     instance_buffer: Option<ID3D11Buffer>,
+     instance_capacity: usize,
+     target: Option<GpuViewportTarget>,
++    external: Option<ExternalViewport>,
++    external_failed: bool,
++}
++
++struct ExternalViewport {
++    session: Box<dyn GpuViewportProducerSession>,
++    shared: Option<SharedViewportTexture>,
++}
++
++struct SharedViewportTexture {
++    texture: ID3D11Texture2D,
++    mutex: IDXGIKeyedMutex,
++    copy_done: ID3D11Query,
++    submitted: Option<GpuViewportDraw>,
++    copying: bool,
++}
++
++impl ExternalViewport {
++    fn new(producer: &dyn GpuViewportProducer, devices: &DirectXRendererDevices) -> Result<Self> {
++        // The adapter is retained by the same renderer that owns the D3D11 device.
++        let adapter = unsafe { devices.adapter.GetDesc1() }?;
++        let mut luid = [0; 8];
++        luid[..4].copy_from_slice(&adapter.AdapterLuid.LowPart.to_le_bytes());
++        luid[4..].copy_from_slice(&adapter.AdapterLuid.HighPart.to_le_bytes());
++        let session = producer
++            .create(luid)
++            .map_err(|error| anyhow::anyhow!(error))?;
++        log::info!("GPU viewport: Vulkan matched DXGI LUID {luid:02x?}");
++        Ok(Self {
++            session,
++            shared: None,
++        })
++    }
++
++    fn prepare(
++        &mut self,
++        target: &mut Option<GpuViewportTarget>,
++        size: Size<DevicePixels>,
++        draw: &GpuViewportDraw,
++        devices: &DirectXRendererDevices,
++    ) -> Result<bool> {
++        let GpuViewportDraw::Mesh(instances) = draw else {
++            anyhow::bail!("external viewport requires indexed geometry");
++        };
++        let context = &devices.device_context;
++        let resizing = !target.as_ref().is_some_and(|target| target.size == size);
++        if resizing && let Some(target) = target {
++            target.draw = None;
++        }
++        if let Some(shared) = &mut self.shared {
++            if shared.copying {
++                // GetData's wrapper erases S_FALSE. Poll without flushing or waiting.
++                let status = unsafe {
++                    (context.vtable().GetData)(
++                        context.as_raw(),
++                        shared.copy_done.as_raw(),
++                        std::ptr::null_mut(),
++                        0,
++                        D3D11_ASYNC_GETDATA_DONOTFLUSH.0 as u32,
++                    )
++                };
++                if status == S_FALSE {
++                    return Ok(resizing
++                        || target.as_ref().and_then(|target| target.draw.as_ref()) != Some(draw));
++                }
++                anyhow::ensure!(
++                    status == S_OK,
++                    "D3D11 viewport copy query returned {status:?}"
++                );
++                shared.copying = false;
++            }
++            if shared.submitted.is_some() {
++                if !self
++                    .session
++                    .ready()
++                    .map_err(|error| anyhow::anyhow!(error))?
++                {
++                    return Ok(true);
++                }
++                if !resizing {
++                    let target = target
++                        .as_mut()
++                        .context("missing external viewport target")?;
++                    let view = target
++                        .texture_view
++                        .as_ref()
++                        .context("missing viewport texture view")?;
++                    // The private destination has the same format and extent as the shared image.
++                    let destination = unsafe { view.GetResource() }?;
++                    // AcquireSync's Result wrapper would accept WAIT_TIMEOUT and WAIT_ABANDONED.
++                    let status =
++                        unsafe { (shared.mutex.vtable().AcquireSync)(shared.mutex.as_raw(), 1, 0) };
++                    if status.0 == WAIT_TIMEOUT.0 as i32 {
++                        return Ok(true);
++                    }
++                    anyhow::ensure!(
++                        status == S_OK,
++                        "shared viewport acquire returned {status:?}"
++                    );
++                    unsafe {
++                        context.CopyResource(&destination, &shared.texture);
++                        shared.mutex.ReleaseSync(0)?;
++                        context.End(&shared.copy_done);
++                    }
++                    shared.copying = true;
++                    target.draw = shared.submitted.take();
++                    log::trace!("GPU viewport: composed a Vulkan frame through a D3D11 GPU copy");
++                    return Ok(target.draw.as_ref() != Some(draw));
++                }
++            }
++        }
++        if resizing {
++            let new_target = GpuViewportTarget::new(devices, size, false)?;
++            let shared = SharedViewportTexture::new(devices, size, self.session.as_mut())?;
++            self.shared = Some(shared);
++            *target = Some(new_target);
++        }
++        if target.as_ref().and_then(|target| target.draw.as_ref()) == Some(draw) {
++            return Ok(false);
++        }
++        // A new shared texture starts at key 0. Reuse starts only after the
++        // previous D3D11 copy query has completed and returned ownership at key 0.
++        let submitted =
++            unsafe { self.session.submit(instances) }.map_err(|error| anyhow::anyhow!(error))?;
++        if submitted {
++            self.shared
++                .as_mut()
++                .context("missing shared viewport texture")?
++                .submitted = Some(draw.clone());
++        }
++        Ok(true)
++    }
++}
++
++impl SharedViewportTexture {
++    fn new(
++        devices: &DirectXRendererDevices,
++        size: Size<DevicePixels>,
++        session: &mut dyn GpuViewportProducerSession,
++    ) -> Result<Self> {
++        let width = u32::try_from(size.width.0)?;
++        let height = u32::try_from(size.height.0)?;
++        let descriptor = D3D11_TEXTURE2D_DESC {
++            Width: width,
++            Height: height,
++            MipLevels: 1,
++            ArraySize: 1,
++            Format: RENDER_TARGET_FORMAT,
++            SampleDesc: DXGI_SAMPLE_DESC {
++                Count: 1,
++                Quality: 0,
++            },
++            Usage: D3D11_USAGE_DEFAULT,
++            BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as u32,
++            MiscFlags: (D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
++                .0 as u32,
++            ..Default::default()
++        };
++        let mut texture = None;
++        let mut copy_done = None;
++        // Both outputs are new D3D11 objects on the editor's existing device.
++        unsafe {
++            devices
++                .device
++                .CreateTexture2D(&descriptor, None, Some(&mut texture))?;
++            devices.device.CreateQuery(
++                &D3D11_QUERY_DESC {
++                    Query: D3D11_QUERY_EVENT,
++                    MiscFlags: 0,
++                },
++                Some(&mut copy_done),
++            )?;
++        }
++        let texture = texture.context("shared viewport texture missing")?;
++        let copy_done = copy_done.context("viewport copy query missing")?;
++        let mutex = texture.cast::<IDXGIKeyedMutex>()?;
++        let resource = texture.cast::<IDXGIResource1>()?;
++        // The Vulkan import retains the memory. The application closes its NT handle.
++        unsafe {
++            let handle = resource.CreateSharedHandle(
++                None,
++                (DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE).0,
++                windows::core::PCWSTR::null(),
++            )?;
++            let _owner = OwnedHandle::from_raw_handle(handle.0);
++            session
++                .attach(handle.0 as usize, width, height)
++                .map_err(|error| anyhow::anyhow!(error))?;
++        }
++        Ok(Self {
++            texture,
++            mutex,
++            copy_done,
++            submitted: None,
++            copying: false,
++        })
++    }
+ }
+ 
+ struct GpuViewportTarget {
+@@ -184,6 +382,8 @@ impl GpuViewportPass {
+                 instance_buffer: None,
+                 instance_capacity: 0,
+                 target: None,
++                external: None,
++                external_failed: false,
+             });
+             log::info!(
+                 "GPU viewport: SM4.1 pipeline ready in {:.2?}",
+@@ -195,6 +395,45 @@ impl GpuViewportPass {
+             pass.mesh.is_some() == matches!(draw, GpuViewportDraw::Mesh(_)),
+             "viewport draw does not match shader geometry"
+         );
++        if let Some(producer) = pass
++            .shader
++            .producer
++            .as_ref()
++            .filter(|_| !pass.external_failed)
++        {
++            let result = (|| {
++                if pass.external.is_none() {
++                    pass.external = Some(ExternalViewport::new(producer.as_ref(), devices)?);
++                }
++                let external = pass
++                    .external
++                    .as_mut()
++                    .context("missing external viewport")?;
++                let pending = external.prepare(&mut pass.target, size, draw, devices)?;
++                let status = if pass
++                    .target
++                    .as_ref()
++                    .is_some_and(|target| target.draw.is_some())
++                {
++                    format!("Vulkan · {}", external.session.name())
++                } else {
++                    "Vulkan · waiting for first frame".to_string()
++                };
++                producer.report(status, pending);
++                Ok::<(), anyhow::Error>(())
++            })();
++            match result {
++                Ok(()) => return Ok(()),
++                Err(error) => {
++                    let status = format!("D3D11 fallback · {error:#}");
++                    log::warn!("GPU viewport: {status}");
++                    producer.report(status, false);
++                    pass.external_failed = true;
++                    pass.external = None;
++                    pass.target = None;
++                }
++            }
++        }
+         if !pass
+             .target
+             .as_ref()
+@@ -504,6 +743,7 @@ fn gpu_viewport_reuses_and_resizes_its_target_then_drops_the_pass() -> Result<()
+     let devices = DirectXRendererDevices::new(&DirectXDevices::new()?, true)?;
+     set_rasterizer_state(&devices.device, &devices.device_context)?;
+     let shader = Arc::new(GpuViewportShader {
++        producer: None,
+         source: r#"
+             struct Varying { float4 position : SV_Position; float4 color : TEXCOORD0; };
+             Varying vs(uint id : SV_VertexID, float4 transform : TEXCOORD0, float4 color : TEXCOORD1) {
+@@ -614,6 +854,7 @@ fn gpu_viewport_overlapping_boxes_use_depth_in_either_order() -> Result<()> {
+     "#;
+     let shader = |indices| {
+         Arc::new(GpuViewportShader {
++            producer: None,
+             source: source.into(),
+             vertex_entry: "vs".into(),
+             pixel_entry: "ps".into(),

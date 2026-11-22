@@ -95,7 +95,10 @@ pub(super) fn ResolveGraphicsField(
     Ok(role)
 }
 
-fn AttributeIndex(attribute: &SdslvAttribute, code: &str) -> Result<u32, SdslvDiagnostic> {
+pub(super) fn AttributeIndex(
+    attribute: &SdslvAttribute,
+    code: &str,
+) -> Result<u32, SdslvDiagnostic> {
     if let [SdslvExpression::IntegerLiteral(value)] = attribute.Arguments.as_slice()
         && let Ok(index) = value.trim_end_matches(['u', 'U']).parse()
     {
@@ -145,7 +148,10 @@ fn ResolveGraphicsType(module: &SdslvModule, ty: &SdslvTypeRef) -> (String, Opti
     (name, space)
 }
 
-pub(super) fn ValidateGraphics(module: &SdslvModule) -> Vec<SdslvDiagnostic> {
+pub(super) fn ValidateGraphics(
+    module: &SdslvModule,
+    compute: Option<&super::canonical_compute::ComputeInterface>,
+) -> Vec<SdslvDiagnostic> {
     let mut diagnostics = vec![];
     let mut streams = BTreeMap::new();
     for declaration in &module.Declarations {
@@ -223,14 +229,28 @@ pub(super) fn ValidateGraphics(module: &SdslvModule) -> Vec<SdslvDiagnostic> {
                 continue;
             };
             for parameter in &method.Parameters {
-                let Some(fields) = streams.get(parameter.TypeName.ToDisplayString().as_str())
-                else {
+                let input_name = parameter.TypeName.ToDisplayString();
+                let Some(fields) = streams.get(input_name.as_str()) else {
                     diagnostics.push(SdslvDiagnostic::New(
                         "SDSL-V4104: graphics input must name a stream",
                         method.ReturnTypeSpan,
                     ));
                     continue;
                 };
+                if let Some(compute) = compute {
+                    if compute.Input == input_name {
+                        diagnostics.push(SdslvDiagnostic::New(
+                            "SDSL-V4109: compute input stream is invalid for a graphics stage",
+                            method.ReturnTypeSpan,
+                        ));
+                    }
+                    if compute.ResourceStream.as_deref() == Some(input_name.as_str()) {
+                        diagnostics.push(SdslvDiagnostic::New(
+                            "SDSL-V4104: graphics input cannot name a storage stream",
+                            method.ReturnTypeSpan,
+                        ));
+                    }
+                }
                 for &(field, role) in fields {
                     if let GraphicsFieldRole::Builtin(builtin) = role {
                         ValidateBuiltin(module, field, builtin, stage, &mut diagnostics);
@@ -321,6 +341,8 @@ fn ValidateBuiltin(
         Builtin::VertexId | Builtin::InstanceId => ("u32", "vertex"),
         Builtin::Position => ("float4", "pixel"),
         Builtin::FrontFace => ("bool", "pixel"),
+        Builtin::DispatchId | Builtin::GroupId | Builtin::GroupThreadId => ("uint3", "compute"),
+        Builtin::GroupIndex => ("u32", "compute"),
     };
     if allowed != stage {
         let span = field

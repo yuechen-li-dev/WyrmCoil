@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};
 
 use crate::Engine::{Engine, World};
@@ -246,6 +247,30 @@ pub struct RoomWorld {
     guard: RoomObject,
     patrol: Patrol,
     patrol_tick: u32,
+}
+
+impl RoomWorld {
+    /// Remove authored boxes in one operation. Invalid actions leave the scene untouched.
+    pub fn HideBoxes(&mut self, ids: &[String]) -> Result<(), String> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut hidden = BTreeSet::new();
+        for id in ids {
+            if !hidden.insert(id.as_str())
+                || !self.boxes.iter().any(|object| object.Id.as_ref() == id)
+            {
+                return Err(format!("invalid or duplicate box identity '{id}'"));
+            }
+        }
+        self.boxes = self
+            .boxes
+            .iter()
+            .filter(|object| !hidden.contains(object.Id.as_ref()))
+            .cloned()
+            .collect();
+        Ok(())
+    }
 }
 
 impl World for RoomWorld {

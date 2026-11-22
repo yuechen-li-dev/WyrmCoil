@@ -295,14 +295,19 @@ pub fn ValidateModule(module: &SdslvModule) -> Result<(), Vec<SdslvDiagnostic>> 
 pub(super) fn ValidateForLowering(
     module: &SdslvModule,
 ) -> Result<Validator<'_>, Vec<SdslvDiagnostic>> {
+    let compute = if module.Canonical {
+        super::canonical_compute::ResolveCompute(module).map_err(|error| vec![error])?
+    } else {
+        None
+    };
     if module.Canonical {
-        let mut diagnostics = super::canonical_graphics::ValidateGraphics(module);
+        let mut diagnostics = super::canonical_graphics::ValidateGraphics(module, compute.as_ref());
         diagnostics.extend(ValidateCanonicalBindings(module));
         if !diagnostics.is_empty() {
             return Err(diagnostics);
         }
     }
-    let mut validator = Validator::New(module);
+    let mut validator = Validator::New(module, compute);
     validator.Validate();
     if validator.Diagnostics.is_empty() {
         Ok(validator)
@@ -411,6 +416,10 @@ pub(super) enum TypeRef {
         Element: Box<TypeRef>,
         Length: usize,
     },
+    Storage {
+        Element: super::vdmir::VdMirScalar,
+        Writable: bool,
+    },
     Unknown,
 }
 
@@ -418,7 +427,7 @@ impl TypeRef {
     fn Name(&self) -> Option<&str> {
         match self {
             TypeRef::Named(name) => Some(name.as_str()),
-            TypeRef::Array { .. } => None,
+            TypeRef::Array { .. } | TypeRef::Storage { .. } => None,
             TypeRef::Unknown => None,
         }
     }
@@ -433,6 +442,7 @@ struct FunctionSignature {
 }
 
 pub(super) struct Validator<'a> {
+    pub(super) Compute: Option<super::canonical_compute::ComputeInterface>,
     Module: &'a SdslvModule,
     Diagnostics: Vec<SdslvDiagnostic>,
     TopLevelKinds: HashMap<String, &'static str>,
@@ -449,8 +459,12 @@ pub(super) struct Validator<'a> {
 }
 
 impl<'a> Validator<'a> {
-    fn New(module: &'a SdslvModule) -> Self {
+    fn New(
+        module: &'a SdslvModule,
+        compute: Option<super::canonical_compute::ComputeInterface>,
+    ) -> Self {
         Self {
+            Compute: compute,
             Module: module,
             Diagnostics: vec![],
             TopLevelKinds: HashMap::new(),
@@ -679,9 +693,13 @@ impl<'a> Validator<'a> {
     }
 
     fn ValidateShader(&mut self, shader: &SdslvShaderDecl) {
+        let has_compute = self
+            .Compute
+            .as_ref()
+            .is_some_and(|interface| interface.Shader == shader.Name);
         if self.Module.Canonical
             && (shader.Template.is_some()
-                || shader.Resources.is_some()
+                || (shader.Resources.is_some() && !has_compute)
                 || !shader.MaterialFields.is_empty()
                 || !shader.Workgroups.is_empty()
                 || !shader.StaticAsserts.is_empty())
@@ -1263,6 +1281,20 @@ impl<'a> Validator<'a> {
                     }
                 }
                 SdslvStatement::Assign { Target, Value, .. } => {
+                    if let SdslvExpression::Index { Base, Span, .. } = Target
+                        && matches!(
+                            self.ResolveExpressionType(shader, locals, Base),
+                            TypeRef::Storage {
+                                Writable: false,
+                                ..
+                            }
+                        )
+                    {
+                        self.Diagnostics.push(SdslvDiagnostic::New(
+                            "cannot write to readonly compute storage",
+                            *Span,
+                        ));
+                    }
                     self.CheckExpressionCalls(shader, locals, Target, is_fallible_fn, false);
                     self.CheckExpressionCalls(shader, locals, Value, is_fallible_fn, false);
                     if self.IsFallibleExpression(shader, locals, Target) {
@@ -1639,17 +1671,23 @@ impl<'a> Validator<'a> {
                 }
             }
             SdslvExpression::Index { Base, Index, .. } => {
-                self.CheckExpressionCalls(shader, locals, Base, is_fallible_fn, false);
-                self.CheckExpressionCalls(shader, locals, Index, is_fallible_fn, false);
                 let base_type = self.ResolveExpressionType(shader, locals, Base);
+                let storage = matches!(base_type, TypeRef::Storage { .. });
+                if !storage || !matches!(Base.as_ref(), SdslvExpression::Identifier(_)) {
+                    self.CheckExpressionCalls(shader, locals, Base, is_fallible_fn, false);
+                }
+                self.CheckExpressionCalls(shader, locals, Index, is_fallible_fn, false);
                 let index_type = self.ResolveExpressionType(shader, locals, Index);
-                if !matches!(base_type, TypeRef::Array { .. }) && base_type != TypeRef::Unknown {
+                if !storage
+                    && !matches!(base_type, TypeRef::Array { .. })
+                    && base_type != TypeRef::Unknown
+                {
                     self.Err(&format!(
                         "indexing requires array type; found {}",
                         self.TypeName(&base_type)
                     ));
                 }
-                if !self.IsIntegerType(&index_type) && index_type != TypeRef::Unknown {
+                if !self.IsIntegerType(&index_type) && (storage || index_type != TypeRef::Unknown) {
                     self.Err(&format!(
                         "array index must be integer; found {}",
                         self.TypeName(&index_type)
@@ -1816,6 +1854,14 @@ impl<'a> Validator<'a> {
                 }
                 self.CheckExpressionCalls(shader, locals, ElseValue, is_fallible_fn, false);
             }
+            SdslvExpression::Identifier(_)
+                if matches!(
+                    self.ResolveExpressionType(shader, locals, expression),
+                    TypeRef::Storage { .. }
+                ) =>
+            {
+                self.Err("compute storage must be accessed by element index");
+            }
             _ => {}
         }
     }
@@ -1931,6 +1977,18 @@ impl<'a> Validator<'a> {
                 if let Some(local) = locals.get(name) {
                     return local.clone();
                 }
+                if let Some(interface) = &self.Compute
+                    && interface.Shader == shader.Name
+                    && let Some(binding) = interface
+                        .Bindings
+                        .iter()
+                        .find(|binding| binding.Name == *name)
+                {
+                    return TypeRef::Storage {
+                        Element: binding.Element,
+                        Writable: binding.Writable,
+                    };
+                }
                 if let Some(materials) = self.MaterialFieldsByShader.get(&shader.Name)
                     && let Some(t) = materials.get(name)
                 {
@@ -1983,6 +2041,9 @@ impl<'a> Validator<'a> {
                 }
                 match base_type {
                     TypeRef::Array { Element, .. } => *Element,
+                    TypeRef::Storage { Element, .. } => {
+                        TypeRef::Named(super::canonical_compute::ScalarName(Element).to_string())
+                    }
                     _ => TypeRef::Unknown,
                 }
             }
@@ -2752,10 +2813,11 @@ impl<'a> Validator<'a> {
     }
 
     fn ResolveSwizzleType(base: &str, field: &str) -> Option<String> {
+        let unsigned = base.starts_with("uint");
         let base_dim = match base {
-            "float2" => 2,
-            "float3" => 3,
-            "float4" => 4,
+            "float2" | "uint2" => 2,
+            "float3" | "uint3" => 3,
+            "float4" | "uint4" => 4,
             _ => return None,
         };
         if !field.chars().all(|c| matches!(c, 'x' | 'y' | 'z' | 'w')) {
@@ -2776,6 +2838,8 @@ impl<'a> Validator<'a> {
             return None;
         }
         match field.len() {
+            1 if unsigned => Some("u32".to_string()),
+            2..=4 if unsigned => Some(format!("uint{}", field.len())),
             1 => Some("float".to_string()),
             2..=4 => Some(format!("float{}", field.len())),
             _ => None,
@@ -2808,6 +2872,7 @@ impl<'a> Validator<'a> {
 
     fn IsKnownTypeName(&self, name: &str) -> bool {
         Self::IsBuiltinFlowBoardType(name)
+            || matches!(name, "uint2" | "uint3" | "uint4")
             || name == "string"
             || name == "Error"
             || name == "void"

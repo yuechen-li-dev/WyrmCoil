@@ -1,0 +1,13 @@
+[package]
+name = "wyrmcoil-game"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wyrmcoil-scene = { path = "../Scene" }
+
+[lib]
+path = "mod.rs"

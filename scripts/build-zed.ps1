@@ -42,10 +42,44 @@ if ($head -ne $zed_revision) {
     throw "Expected Zed revision $zed_revision, found $head at $zed_root."
 }
 
-function Apply-ZedPatch([string]$name, [string[]]$paths, [string[]]$previous) {
+$diff_args = @('--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', '--full-index',
+    '--src-prefix=a/', '--dst-prefix=b/', '--diff-algorithm=myers', '--unified=3')
+
+function Get-ZedPatchWithOverlays([string]$base, [string[]]$overlays, [string[]]$paths) {
+    $saved_index = $env:GIT_INDEX_FILE
+    $index_path = Join-Path ([IO.Path]::GetTempPath()) "wyrmcoil-zed-$([Guid]::NewGuid()).index"
+    try {
+        $env:GIT_INDEX_FILE = $index_path
+        Invoke-ZedGit read-tree HEAD
+        Invoke-ZedGit apply --cached $base
+        foreach ($overlay in $overlays) {
+            Invoke-ZedGit apply --cached $overlay
+        }
+        (Invoke-ZedGit diff @diff_args --cached HEAD -- @paths) -join "`n"
+    } finally {
+        $env:GIT_INDEX_FILE = $saved_index
+        if (Test-Path -LiteralPath $index_path) {
+            Remove-Item -LiteralPath $index_path
+        }
+    }
+}
+
+function Apply-ZedPatch([string]$name, [string[]]$paths, [string[]]$previous, [string[]]$overlays) {
     $patch_path = Join-Path $integration_root "patches/$name.patch"
     $expected_patch = (Get-Content -LiteralPath $patch_path) -join "`n"
-    $current_patch = (Invoke-ZedGit diff --no-ext-diff --no-textconv --no-color --no-renames --full-index --src-prefix=a/ --dst-prefix=b/ --diff-algorithm=myers --unified=3 HEAD -- @paths) -join "`n"
+    $current_patch = (Invoke-ZedGit diff @diff_args HEAD -- @paths) -join "`n"
+    $overlay_paths = @($overlays | ForEach-Object { Join-Path $integration_root "patches/$_.patch" })
+    $applied_count = 0
+    if ($current_patch) {
+        for ($count = $overlay_paths.Count; $count -gt 0; $count--) {
+            $prefix = $overlay_paths[0..($count - 1)]
+            if ($current_patch -ceq (Get-ZedPatchWithOverlays $patch_path $prefix $paths)) {
+                $expected_patch = $current_patch
+                $applied_count = $count
+                break
+            }
+        }
+    }
     if (!$current_patch) {
         Invoke-ZedGit apply --check $patch_path
         Invoke-ZedGit apply $patch_path
@@ -70,14 +104,19 @@ function Apply-ZedPatch([string]$name, [string[]]$paths, [string[]]$previous) {
             throw
         }
     }
+    for ($index = $applied_count; $index -lt $overlay_paths.Count; $index++) {
+        $overlay_path = $overlay_paths[$index]
+        Invoke-ZedGit apply --check $overlay_path
+        Invoke-ZedGit apply $overlay_path
+    }
 }
-Apply-ZedPatch 'm0' @('.', ':(exclude)crates/gpui', ':(exclude)crates/gpui_windows')
-Apply-ZedPatch 'm4' @('crates/gpui', 'crates/gpui_windows') @('m3b', 'm3a')
+Apply-ZedPatch 'm0' @('.', ':(exclude)crates/gpui', ':(exclude)crates/gpui_windows') @() @('m6v-workspace', 'm7-workspace', 'm8-workspace')
+Apply-ZedPatch 'm4' @('crates/gpui', 'crates/gpui_windows') @('m3b', 'm3a') @('m6v-gpu', 'm8-gpu')
 
 $crate_path = 'crates/wyrmcoil_view'
 $crate_root = Join-Path $zed_root $crate_path
 New-Item -ItemType Directory -Force -Path (Join-Path $crate_root 'src') | Out-Null
-foreach ($file in 'Cargo.toml', 'src/wyrmcoil_view.rs', 'src/viewport.sdslv', 'src/room.rs', 'src/room.sdslv') {
+foreach ($file in 'Cargo.toml', 'src/wyrmcoil_view.rs', 'src/viewport.sdslv', 'src/room.rs', 'src/room.sdslv', 'src/vulkan.rs', 'src/tactical.rs', 'src/tactical_art.rs', 'src/tactical.sdslv') {
     $source = Join-Path $integration_root "wyrmcoil_view/$file"
     $destination = Join-Path $crate_root $file
     if (!(Test-Path -LiteralPath $destination) -or

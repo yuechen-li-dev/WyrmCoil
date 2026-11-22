@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 pub mod backend;
+pub mod gltf_asset;
 pub mod buffering;
 pub mod buffering_lifecycle;
 pub mod command_plan;

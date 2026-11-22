@@ -58,7 +58,7 @@ pub fn BuildShaderArtifact(
             let stage = match entry.Kind {
                 VdMirEntryKind::Vertex => SdslvShaderStage::Vertex,
                 VdMirEntryKind::Pixel(_) => SdslvShaderStage::Pixel,
-                VdMirEntryKind::Compute => SdslvShaderStage::Compute,
+                VdMirEntryKind::Compute(_) => SdslvShaderStage::Compute,
             };
             SdslvEntryPoint {
                 Name: function.Name.clone(),

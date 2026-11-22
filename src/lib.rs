@@ -6,6 +6,7 @@ pub const ProjectName: fn() -> &'static str = || "WyrmCoil";
 pub mod Demo;
 pub mod Dunewyrm;
 pub mod Engine;
+pub mod GameRuntime;
 pub mod Scene;
 pub mod wyrmfmt;
 

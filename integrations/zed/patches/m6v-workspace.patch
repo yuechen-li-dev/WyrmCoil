@@ -1,0 +1,20 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index fffb8f425092760d5081129192771c6d8718a22b..71de74a9d5f262e6d491a55594ce25dc74a486e1 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -22792,6 +22792,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+ name = "wyrmcoil"
+ version = "0.1.0"
+ dependencies = [
++ "ash",
+  "margaret-core",
+  "serde",
+  "toml 0.8.23",
+@@ -22804,6 +22805,7 @@ name = "wyrmcoil_view"
+ version = "0.1.0"
+ dependencies = [
+  "gpui",
++ "log",
+  "workspace",
+  "wyrmcoil",
+ ]

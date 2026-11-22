@@ -1,0 +1,39 @@
+type ClipPosition = float4 @space(clip.position);
+
+stream Vertex {
+    [location(0)] PositionColor: float4;
+}
+
+stream Instance {
+    [location(1)] ColumnX: float4;
+    [location(2)] ColumnY: float4;
+    [location(3)] ColumnZ: float4;
+    [location(4)] ColumnW: float4;
+    [location(5)] Color: float4;
+}
+
+stream Surface {
+    Position: ClipPosition;
+    [location(0)] Color: float4;
+}
+
+shader Tactical {
+    stage vertex fn VS(input: Vertex, instance: Instance) -> Surface {
+        var local: float4 = input.PositionColor;
+        var position: float4 = instance.ColumnX * local.x + instance.ColumnY * local.y
+                              + instance.ColumnZ * local.z + instance.ColumnW;
+        var packed: u32 = uint(local.w);
+        var red: f32 = float((packed >> 16u) & 255u) / 255.0;
+        var green: f32 = float((packed >> 8u) & 255u) / 255.0;
+        var blue: f32 = float(packed & 255u) / 255.0;
+        return Surface {
+            Position: position;
+            Color: float4(red * instance.Color.x, green * instance.Color.y,
+                          blue * instance.Color.z, instance.Color.w);
+        };
+    }
+
+    stage pixel fn PS(surface: Surface) -> float4 {
+        return surface.Color;
+    }
+}

@@ -7,6 +7,8 @@ license = "MIT"
 [workspace]
 members = [
     ".",
+    "src/Game",
+    "src/Scene",
     "src/Margaret/margaret-core",
     "src/Margaret/margaret-image",
     "src/Margaret/margaret-testutil",
@@ -29,9 +31,17 @@ margaret-cpu = { path = "src/Margaret/margaret-cpu" }
 [dependencies]
 winit = "0.30"
 wgpu = "24"
+gltf = "=1.4.1"
 margaret-core.workspace = true
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+wyrmcoil-game = { path = "src/Game" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+ash = "0.38"
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Security"] }
 
 [lib]
 name = "wyrmcoil"

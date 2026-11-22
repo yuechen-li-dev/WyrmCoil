@@ -2,6 +2,7 @@
 
 pub mod artifact;
 pub mod ast;
+mod canonical_compute;
 mod canonical_graphics;
 pub mod diagnostic;
 pub mod dxc;

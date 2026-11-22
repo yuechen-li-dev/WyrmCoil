@@ -40,6 +40,7 @@ pub enum VdMirItem {
         Variants: Vec<String>,
     },
     LegacyInterface(String),
+    StorageBinding(VdMirStorageBinding),
     Function(VdMirFunction),
     Flow(VdMirFlow),
 }
@@ -57,10 +58,15 @@ pub enum VdMirType {
     Void,
     Scalar(VdMirScalar),
     FloatVector(u8),
+    UintVector(u8),
     Float4x4,
     Array {
         Element: Box<VdMirType>,
         Length: usize,
+    },
+    StorageArray {
+        Element: VdMirScalar,
+        Writable: bool,
     },
     Nominal {
         Space: String,
@@ -119,6 +125,18 @@ pub enum VdMirBuiltin {
     InstanceId,
     Position,
     FrontFace,
+    DispatchId,
+    GroupId,
+    GroupThreadId,
+    GroupIndex,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VdMirStorageBinding {
+    pub Name: String,
+    pub Binding: u32,
+    pub Element: VdMirScalar,
+    pub Writable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,7 +160,7 @@ pub struct VdMirEntry {
 pub enum VdMirEntryKind {
     Vertex,
     Pixel(VdMirPixelOutput),
-    Compute,
+    Compute(Option<[u32; 3]>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

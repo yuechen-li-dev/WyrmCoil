@@ -11,6 +11,8 @@ doctest = false
 
 [dependencies]
 gpui.workspace = true
+log.workspace = true
+project.workspace = true
 workspace.workspace = true
 wyrmcoil = { path = "../../../.." }
 

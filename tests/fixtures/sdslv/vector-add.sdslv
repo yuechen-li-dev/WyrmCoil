@@ -1,0 +1,18 @@
+stream ComputeThread {
+    DispatchId: uint3;
+}
+
+stream ComputeIO {
+    [binding(0)] Left: readonly array<f32>;
+    [binding(1)] Right: readonly array<f32>;
+    [binding(2)] Output: readwrite array<f32>;
+}
+
+shader VectorAdd {
+    resources ComputeIO;
+    stage compute [numthreads(8, 1, 1)] fn CS(thread: ComputeThread) -> void {
+        let index: u32 = thread.DispatchId.x;
+        Output[index] = Left[index] + Right[index];
+        return;
+    }
+}

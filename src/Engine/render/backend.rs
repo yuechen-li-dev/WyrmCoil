@@ -25,8 +25,9 @@ pub mod wgpu {
     pub use crate::Engine::render::wgpu_wgsl_pipeline::*;
 }
 
-pub mod vulkan {
-    //! Future native Vulkan backend seam.
-    //!
-    //! This module intentionally has no implementation in M36.
-}
+#[cfg(target_os = "windows")]
+#[path = "vulkan.rs"]
+pub mod vulkan;
+
+#[cfg(not(target_os = "windows"))]
+pub mod vulkan {}

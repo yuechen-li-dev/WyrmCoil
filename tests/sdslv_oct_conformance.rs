@@ -7,6 +7,7 @@ use wyrmcoil::Engine::shader::sdslv::*;
 const OCT_REVISION: &str = "fa5b4993ca61f79b2ce18d09e9e3bbce88b9b9a0";
 const GRAPHICS: &str = "conformance/graphics";
 const INVALID: &str = "conformance/invalid";
+const VECTOR_ADD: &str = include_str!("fixtures/sdslv/vector-add.sdslv");
 
 fn OctFixtures() -> PathBuf {
     let root = PathBuf::from(std::env::var_os("WYRMCOIL_OCT_ROOT").expect("set WYRMCOIL_OCT_ROOT"));
@@ -96,6 +97,179 @@ fn native_artifact_uses_oct_operator_precedence_and_explicit_pixel_targets() {
             .iter()
             .any(|diagnostic| diagnostic.Message == "unsupported canonical generic call")
     );
+}
+
+#[test]
+fn oct_vector_add_lowers_to_typed_compute_and_storage() {
+    use wyrmcoil::Engine::shader::sdslv::vdmir::*;
+
+    let parsed = ParseCanonicalSource(VECTOR_ADD).unwrap();
+    let mir = LowerToVdMir(&parsed).unwrap();
+    let bindings: Vec<_> = mir
+        .Items()
+        .iter()
+        .filter_map(|item| match item {
+            VdMirItem::StorageBinding(binding) => {
+                Some((binding.Binding, binding.Element, binding.Writable))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        bindings,
+        [
+            (0, VdMirScalar::F32, false),
+            (1, VdMirScalar::F32, false),
+            (2, VdMirScalar::F32, true),
+        ]
+    );
+    let (function, entry) = mir.EntryPoints().next().unwrap();
+    assert_eq!(entry.Kind, VdMirEntryKind::Compute(Some([8, 1, 1])));
+    let VdMirStatement::Assign { Target, Value } = &function.Body[1] else {
+        panic!("expected an indexed storage assignment");
+    };
+    assert_eq!(Target.Type, VdMirType::Scalar(VdMirScalar::F32));
+    assert_eq!(Value.Type, Target.Type);
+
+    let artifact = BuildShaderArtifact("vector-add.sdslv", &parsed).unwrap();
+    let [entry] = artifact.EntryPoints.as_slice() else {
+        panic!("expected one compute entry");
+    };
+    assert_eq!(entry.Name, "VectorAdd_CS");
+    assert_eq!(entry.Stage, SdslvShaderStage::Compute);
+    assert_eq!(entry.TargetProfile, "cs_6_0");
+    for declaration in [
+        "[[vk::binding(2, 0)]]",
+        "RWStructuredBuffer<float> __sdslv_storage_Output : register(u2)",
+        "uint3 DispatchId : SV_DispatchThreadID",
+        "[numthreads(8, 1, 1)]",
+    ] {
+        assert!(artifact.Hlsl.contains(declaration), "missing {declaration}");
+    }
+}
+
+#[test]
+fn canonical_compute_rejects_invalid_storage_and_thread_interfaces() {
+    let cases = [
+        ("[binding(2)]", "[binding(1)]", "duplicate compute storage"),
+        (
+            "Output[index] =",
+            "Left[index] =",
+            "cannot write to readonly compute storage",
+        ),
+        (
+            "Output[index] =",
+            "Output[1.5] =",
+            "array index must be integer",
+        ),
+        (
+            "Output[index] =",
+            "Output[unbound] =",
+            "array index must be integer",
+        ),
+        (
+            "Output[index] =",
+            "Output =",
+            "storage must be accessed by element index",
+        ),
+        (
+            "Left[index] + Right[index]",
+            "true",
+            "array element assignment type mismatch",
+        ),
+        (
+            "numthreads(8, 1, 1)",
+            "numthreads(0, 1, 1)",
+            "invalid compute [numthreads",
+        ),
+        (
+            "numthreads(8, 1, 1)",
+            "numthreads(64, 32, 1)",
+            "invalid compute [numthreads",
+        ),
+        (
+            "DispatchId: uint3",
+            "DispatchId: float3",
+            "requires an unannotated uint3",
+        ),
+        (
+            "resources ComputeIO;",
+            "resources Missing;",
+            "must name a storage stream",
+        ),
+        (
+            "array<f32>",
+            "array<f32, 16>",
+            "compute storage requires array",
+        ),
+    ];
+    for (before, after, expected) in cases {
+        let source = VECTOR_ADD.replacen(before, after, 1);
+        let errors =
+            CompileCanonicalSourceToShaderArtifact("invalid-compute.sdslv", &source).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.Message.contains(expected)),
+            "{after}: {errors:?}"
+        );
+    }
+    let mixed = format!(
+        "{VECTOR_ADD}\nshader Graphics {{ stage pixel fn PS(input: ComputeIO) -> float4 {{ return float4(1.0, 0.0, 0.0, 1.0); }} }}"
+    );
+    let errors = CompileCanonicalSourceToShaderArtifact("mixed.sdslv", &mixed).unwrap_err();
+    assert!(
+        errors.iter().any(|error| error
+            .Message
+            .contains("graphics input cannot name a storage stream")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires Oct fixtures, DXC, and spirv-val"]
+fn oct_storage_compute_validates_with_dxc_and_spirv_tools() {
+    let fixtures = OctFixtures();
+    let oct = ReadFixture(
+        &fixtures,
+        "conformance/compute/ComputeNoRegression.sdslvvalid",
+    );
+    let options = DxcOptions {
+        ExtraArgs: vec!["-fspv-target-env=vulkan1.3".into()],
+        ..Default::default()
+    };
+    for (source, name, count) in [
+        (VECTOR_ADD, "VectorAdd_CS", 3),
+        (oct.as_str(), "ComputeNoRegression_CS", 2),
+    ] {
+        let artifact = CompileCanonicalSourceToShaderArtifact(name, source).unwrap();
+        let spirv = CompileArtifactEntryWithDxc(&artifact, &artifact.EntryPoints[0], &options)
+            .unwrap_or_else(|error| panic!("{error:?}\n{}", artifact.Hlsl));
+        RunSpirvTool(
+            "spirv-val",
+            &["--target-env", "vulkan1.3", "-"],
+            &spirv.OutputBytes,
+        );
+        let ir = RunSpirvTool("spirv-dis", &["--no-header", "-"], &spirv.OutputBytes);
+        assert!(
+            ir.lines()
+                .any(|line| line.contains("OpEntryPoint GLCompute") && line.contains(name)),
+            "{ir}"
+        );
+        assert!(ir.contains("BuiltIn GlobalInvocationId"), "{ir}");
+        assert!(ir.contains("LocalSize 8 1 1"), "{ir}");
+        assert_eq!(
+            ir.lines()
+                .filter(|line| line.ends_with(" DescriptorSet 0"))
+                .count(),
+            count
+        );
+        for binding in 0..count {
+            assert!(
+                ir.lines()
+                    .any(|line| line.ends_with(&format!(" Binding {binding}"))),
+                "{ir}"
+            );
+        }
+    }
 }
 
 #[test]

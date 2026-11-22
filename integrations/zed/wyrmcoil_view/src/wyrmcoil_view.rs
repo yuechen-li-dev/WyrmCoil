@@ -6,18 +6,25 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, AppContext, Bounds, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, MouseButton, ParentElement, Pixels, Point,
-    Render, SharedString, Styled, Subscription, Task, WeakEntity, Window, WindowId, actions,
-    canvas, div, fill, point, px, rgb, size,
+    App, AppContext, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, MouseButton,
+    ParentElement, Pixels, Point, Render, SharedString, Styled, Subscription, Task, WeakEntity,
+    Window, WindowId, actions, canvas, div, fill, point, px, rgb, size,
 };
+use project::trusted_worktrees::TrustedWorktrees;
 use workspace::{Item, MultiWorkspace, Workspace};
 use wyrmcoil::Demo::{DemoWorld, InputEvent};
-use wyrmcoil::Engine::shader::sdslv::{CompileCanonicalSourceToShaderArtifact, SdslvShaderStage};
+use wyrmcoil::Engine::shader::sdslv::{
+    CompileCanonicalSourceToShaderArtifact, SdslvShaderArtifact, SdslvShaderStage,
+};
 use wyrmcoil::Engine::{Engine, EntityId, RenderItem, RenderSnapshot, Vec2};
 use wyrmcoil::Scene::ARTIFACT_PATH;
 
 mod room;
+mod tactical;
+mod tactical_art;
+#[cfg(target_os = "windows")]
+mod vulkan;
 use room::RoomPreview;
 
 const SCENE_SETTLE: Duration = Duration::from_millis(100);
@@ -30,7 +37,13 @@ actions!(
         /// Open the original 2D WyrmCoil Preview tab.
         OpenPlanarPreview,
         /// Mount the compiled scene artifact from the local project.
-        ReloadScene
+        ReloadScene,
+        /// Run the project's last successfully built game.
+        RunGame,
+        /// Stop the game in the current preview.
+        StopGame,
+        /// Start a fresh session from the project's current game artifact.
+        RestartGame
     ]
 );
 
@@ -44,6 +57,25 @@ pub fn Init(cx: &mut App) {
         });
         workspace.register_action(|workspace, _: &ReloadScene, window, cx| {
             Open(workspace, Mode::Room, true, window, cx);
+        });
+        workspace.register_action(|workspace, _: &RunGame, window, cx| {
+            StartGame(workspace, window, cx);
+        });
+        workspace.register_action(|workspace, _: &RestartGame, window, cx| {
+            StartGame(workspace, window, cx);
+        });
+        workspace.register_action(|workspace, _: &StopGame, _, cx| {
+            let preview = workspace
+                .items_of_type::<Preview>(cx)
+                .find(|item| item.read(cx).scene.Mode() == Mode::Room);
+            if let Some(preview) = preview {
+                preview.update(cx, |preview, cx| {
+                    if let Scene::Room(room) = &mut preview.scene {
+                        room.StopGame();
+                        cx.notify();
+                    }
+                });
+            }
         });
     })
     .detach();
@@ -61,7 +93,7 @@ fn Open(
     reload: bool,
     window: &mut Window,
     cx: &mut Context<Workspace>,
-) {
+) -> Entity<Preview> {
     let existing = workspace
         .items_of_type::<Preview>(cx)
         .find(|item| item.read(cx).scene.Mode() == mode);
@@ -80,32 +112,55 @@ fn Open(
                     Some(WatchScene(workspace, workspace_handle, path.clone(), cx));
             }
             if reload && let Scene::Room(room) = &mut preview.scene {
-                if room.Reload(artifact.as_deref().map_err(Clone::clone)) {
-                    cx.notify();
-                }
+                room.UseRoom();
+                room.Reload(artifact.as_deref().map_err(Clone::clone));
+                cx.notify();
             }
         });
     }
     if !created {
         workspace.activate_item(&preview, true, true, window, cx);
     }
+    preview
 }
 
 fn ProjectArtifact(workspace: &Workspace, cx: &App) -> Result<PathBuf, String> {
+    ProjectRoot(workspace, cx).map(|root| root.join(ARTIFACT_PATH))
+}
+
+fn ProjectRoot(workspace: &Workspace, cx: &App) -> Result<PathBuf, String> {
     let mut roots = workspace.visible_worktrees(cx).filter_map(|worktree| {
         let worktree = worktree.read(cx);
         let path = worktree.abs_path();
         (worktree.is_local() && path.is_dir()).then_some(path)
     });
     let Some(root) = roots.next() else {
-        return Err("Open the local game project folder to reload its scene.".into());
+        return Err("Open the local game project folder in Zed.".into());
     };
     if roots.next().is_some() {
-        return Err(
-            "Open the game project in a window with one local folder to reload its scene.".into(),
-        );
+        return Err("Open the game project in a window with one local folder.".into());
     }
-    Ok(root.join(ARTIFACT_PATH))
+    Ok(root.to_path_buf())
+}
+
+fn StartGame(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+    let project = ProjectRoot(workspace, cx).and_then(|root| {
+        let project = workspace.project().read(cx);
+        if !project.is_local()
+            || TrustedWorktrees::has_restricted_worktrees(&project.worktree_store(), cx)
+        {
+            return Err("Game execution requires a trusted local project.".into());
+        }
+        Ok(root)
+    });
+    let preview = Open(workspace, Mode::Room, false, window, cx);
+    preview.update(cx, |preview, cx| {
+        if let Scene::Room(room) = &mut preview.scene {
+            room.StartGame(project.as_deref().map_err(Clone::clone));
+            preview.paused = false;
+            cx.notify();
+        }
+    });
 }
 
 fn WatchScene(
@@ -213,6 +268,13 @@ impl Scene {
         }
     }
 
+    fn CanAdvance(&self) -> bool {
+        match self {
+            Self::Planar { .. } => true,
+            Self::Room(room) => room.CanAdvance(),
+        }
+    }
+
     fn Advance(&mut self, now: Instant) -> bool {
         match self {
             Self::Planar {
@@ -302,13 +364,18 @@ impl Preview {
                     .active_item(cx)
                     .is_some_and(|item| item.item_id() == cx.entity_id())
             });
-        if self.paused || !selected || !window.is_window_active() || !window.is_visible() {
+        if self.paused
+            || !self.scene.CanAdvance()
+            || !selected
+            || !window.is_window_active()
+            || !window.is_visible()
+        {
             self.scene.Suspend();
             return;
         }
 
         if !self.TakesInput(window) || window.modifiers().modified() {
-            self.scene.Input().Cancel();
+            self.CancelInput();
         }
         if self.scene.Advance(Instant::now()) {
             cx.notify();
@@ -330,8 +397,22 @@ impl Preview {
             && self.focus.is_focused(window)
     }
 
+    fn CancelInput(&mut self) {
+        match &mut self.scene {
+            Scene::Room(room) => room.CancelInput(),
+            _ => self.scene.Input().Cancel(),
+        }
+    }
+
     fn Pause(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.TakesInput(window) && !window.modifiers().modified() {
+            if let Scene::Room(room) = &mut self.scene
+                && let Some(tactical) = &mut room.tactical
+            {
+                tactical.Key("escape", false);
+                cx.notify();
+                return;
+            }
             self.paused = true;
             self.ResetTiming(cx);
         }
@@ -339,6 +420,14 @@ impl Preview {
 
     fn KeyDown(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !self.TakesInput(window) || event.keystroke.modifiers.modified() {
+            return;
+        }
+        if let Scene::Room(room) = &mut self.scene
+            && let Some(tactical) = &mut room.tactical
+            && tactical.Key(&event.keystroke.key, event.is_held)
+        {
+            cx.notify();
+            cx.stop_propagation();
             return;
         }
         if event.keystroke.key == "escape" && !event.is_held {
@@ -363,6 +452,10 @@ fn BuildViewportShader() -> Result<gpui::GpuViewportShader, String> {
 fn BuildShader(name: &str, source: &str) -> Result<gpui::GpuViewportShader, String> {
     let artifact = CompileCanonicalSourceToShaderArtifact(name, source)
         .map_err(|errors| format!("{name}: {errors:?}"))?;
+    ViewportShader(&artifact)
+}
+
+fn ViewportShader(artifact: &SdslvShaderArtifact) -> Result<gpui::GpuViewportShader, String> {
     let [vertex, pixel] = artifact.EntryPoints.as_slice() else {
         return Err("expected exactly two viewport shader entries".to_string());
     };
@@ -370,10 +463,12 @@ fn BuildShader(name: &str, source: &str) -> Result<gpui::GpuViewportShader, Stri
         return Err("expected a vertex and pixel pair".to_string());
     }
     Ok(gpui::GpuViewportShader {
-        source: artifact.Hlsl,
+        source: artifact.Hlsl.clone(),
         vertex_entry: vertex.Name.clone(),
         pixel_entry: pixel.Name.clone(),
         mesh: None,
+        #[cfg(target_os = "windows")]
+        producer: None,
     })
 }
 
@@ -537,14 +632,22 @@ impl Focusable for Preview {
 
 impl Render for Preview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.paused && window.is_window_active() && window.is_visible() {
+        if !self.paused
+            && self.scene.CanAdvance()
+            && window.is_window_active()
+            && window.is_visible()
+        {
             self.RequestFrame(window, cx);
         }
 
-        let controls = if self.paused {
+        let controls = if !self.scene.CanAdvance() {
+            "WyrmCoil Preview"
+        } else if self.paused {
             "Paused · click to resume"
         } else if !self.TakesInput(window) {
             "Click to play"
+        } else if matches!(&self.scene, Scene::Room(room) if room.tactical.is_some()) {
+            "Space pause/resume · 1–3 select · left inspect · right order · C clear · H hold · WASD pan · wheel zoom"
         } else if self.scene.Mode() == Mode::Room {
             "WASD walk · arrows look · Esc pauses"
         } else {
@@ -556,7 +659,21 @@ impl Render for Preview {
                 camera,
                 shader,
             } => DrawPlanar(session, *camera, shader.clone(), controls),
-            Scene::Room(room) => room.Draw(controls),
+            Scene::Room(room) => {
+                let preview = cx.weak_entity();
+                room.Draw(controls, move |bounds, cx| {
+                    let Some(preview) = preview.upgrade() else {
+                        return;
+                    };
+                    preview.update(cx, |preview, _| {
+                        if let Scene::Room(room) = &mut preview.scene
+                            && let Some(tactical) = &mut room.tactical
+                        {
+                            tactical.bounds = Some(bounds);
+                        }
+                    });
+                })
+            }
         };
 
         div()
@@ -564,10 +681,47 @@ impl Render for Preview {
             .track_focus(&self.focus)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|preview, _, window, cx| {
+                cx.listener(|preview, event: &gpui::MouseDownEvent, window, cx| {
                     preview.paused = false;
                     window.focus(&preview.focus, cx);
+                    if !event.modifiers.modified()
+                        && let Scene::Room(room) = &mut preview.scene
+                        && let Some(tactical) = &mut room.tactical
+                    {
+                        tactical.Click(event.position, false);
+                    }
                     cx.notify();
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|preview, event: &gpui::MouseDownEvent, window, cx| {
+                    if preview.TakesInput(window)
+                        && !event.modifiers.modified()
+                        && let Scene::Room(room) = &mut preview.scene
+                        && let Some(tactical) = &mut room.tactical
+                        && tactical.Click(event.position, true)
+                    {
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_scroll(
+                cx.listener(|preview, event: &gpui::ScrollEvent, window, cx| {
+                    if preview.TakesInput(window)
+                        && !event.modifiers.modified()
+                        && let Scene::Room(room) = &mut preview.scene
+                        && let Some(tactical) = &mut room.tactical
+                        && tactical
+                            .bounds
+                            .is_some_and(|bounds| bounds.contains(&event.position))
+                    {
+                        let amount = f32::from(event.delta.pixel_delta(px(32.0)).y);
+                        tactical.Zoom((amount * 0.03125).clamp(-3.0, 3.0));
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
                 }),
             )
             .on_key_down(cx.listener(Self::KeyDown))
@@ -575,7 +729,7 @@ impl Render for Preview {
             .on_modifiers_changed(cx.listener(
                 |preview, event: &gpui::ModifiersChangedEvent, _, _| {
                     if event.modifiers.modified() {
-                        preview.scene.Input().Cancel();
+                        preview.CancelInput();
                     }
                 },
             ))

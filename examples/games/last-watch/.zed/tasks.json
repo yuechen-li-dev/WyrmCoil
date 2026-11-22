@@ -1,0 +1,10 @@
+[
+  {
+    "label": "Build Last Watch",
+    "command": "pwsh",
+    "args": ["-NoProfile", "-File", "build.ps1"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  }
+]
