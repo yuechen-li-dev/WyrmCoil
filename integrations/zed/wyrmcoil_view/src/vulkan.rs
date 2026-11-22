@@ -73,10 +73,11 @@ impl GpuViewportProducer for RoomProducer {
         )
         .map_err(|error| error.to_string())?;
         log::info!(
-            "GPU viewport: {} Vulkan/SPIR-V session ready in {:.2?} (shader artifacts {:.2?})",
+            "GPU viewport: {} Vulkan/SPIR-V session ready in {:.2?} (shader artifacts {:.2?}; static mesh buffer allocation and upload {:.2?})",
             room.DeviceName(),
             start.elapsed(),
             shader_time,
+            room.MeshUploadTime(),
         );
         Ok(Box::new(RoomSession {
             room,

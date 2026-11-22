@@ -1,8 +1,9 @@
 #![allow(non_snake_case)]
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use wyrmcoil::Demo::room::{RoomInput, RoomSnapshot};
@@ -160,6 +161,32 @@ fn guardhouse_runs_rebuilds_and_recovers_through_the_host_protocol() {
     );
     Publish(&project);
     let initial_game = fs::read(project.join(GAME_ARTIFACT)).unwrap();
+
+    let output = project.join("target/playtest-failed-assertion");
+    let mut cli = Command::new(env!("CARGO_BIN_EXE_wyrmcoil"))
+        .args(["playtest", "--stdio", "--project"])
+        .arg(&project)
+        .arg("--output")
+        .arg(&output)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    cli.stdin
+        .take()
+        .unwrap()
+        .write_all(b"advance 2\nassert tick 99\n")
+        .unwrap();
+    let result = cli.wait_with_output().unwrap();
+    assert_eq!(result.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("expected 99, observed 2"));
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["final_tick"], 2);
+    assert_eq!(report["assertions"][0]["passed"], false);
+    assert_eq!(report["exit_status"], 1);
+    assert_eq!(CountStaged(&project), 0);
     let mut first = Start(&project);
     let initial = first.Snapshot().unwrap();
     let mut replay = ReplayWin(&mut first);
@@ -276,6 +303,20 @@ fn guardhouse_runs_rebuilds_and_recovers_through_the_host_protocol() {
     assert!(diagnostic.contains("game "), "{diagnostic}");
     drop(crashed);
     WaitForCleanup(&project);
+    let output = project.join("target/playtest-crash");
+    let result = Command::new(env!("CARGO_BIN_EXE_wyrmcoil"))
+        .args(["playtest", "--stdio", "--project"])
+        .arg(&project)
+        .arg("--output")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["exit_status"], 1);
+    assert!(report["first_failure"].as_str().unwrap().contains("game "));
+    assert_eq!(CountStaged(&project), 0, "the CLI waits for child cleanup");
 
     fs::write(
         &main_path,

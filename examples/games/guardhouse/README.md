@@ -22,6 +22,12 @@ Edit `src/game.rs` for proximity, collection and ending rules, and
 rules. The task publishes the executable only after Cargo succeeds.
 A running preview uses its own copy until you run or restart again.
 
+After building, run **Playtest Guardhouse** from the Zed task picker.
+The Rust scenario in `playtest.rs` drives the real executable through
+collection, escape, capture, restart and replay. The task writes
+`target/playtests/report.json`. See the [M9 playtest guide](../../../docs/zed-integration-m9.md)
+for the shell command and Rust authoring API.
+
 To use this as a template, keep a dependency on `wyrmcoil-game`, supply a
 type implementing `Game`, and call `Serve` from the binary's entry
 point. `Start` returns a scene document and an initial observation.

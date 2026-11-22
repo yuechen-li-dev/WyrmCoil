@@ -8,7 +8,7 @@ use wyrmcoil_game::Wire::{Reply, Request};
 pub use wyrmcoil_game::{
     ActorMotion, MAX_TACTICAL_COMMANDS, TacticalActor, TacticalCommand, TacticalOrder, TacticalView,
 };
-pub use wyrmcoil_game::{GAME_ARTIFACT, GameState, Observation};
+pub use wyrmcoil_game::{GAME_ARTIFACT, GameState, Observation, PROTOCOL};
 use wyrmcoil_game::{GameInput, GameTick};
 
 use crate::Demo::room::{RoomInput, RoomSnapshot, RoomWorld, TryNewRoomEngineFromScene};
@@ -41,8 +41,16 @@ pub struct GameSession {
 impl GameSession {
     /// The caller must obtain explicit authorization to execute this local project's code.
     pub fn Start(project: &Path) -> Result<Self, String> {
-        let process = GameProcess::Start(project)?;
-        process.Send(Request::Start)?;
+        Self::StartExecutable(project, &project.join(GAME_ARTIFACT))
+    }
+
+    /// The caller must obtain explicit authorization to execute this local binary.
+    pub fn StartExecutable(project: &Path, executable: &Path) -> Result<Self, String> {
+        let mut process = GameProcess::Start(project, executable)?;
+        if let Err(error) = process.Send(Request::Start) {
+            process.Close();
+            return Err(error);
+        }
         Ok(Self {
             process,
             engine: None,
@@ -78,6 +86,24 @@ impl GameSession {
 
     pub fn Snapshot(&mut self) -> Option<RoomSnapshot> {
         self.engine.as_mut().map(Engine::RenderSnapshot)
+    }
+
+    pub fn ObserveRoom(&self) -> Option<RoomSnapshot> {
+        let engine = self.engine.as_ref()?;
+        Some(
+            engine
+                .World
+                .ExtractRenderSnapshot(engine.Clock().RenderFrame),
+        )
+    }
+
+    pub fn StagedExecutable(&self) -> &Path {
+        self.process.StagedExecutable()
+    }
+
+    /// Wait for the direct child to be reaped before a command-line host exits.
+    pub fn Close(mut self) {
+        self.process.Close();
     }
 
     pub fn Busy(&self) -> bool {

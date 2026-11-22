@@ -2556,9 +2556,12 @@ version = "0.1.0"
 dependencies = [
  "ash",
  "gltf",
+ "image",
  "margaret-core",
  "serde",
+ "serde_json",
  "toml",
+ "urlencoding",
  "wgpu",
  "windows",
  "winit",

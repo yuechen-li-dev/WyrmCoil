@@ -35,3 +35,10 @@ starting room and asset and clip choices. The game executable talks to
 WyrmCoil's SDK over the existing framed process boundary. After the
 integrated editor is built, ordinary game edits need only a game rebuild
 and restart. See [asset credits](ASSET_LICENSES.md) for original downloads.
+
+After building, run **Playtest Last Watch** from the Zed task picker.
+The Rust scenario in `playtest.rs` checks the paused order queue,
+victory, defeat and deterministic replay through the game process.
+The task writes `target/playtests/report.json`. The
+[M9 playtest guide](../../../docs/zed-integration-m9.md) also covers
+running the scenario from the shell and inspecting the KayKit assets.

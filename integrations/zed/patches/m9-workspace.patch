@@ -1,0 +1,17 @@
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -22844,10 +22844,13 @@ name = "wyrmcoil"
+ version = "0.1.0"
+ dependencies = [
+  "ash",
+  "gltf",
++ "image",
+  "margaret-core",
+  "serde",
++ "serde_json",
+  "toml 0.8.23",
++ "urlencoding",
+  "wgpu 24.0.5",
+  "winit",
+  "wyrmcoil-game",

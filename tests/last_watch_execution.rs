@@ -1,5 +1,5 @@
-use std::path::Path;
 use std::time::{Duration, Instant};
+use std::{fs, path::Path, process::Command};
 
 use wyrmcoil::GameRuntime::{GameSession, TacticalCommand, TacticalOrder};
 
@@ -10,7 +10,10 @@ fn last_watch_receives_orders_over_the_real_game_pipe_while_paused() {
     let start = Instant::now();
     let mut game = GameSession::Start(&root).unwrap();
     assert!(game.Poll(Duration::from_secs(3)).unwrap());
-    eprintln!("Last Watch process and initial scene ready in {:.1?}", start.elapsed());
+    eprintln!(
+        "Last Watch process and initial scene ready in {:.1?}",
+        start.elapsed()
+    );
     let first = game.Tactical().unwrap().clone();
     assert_eq!(game.Name(), "the-last-watch");
     assert!(game.TacticalArt().is_some());
@@ -42,10 +45,36 @@ fn last_watch_receives_orders_over_the_real_game_pipe_while_paused() {
         game.Tactical().unwrap().Actors[1].Position,
         first.Actors[1].Position
     );
-    drop(game);
+    game.Close();
     let restart = Instant::now();
     let mut fresh = GameSession::Start(&root).unwrap();
     assert!(fresh.Poll(Duration::from_secs(3)).unwrap());
-    eprintln!("Last Watch process restart ready in {:.1?}", restart.elapsed());
+    eprintln!(
+        "Last Watch process restart ready in {:.1?}",
+        restart.elapsed()
+    );
     assert_eq!(fresh.Tactical().unwrap(), &first);
+    fresh.Close();
+
+    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/last-watch-execution");
+    let result = Command::new(env!("CARGO_BIN_EXE_wyrmcoil"))
+        .args(["playtest", "--scenario", "last-watch", "--project"])
+        .arg(&root)
+        .arg("--output")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["sessions_started"], 5);
+    assert_eq!(report["final_observation"]["view"]["State"], "Lost");
+    assert!(report["first_divergence"].is_null());
+    for replay in report["replays"].as_array().unwrap() {
+        assert_eq!(replay["matched"], replay["requests"]);
+    }
 }

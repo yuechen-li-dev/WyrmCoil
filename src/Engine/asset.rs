@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+pub mod gltf;
+
 use crate::Dunewyrm::SelectHighestUtilityTargetWithReport;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

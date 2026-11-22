@@ -6,5 +6,12 @@
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false
+  },
+  {
+    "label": "Playtest Last Watch",
+    "command": "cargo",
+    "args": ["run", "--locked", "--manifest-path", "../../../Cargo.toml", "--bin", "wyrmcoil", "--", "playtest", "--project", ".", "--scenario", "last-watch", "--output", "target/playtests"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "allow_concurrent_runs": false
   }
 ]

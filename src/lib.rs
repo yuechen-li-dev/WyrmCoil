@@ -7,6 +7,7 @@ pub mod Demo;
 pub mod Dunewyrm;
 pub mod Engine;
 pub mod GameRuntime;
+pub mod Playtest;
 pub mod Scene;
 pub mod wyrmfmt;
 

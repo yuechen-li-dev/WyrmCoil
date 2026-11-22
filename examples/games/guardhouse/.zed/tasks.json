@@ -6,5 +6,12 @@
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false
+  },
+  {
+    "label": "Playtest Guardhouse",
+    "command": "cargo",
+    "args": ["run", "--locked", "--manifest-path", "../../../Cargo.toml", "--bin", "wyrmcoil", "--", "playtest", "--project", ".", "--scenario", "guardhouse", "--output", "target/playtests"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "allow_concurrent_runs": false
   }
 ]

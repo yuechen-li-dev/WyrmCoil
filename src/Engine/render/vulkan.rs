@@ -5,6 +5,7 @@ use ash::{Entry, vk};
 use std::ffi::CStr;
 use std::io::Cursor;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 #[path = "vulkan_tests.rs"]
@@ -413,6 +414,7 @@ pub struct VulkanRoom {
     in_flight: bool,
     index_count: u32,
     floor_indices: u32,
+    mesh_upload_time: Duration,
 }
 
 impl VulkanRoom {
@@ -437,6 +439,7 @@ impl VulkanRoom {
             return Err("Invalid Vulkan room mesh".into());
         }
         let device = Device::New(luid)?;
+        let upload_started = Instant::now();
         let vertices = Buffer::New(
             &device,
             std::mem::size_of_val(mesh),
@@ -449,6 +452,7 @@ impl VulkanRoom {
             vk::BufferUsageFlags::INDEX_BUFFER,
         )?;
         index_buffer.Upload(indices)?;
+        let mesh_upload_time = upload_started.elapsed();
         let instances = Buffer::New(
             &device,
             MAX_INSTANCES * size_of::<VulkanRoomInstance>(),
@@ -468,6 +472,7 @@ impl VulkanRoom {
             in_flight: false,
             index_count,
             floor_indices,
+            mesh_upload_time,
         };
         // All handles are owned immediately and partial construction is droppable.
         unsafe {
@@ -502,6 +507,10 @@ impl VulkanRoom {
 
     pub fn DeviceName(&self) -> &str {
         &self.device.name
+    }
+
+    pub fn MeshUploadTime(&self) -> Duration {
+        self.mesh_upload_time
     }
 
     /// The host retains a valid single-mip, single-sample BGRA8 texture and
@@ -565,8 +574,12 @@ impl VulkanRoom {
         if !ranges.is_empty()
             && (ranges.len() != instances.len()
                 || ranges.iter().any(|&[start, count, base]| {
-                    count == 0 || !count.is_multiple_of(3) || base > i32::MAX as u32
-                        || !start.checked_add(count).is_some_and(|end| end <= self.index_count)
+                    count == 0
+                        || !count.is_multiple_of(3)
+                        || base > i32::MAX as u32
+                        || !start
+                            .checked_add(count)
+                            .is_some_and(|end| end <= self.index_count)
                 }))
         {
             return Err("Invalid Vulkan mesh draw ranges".into());
@@ -855,7 +868,12 @@ fn RecordRoom(room: &VulkanRoom, target: &Targets, count: u32, ranges: &[[u32; 3
                     end += 1;
                 }
                 device.cmd_draw_indexed(
-                    command, count, (end - first) as u32, start, base as i32, first as u32,
+                    command,
+                    count,
+                    (end - first) as u32,
+                    start,
+                    base as i32,
+                    first as u32,
                 );
                 first = end;
             }

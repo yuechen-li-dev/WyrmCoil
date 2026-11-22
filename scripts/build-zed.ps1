@@ -110,7 +110,7 @@ function Apply-ZedPatch([string]$name, [string[]]$paths, [string[]]$previous, [s
         Invoke-ZedGit apply $overlay_path
     }
 }
-Apply-ZedPatch 'm0' @('.', ':(exclude)crates/gpui', ':(exclude)crates/gpui_windows') @() @('m6v-workspace', 'm7-workspace', 'm8-workspace')
+Apply-ZedPatch 'm0' @('.', ':(exclude)crates/gpui', ':(exclude)crates/gpui_windows') @() @('m6v-workspace', 'm7-workspace', 'm8-workspace', 'm9-workspace')
 Apply-ZedPatch 'm4' @('crates/gpui', 'crates/gpui_windows') @('m3b', 'm3a') @('m6v-gpu', 'm8-gpu')
 
 $crate_path = 'crates/wyrmcoil_view'

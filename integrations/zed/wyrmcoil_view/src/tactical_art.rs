@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{GpuViewportMesh, GpuViewportMeshInstance, GpuViewportShader};
 use wyrmcoil::Demo::room::{RoomCube, RoomMatrix};
-use wyrmcoil::Engine::render::gltf_asset::{MeshAsset, MeshAtlas, PackColor, ReadClips};
+use wyrmcoil::Engine::asset::gltf::{AssetLibrary, MeshAtlas, PackColor, PaletteMesh};
 use wyrmcoil::Engine::shader::sdslv::CompileCanonicalSourceToShaderArtifact;
 use wyrmcoil::GameRuntime::{ActorMotion, TacticalArt, TacticalOrder, TacticalView};
 
@@ -30,7 +30,8 @@ impl TacticalGraphics {
         if art.Actors.len() > 32 || art.Props.len() > 128 {
             return Err("tactical art exceeds the viewport instance budget".into());
         }
-        let root = root.join("assets");
+        let mut library = AssetLibrary::New(&root.join("assets"))?;
+        let mut palette_time = std::time::Duration::ZERO;
         let mut atlas = MeshAtlas::default();
         let mut props = Vec::new();
         let mut static_ranges = BTreeMap::new();
@@ -48,7 +49,10 @@ impl TacticalGraphics {
             let range = if let Some(&cached) = static_ranges.get(&prop.Mesh) {
                 cached
             } else {
-                let mesh = MeshAsset::Read(&AssetPath(&root, &prop.Mesh)?)?;
+                let asset = library.Load(Path::new(&prop.Mesh))?;
+                let prepared = Instant::now();
+                let mesh = PaletteMesh::New(asset)?;
+                palette_time += prepared.elapsed();
                 let range = mesh.AppendPose(&mut atlas, None, 0.0)?;
                 static_ranges.insert(prop.Mesh.clone(), range);
                 range
@@ -67,7 +71,7 @@ impl TacticalGraphics {
         let mut clips = BTreeMap::new();
         for (file, selected) in clip_files {
             let names: Vec<_> = selected.into_iter().collect();
-            clips.insert(file, ReadClips(&AssetPath(&root, file)?, &names)?);
+            clips.insert(file, library.LoadClips(Path::new(file), &names)?);
         }
         let mut meshes = BTreeMap::new();
         let mut equipment = BTreeMap::new();
@@ -76,17 +80,22 @@ impl TacticalGraphics {
         for actor in &art.Actors {
             let mesh_key = (actor.Mesh.as_str(), actor.Equipment.as_slice());
             if !meshes.contains_key(&mesh_key) {
-                let mut mesh = MeshAsset::Read(&AssetPath(&root, &actor.Mesh)?)?;
-                if mesh.SkinCount() == 0 {
+                let asset = library.Load(Path::new(&actor.Mesh))?;
+                if asset.Skins.is_empty() {
                     return Err(format!("{} is missing its character skin", actor.Mesh));
                 }
+                let prepared = Instant::now();
+                let mut mesh = PaletteMesh::New(asset)?;
+                palette_time += prepared.elapsed();
                 if actor.Equipment.len() > 4 {
                     return Err("too many attachments on a tactical actor".into());
                 }
                 for attachment in &actor.Equipment {
                     if !equipment.contains_key(&attachment.Mesh) {
-                        let asset = MeshAsset::Read(&AssetPath(&root, &attachment.Mesh)?)?;
-                        equipment.insert(attachment.Mesh.clone(), asset);
+                        let asset = library.Load(Path::new(&attachment.Mesh))?;
+                        let prepared = Instant::now();
+                        equipment.insert(attachment.Mesh.clone(), PaletteMesh::New(asset)?);
+                        palette_time += prepared.elapsed();
                     }
                     mesh.Attach(&attachment.Socket, &equipment[&attachment.Mesh])?;
                 }
@@ -100,7 +109,7 @@ impl TacticalGraphics {
                     poses.push(Clone::clone(cached));
                     continue;
                 }
-                let clip = &clips[requested.File.as_str()][&requested.Name];
+                let clip = &clips[requested.File.as_str()].Clips[&requested.Name];
                 let samples = ((clip.Duration * POSE_HZ).ceil() as usize).clamp(1, 47) + 1;
                 let mut ranges = Vec::with_capacity(samples);
                 for index in 0..samples {
@@ -128,6 +137,12 @@ impl TacticalGraphics {
             .values()
             .map(|pose: &PoseRanges| pose.ranges.len())
             .sum();
+        log::info!(
+            "Tactical asset timings: {:?}; palette {:.2?}; poses {:?}",
+            library.Timings(),
+            palette_time,
+            atlas.Timings
+        );
         let artifact = CompileCanonicalSourceToShaderArtifact(
             "tactical.sdslv",
             include_str!("tactical.sdslv"),
@@ -150,7 +165,7 @@ impl TacticalGraphics {
         log::info!(
             "Tactical art: {} meshes, {} clips, {total_poses} cached poses, {vertex_bytes} vertex bytes, {index_bytes} index bytes, prepared in {:.2?}",
             static_ranges.len() + meshes.len() + equipment.len(),
-            clips.values().map(BTreeMap::len).sum::<usize>(),
+            clips.values().map(|clips| clips.Clips.len()).sum::<usize>(),
             started.elapsed()
         );
         Ok(Self {
@@ -246,28 +261,4 @@ impl PoseRanges {
         let index = ticks as usize * (self.ranges.len() - 1) / self.clip_ticks as usize;
         self.ranges[index]
     }
-}
-
-fn AssetPath(root: &Path, name: &str) -> Result<std::path::PathBuf, String> {
-    let path = Path::new(name);
-    if path.as_os_str().is_empty()
-        || !path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
-    {
-        return Err(format!("invalid project asset path '{name}'"));
-    }
-    let root = root
-        .canonicalize()
-        .map_err(|error| format!("open assets: {error}"))?;
-    let path = root
-        .join(path)
-        .canonicalize()
-        .map_err(|error| format!("open asset '{name}': {error}"))?;
-    if !path.starts_with(root) {
-        return Err(format!(
-            "asset is outside the project assets folder: '{name}'"
-        ));
-    }
-    Ok(path)
 }

@@ -6,7 +6,6 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use wyrmcoil_game::GAME_ARTIFACT;
 use wyrmcoil_game::Wire::{ReadFrame, Reply, Request, WriteFrame};
 
 pub(super) struct GameProcess {
@@ -24,8 +23,7 @@ struct SessionFiles {
 }
 
 impl SessionFiles {
-    fn Stage(project: &Path) -> Result<Self, String> {
-        let artifact = project.join(GAME_ARTIFACT);
+    fn Stage(project: &Path, artifact: &Path) -> Result<Self, String> {
         if !artifact.is_file() {
             return Err(format!(
                 "Build the game first. Missing {}",
@@ -36,16 +34,16 @@ impl SessionFiles {
             .duration_since(UNIX_EPOCH)
             .map_err(|error| error.to_string())?
             .as_nanos();
-        let directory = project
-            .join("target")
-            .join(format!("wyrmcoil-run-{}-{nonce}", std::process::id()));
+        let target = project.join("target");
+        fs::create_dir_all(&target).map_err(|error| format!("stage game: {error}"))?;
+        let directory = target.join(format!("wyrmcoil-run-{}-{nonce}", std::process::id()));
         fs::create_dir(&directory).map_err(|error| format!("stage game: {error}"))?;
         let files = Self {
             binary: directory.join(artifact.file_name().ok_or("missing game binary name")?),
             stderr: directory.join("stderr.log"),
             directory,
         };
-        fs::copy(&artifact, &files.binary)
+        fs::copy(artifact, &files.binary)
             .map_err(|error| format!("copy game session executable: {error}"))?;
         Ok(files)
     }
@@ -71,11 +69,11 @@ impl Drop for SessionFiles {
 }
 
 impl GameProcess {
-    pub fn Start(project: &Path) -> Result<Self, String> {
+    pub fn Start(project: &Path, artifact: &Path) -> Result<Self, String> {
         let project = project
             .canonicalize()
             .map_err(|error| format!("open game project: {error}"))?;
-        let files = SessionFiles::Stage(&project)?;
+        let files = SessionFiles::Stage(&project, artifact)?;
         let stderr = File::create(&files.stderr)
             .map_err(|error| format!("open game diagnostics: {error}"))?;
         let mut command = Command::new(&files.binary);
@@ -136,6 +134,17 @@ impl GameProcess {
         self.child.as_ref().expect("live process").id()
     }
 
+    pub fn StagedExecutable(&self) -> &Path {
+        &self.files.as_ref().expect("live process files").binary
+    }
+
+    pub fn Close(&mut self) {
+        drop(self.requests.take());
+        if let (Some(child), Some(files)) = (self.child.take(), self.files.take()) {
+            Reap(child, files);
+        }
+    }
+
     pub fn Send(&self, request: Request) -> Result<(), String> {
         self.requests
             .as_ref()
@@ -174,22 +183,24 @@ impl Drop for GameProcess {
         // EOF gives a responsive guest a chance to drop its state. Reap a
         // stalled guest off the editor thread, even when its pipe is blocked.
         drop(self.requests.take());
-        if let (Some(mut child), Some(files)) = (self.child.take(), self.files.take()) {
-            thread::spawn(move || {
-                let deadline = Instant::now() + Duration::from_millis(150);
-                loop {
-                    if matches!(child.try_wait(), Ok(Some(_))) {
-                        break;
-                    }
-                    if Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(5));
-                }
-                drop(files);
-            });
+        if let (Some(child), Some(files)) = (self.child.take(), self.files.take()) {
+            thread::spawn(move || Reap(child, files));
         }
     }
+}
+
+fn Reap(mut child: Child, files: SessionFiles) {
+    let deadline = Instant::now() + Duration::from_millis(150);
+    loop {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    drop(files);
 }
