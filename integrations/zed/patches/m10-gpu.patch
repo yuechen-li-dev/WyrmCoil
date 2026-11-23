@@ -1,0 +1,87 @@
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index 5b25892..2a9034d 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -1092,6 +1092,10 @@ pub trait GpuViewportProducer: std::fmt::Debug + Send + Sync {
+ pub trait GpuViewportProducerSession {
+     /// Display name for the active backend and device.
+     fn name(&self) -> &str;
++    /// Version of producer-owned draw data outside the mesh instances.
++    fn revision(&self) -> u64 {
++        0
++    }
+     /// Polls completion of the last submission without waiting.
+     fn ready(&self) -> Result<bool, String>;
+     /// Imports a single-mip BGRA8 UNORM texture with NT and keyed sharing.
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+index 57137a8..b656b22 100644
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -104,7 +104,8 @@ struct SharedViewportTexture {
+     texture: ID3D11Texture2D,
+     mutex: IDXGIKeyedMutex,
+     copy_done: ID3D11Query,
+-    submitted: Option<GpuViewportDraw>,
++    submitted: Option<(GpuViewportDraw, u64)>,
++    presented_revision: u64,
+     copying: bool,
+ }
+ 
+@@ -136,6 +137,7 @@ impl ExternalViewport {
+             anyhow::bail!("external viewport requires indexed geometry");
+         };
+         let context = &devices.device_context;
++        let revision = self.session.revision();
+         let resizing = !target.as_ref().is_some_and(|target| target.size == size);
+         if resizing && let Some(target) = target {
+             target.draw = None;
+@@ -154,6 +156,7 @@ impl ExternalViewport {
+                 };
+                 if status == S_FALSE {
+                     return Ok(resizing
++                        || shared.presented_revision != revision
+                         || target.as_ref().and_then(|target| target.draw.as_ref()) != Some(draw));
+                 }
+                 anyhow::ensure!(
+@@ -196,9 +199,11 @@ impl ExternalViewport {
+                         context.End(&shared.copy_done);
+                     }
+                     shared.copying = true;
+-                    target.draw = shared.submitted.take();
++                    let (submitted, version) = shared.submitted.take().unwrap();
++                    target.draw = Some(submitted);
++                    shared.presented_revision = version;
+                     log::trace!("GPU viewport: composed a Vulkan frame through a D3D11 GPU copy");
+-                    return Ok(target.draw.as_ref() != Some(draw));
++                    return Ok(version != revision || target.draw.as_ref() != Some(draw));
+                 }
+             }
+         }
+@@ -208,7 +213,9 @@ impl ExternalViewport {
+             self.shared = Some(shared);
+             *target = Some(new_target);
+         }
+-        if target.as_ref().and_then(|target| target.draw.as_ref()) == Some(draw) {
++        if target.as_ref().and_then(|target| target.draw.as_ref()) == Some(draw)
++            && self.shared.as_ref().is_some_and(|shared| shared.presented_revision == revision)
++        {
+             return Ok(false);
+         }
+         // A new shared texture starts at key 0. Reuse starts only after the
+@@ -219,7 +226,7 @@ impl ExternalViewport {
+             self.shared
+                 .as_mut()
+                 .context("missing shared viewport texture")?
+-                .submitted = Some(draw.clone());
++                .submitted = Some((draw.clone(), revision));
+         }
+         Ok(true)
+     }
+@@ -285,6 +292,7 @@ impl SharedViewportTexture {
+             mutex,
+             copy_done,
+             submitted: None,
++            presented_revision: 0,
+             copying: false,
+         })
+     }

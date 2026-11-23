@@ -16,6 +16,9 @@ use windows::core::{Interface, PCWSTR};
 
 use super::{Buffer, Device, VulkanRoom, VulkanRoomInstance, vk};
 
+#[path = "vulkan_skin_tests.rs"]
+mod skin_tests;
+
 #[test]
 #[ignore = "requires Windows D3D11/Vulkan external memory and DXC"]
 fn room_renders_and_dispatches_compute_on_the_same_vulkan_device() {

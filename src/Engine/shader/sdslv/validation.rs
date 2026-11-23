@@ -308,6 +308,11 @@ pub(super) fn ValidateForLowering(
         }
     }
     let mut validator = Validator::New(module, compute);
+    if module.Canonical {
+        validator.GraphicsStorage =
+            super::canonical_compute::ResolveGraphicsStorage(module, validator.Compute.is_some())
+                .map_err(|error| vec![error])?;
+    }
     validator.Validate();
     if validator.Diagnostics.is_empty() {
         Ok(validator)
@@ -417,7 +422,7 @@ pub(super) enum TypeRef {
         Length: usize,
     },
     Storage {
-        Element: super::vdmir::VdMirScalar,
+        Element: super::vdmir::VdMirStorageElement,
         Writable: bool,
     },
     Unknown,
@@ -443,6 +448,7 @@ struct FunctionSignature {
 
 pub(super) struct Validator<'a> {
     pub(super) Compute: Option<super::canonical_compute::ComputeInterface>,
+    pub(super) GraphicsStorage: Option<(String, Vec<super::vdmir::VdMirStorageBinding>)>,
     Module: &'a SdslvModule,
     Diagnostics: Vec<SdslvDiagnostic>,
     TopLevelKinds: HashMap<String, &'static str>,
@@ -465,6 +471,7 @@ impl<'a> Validator<'a> {
     ) -> Self {
         Self {
             Compute: compute,
+            GraphicsStorage: None,
             Module: module,
             Diagnostics: vec![],
             TopLevelKinds: HashMap::new(),
@@ -693,13 +700,9 @@ impl<'a> Validator<'a> {
     }
 
     fn ValidateShader(&mut self, shader: &SdslvShaderDecl) {
-        let has_compute = self
-            .Compute
-            .as_ref()
-            .is_some_and(|interface| interface.Shader == shader.Name);
         if self.Module.Canonical
             && (shader.Template.is_some()
-                || (shader.Resources.is_some() && !has_compute)
+                || (shader.Resources.is_some() && self.StorageBindings(&shader.Name).is_none())
                 || !shader.MaterialFields.is_empty()
                 || !shader.Workgroups.is_empty()
                 || !shader.StaticAsserts.is_empty())
@@ -713,6 +716,19 @@ impl<'a> Validator<'a> {
         self.ValidateShaderDuplicates(shader);
         self.ValidateStages(shader);
         self.ValidateImplementsAndOverrides(shader);
+    }
+
+    pub(super) fn StorageBindings(
+        &self,
+        shader: &str,
+    ) -> Option<&[super::vdmir::VdMirStorageBinding]> {
+        if let Some(compute) = &self.Compute
+            && compute.Shader == shader
+        {
+            return Some(&compute.Bindings);
+        }
+        let (name, bindings) = self.GraphicsStorage.as_ref()?;
+        (name == shader).then_some(bindings)
     }
 
     fn ValidateEnum(&mut self, enum_decl: &SdslvEnumDecl) {
@@ -1977,12 +1993,8 @@ impl<'a> Validator<'a> {
                 if let Some(local) = locals.get(name) {
                     return local.clone();
                 }
-                if let Some(interface) = &self.Compute
-                    && interface.Shader == shader.Name
-                    && let Some(binding) = interface
-                        .Bindings
-                        .iter()
-                        .find(|binding| binding.Name == *name)
+                if let Some(bindings) = self.StorageBindings(&shader.Name)
+                    && let Some(binding) = bindings.iter().find(|binding| binding.Name == *name)
                 {
                     return TypeRef::Storage {
                         Element: binding.Element,
@@ -2041,9 +2053,9 @@ impl<'a> Validator<'a> {
                 }
                 match base_type {
                     TypeRef::Array { Element, .. } => *Element,
-                    TypeRef::Storage { Element, .. } => {
-                        TypeRef::Named(super::canonical_compute::ScalarName(Element).to_string())
-                    }
+                    TypeRef::Storage { Element, .. } => TypeRef::Named(
+                        super::canonical_compute::StorageElementName(Element).to_string(),
+                    ),
                     _ => TypeRef::Unknown,
                 }
             }

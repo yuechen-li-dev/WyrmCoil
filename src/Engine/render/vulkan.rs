@@ -1,11 +1,16 @@
 //! Native Windows Vulkan room rendering. The host supplies an NT texture handle
 //! and consumes the completed image using the keyed mutex.
 
+use crate::Engine::asset::gltf::SkinVertex;
 use ash::{Entry, vk};
 use std::ffi::CStr;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+#[path = "vulkan_skin.rs"]
+mod skin;
+use skin::{DrawTimings, SkinPass};
 
 #[cfg(test)]
 #[path = "vulkan_tests.rs"]
@@ -43,6 +48,9 @@ struct Device {
     queue: vk::Queue,
     family: u32,
     max_size: vk::Extent2D,
+    max_storage: usize,
+    timestamp_bits: u32,
+    timestamp_period: f32,
     name: String,
 }
 
@@ -109,8 +117,8 @@ impl Device {
             if dynamic.dynamic_rendering == 0 {
                 return Err(format!("{name} does not support dynamic rendering"));
             }
-            let family = raw
-                .get_physical_device_queue_family_properties(physical)
+            let families = raw.get_physical_device_queue_family_properties(physical);
+            let family = families
                 .iter()
                 .position(|family| {
                     family.queue_count > 0
@@ -162,6 +170,7 @@ impl Device {
             )?;
             let queue = device.get_device_queue(family, 0);
             let memory = raw.get_physical_device_memory_properties(physical);
+            let caps = raw.get_physical_device_properties(physical).limits;
             let max_size = vk::Extent2D {
                 width: limits.max_extent.width,
                 height: limits.max_extent.height,
@@ -173,6 +182,9 @@ impl Device {
                 queue,
                 family,
                 max_size,
+                max_storage: caps.max_storage_buffer_range as usize,
+                timestamp_bits: families[family as usize].timestamp_valid_bits,
+                timestamp_period: caps.timestamp_period,
                 name,
             }))
         }
@@ -302,6 +314,17 @@ impl Image {
         } else {
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
         };
+        Self::Allocate(device, size, format, aspect, usage, external_handle)
+    }
+
+    fn Allocate(
+        device: &Arc<Device>,
+        size: vk::Extent2D,
+        format: vk::Format,
+        aspect: vk::ImageAspectFlags,
+        usage: vk::ImageUsageFlags,
+        external_handle: Option<usize>,
+    ) -> Result<Self> {
         let mut image = Self {
             device: device.clone(),
             raw: vk::Image::null(),
@@ -323,7 +346,7 @@ impl Image {
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
             .usage(usage);
-        if color {
+        if external_handle.is_some() {
             info = info.push_next(&mut external);
         }
 
@@ -415,6 +438,8 @@ pub struct VulkanRoom {
     index_count: u32,
     floor_indices: u32,
     mesh_upload_time: Duration,
+    skin: Option<SkinPass>,
+    timing: Option<DrawTimings>,
 }
 
 impl VulkanRoom {
@@ -473,6 +498,8 @@ impl VulkanRoom {
             index_count,
             floor_indices,
             mesh_upload_time,
+            skin: None,
+            timing: None,
         };
         // All handles are owned immediately and partial construction is droppable.
         unsafe {
@@ -500,7 +527,7 @@ impl VulkanRoom {
                 "Create room pipeline layout",
                 raw.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default(), None),
             )?;
-            room.pipeline = CreatePipeline(raw, room.layout, vertex, pixel)?;
+            room.pipeline = CreatePipeline(raw, room.layout, vertex, pixel, false, COLOR)?;
         }
         Ok(room)
     }
@@ -511,6 +538,48 @@ impl VulkanRoom {
 
     pub fn MeshUploadTime(&self) -> Duration {
         self.mesh_upload_time
+    }
+
+    pub fn SkinUploadStats(&self) -> (u64, Duration) {
+        self.skin
+            .as_ref()
+            .map_or((0, Duration::ZERO), |skin| (skin.uploads, skin.upload_time))
+    }
+
+    pub fn EnableDrawTimings(&mut self) -> Result<()> {
+        if self.timing.is_none() && !self.in_flight {
+            self.timing = DrawTimings::New(&self.device)?;
+        }
+        Ok(())
+    }
+
+    /// Completed observations only. Retirement may still have a frame outstanding.
+    pub fn DrawTimingStats(&self) -> Option<(u64, Duration, u64, Duration)> {
+        self.timing.as_ref().map(|timing| timing.Stats())
+    }
+
+    /// Attach one immutable skinned mesh before the viewport's first frame.
+    pub fn ConfigureSkin(
+        &mut self,
+        vertices: &[SkinVertex],
+        indices: &[u16],
+        slots: usize,
+        vertex: (&[u8], &CStr),
+        pixel: (&[u8], &CStr),
+    ) -> Result<()> {
+        if self.skin.is_some() || self.in_flight {
+            return Err("Vulkan skin must be configured once before submitting frames".into());
+        }
+        self.skin = Some(SkinPass::New(
+            &self.device,
+            vertices,
+            indices,
+            slots,
+            vertex,
+            pixel,
+            COLOR,
+        )?);
+        Ok(())
     }
 
     /// The host retains a valid single-mip, single-sample BGRA8 texture and
@@ -568,11 +637,41 @@ impl VulkanRoom {
         instances: &[VulkanRoomInstance],
         ranges: &[[u32; 3]],
     ) -> Result<bool> {
+        unsafe { self.SubmitFrame(instances, ranges, None) }
+    }
+
+    /// # Safety
+    /// The keyed-mutex and range contracts of SubmitRanges apply. The skin
+    /// uses the specified instance transform and the configured bind mesh.
+    pub unsafe fn SubmitSkin(
+        &mut self,
+        instances: &[VulkanRoomInstance],
+        ranges: &[[u32; 3]],
+        instance: usize,
+        palette: &[[[f32; 4]; 4]],
+    ) -> Result<bool> {
+        unsafe { self.SubmitFrame(instances, ranges, Some((instance, palette))) }
+    }
+
+    unsafe fn SubmitFrame(
+        &mut self,
+        instances: &[VulkanRoomInstance],
+        ranges: &[[u32; 3]],
+        skin: Option<(usize, &[[[f32; 4]; 4]])>,
+    ) -> Result<bool> {
         if instances.is_empty() {
             return Ok(false);
         }
+        let regular_count = if let Some((instance, _)) = skin {
+            if instance != instances.len() - 1 || instance != ranges.len() {
+                return Err("Vulkan skin instance must follow the indexed room instances".into());
+            }
+            instance
+        } else {
+            instances.len()
+        };
         if !ranges.is_empty()
-            && (ranges.len() != instances.len()
+            && (ranges.len() != regular_count
                 || ranges.iter().any(|&[start, count, base]| {
                     count == 0
                         || !count.is_multiple_of(3)
@@ -587,10 +686,21 @@ impl VulkanRoom {
         if !self.IsReady()? {
             return Ok(false);
         }
+        if let Some(timing) = &mut self.timing
+            && self.in_flight
+        {
+            timing.Collect();
+        }
         let target = self
             .targets
             .as_ref()
             .ok_or("Vulkan room target is missing")?;
+        if let Some((_, palette)) = skin {
+            self.skin
+                .as_mut()
+                .ok_or("Vulkan skin pipeline is missing")?
+                .Upload(palette)?;
+        }
         self.instances.Upload(instances)?;
         let device = &self.device;
         let command = self.command;
@@ -610,7 +720,13 @@ impl VulkanRoom {
                         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                 ),
             )?;
-            RecordRoom(self, target, instances.len() as u32, ranges);
+            RecordRoom(
+                self,
+                target,
+                regular_count as u32,
+                ranges,
+                skin.map(|(index, _)| index),
+            );
             Check(
                 "Finish Vulkan room commands",
                 device.raw.end_command_buffer(command),
@@ -638,6 +754,9 @@ impl VulkanRoom {
         }
         self.targets.as_mut().unwrap().submitted = true;
         self.in_flight = true;
+        if let Some(timing) = &mut self.timing {
+            timing.Recorded(skin.is_some());
+        }
         Ok(true)
     }
 }
@@ -663,6 +782,8 @@ fn CreatePipeline(
     layout: vk::PipelineLayout,
     vertex: (&[u8], &CStr),
     pixel: (&[u8], &CStr),
+    skinned: bool,
+    color: vk::Format,
 ) -> Result<vk::Pipeline> {
     let words = |bytes: &[u8]| {
         ash::util::read_spv(&mut Cursor::new(bytes)).map_err(|error| error.to_string())
@@ -697,7 +818,11 @@ fn CreatePipeline(
         let bindings = [
             vk::VertexInputBindingDescription {
                 binding: 0,
-                stride: 16,
+                stride: if skinned {
+                    size_of::<SkinVertex>() as u32
+                } else {
+                    16
+                },
                 input_rate: vk::VertexInputRate::VERTEX,
             },
             vk::VertexInputBindingDescription {
@@ -706,13 +831,28 @@ fn CreatePipeline(
                 input_rate: vk::VertexInputRate::INSTANCE,
             },
         ];
-        let attributes: [_; 6] =
+        let standard: [_; 6] =
             std::array::from_fn(|location| vk::VertexInputAttributeDescription {
                 location: location as u32,
                 binding: u32::from(location > 0),
                 format: vk::Format::R32G32B32A32_SFLOAT,
                 offset: location.saturating_sub(1) as u32 * 16,
             });
+        let mut attributes = standard.to_vec();
+        if skinned {
+            attributes.push(vk::VertexInputAttributeDescription {
+                location: 6,
+                binding: 0,
+                format: vk::Format::R32G32B32A32_UINT,
+                offset: 16,
+            });
+            attributes.push(vk::VertexInputAttributeDescription {
+                location: 7,
+                binding: 0,
+                format: vk::Format::R32G32B32A32_SFLOAT,
+                offset: 32,
+            });
+        }
         let input = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(&bindings)
             .vertex_attribute_descriptions(&attributes);
@@ -737,7 +877,7 @@ fn CreatePipeline(
         let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
         let dynamic = vk::PipelineDynamicStateCreateInfo::default()
             .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
-        let formats = [COLOR];
+        let formats = [color];
         let mut rendering = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&formats)
             .depth_attachment_format(DEPTH);
@@ -768,7 +908,13 @@ fn CreatePipeline(
     }
 }
 
-fn RecordRoom(room: &VulkanRoom, target: &Targets, count: u32, ranges: &[[u32; 3]]) {
+fn RecordRoom(
+    room: &VulkanRoom,
+    target: &Targets,
+    count: u32,
+    ranges: &[[u32; 3]],
+    skinned: Option<usize>,
+) {
     let device = &room.device.raw;
     let command = room.command;
     let family = room.device.family;
@@ -838,6 +984,9 @@ fn RecordRoom(room: &VulkanRoom, target: &Targets, count: u32, ranges: &[[u32; 3
     // Called with an active command buffer and views from the same device. The
     // submission acquires the keyed import before the first command runs.
     unsafe {
+        if let Some(timing) = &room.timing {
+            timing.Begin(command);
+        }
         device.cmd_pipeline_barrier(
             command,
             vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -877,15 +1026,32 @@ fn RecordRoom(room: &VulkanRoom, target: &Targets, count: u32, ranges: &[[u32; 3
                 );
                 first = end;
             }
-        } else if room.floor_indices > 0 {
-            device.cmd_draw_indexed(command, room.floor_indices, 1, 0, 0, 0);
-            if count > 1 {
-                device.cmd_draw_indexed(command, room.index_count, count - 1, 0, 0, 1);
+        } else if count > 0 {
+            if room.floor_indices > 0 {
+                device.cmd_draw_indexed(command, room.floor_indices, 1, 0, 0, 0);
+                if count > 1 {
+                    device.cmd_draw_indexed(command, room.index_count, count - 1, 0, 0, 1);
+                }
+            } else {
+                device.cmd_draw_indexed(command, room.index_count, count, 0, 0, 0);
             }
-        } else {
-            device.cmd_draw_indexed(command, room.index_count, count, 0, 0, 0);
+        }
+        if let Some(index) = skinned {
+            if let Some(timing) = &room.timing {
+                timing.Mark(command, 2);
+            }
+            room.skin
+                .as_ref()
+                .unwrap()
+                .Draw(command, room.instances.raw, index as u32);
+            if let Some(timing) = &room.timing {
+                timing.Mark(command, 3);
+            }
         }
         device.cmd_end_rendering(command);
+        if let Some(timing) = &room.timing {
+            timing.Mark(command, 1);
+        }
         device.cmd_pipeline_barrier(
             command,
             vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,

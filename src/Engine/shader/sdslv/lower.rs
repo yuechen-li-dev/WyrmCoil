@@ -46,8 +46,19 @@ enum Scope<'a> {
 impl Lowerer<'_> {
     fn Lower(&self) -> LowerResult<VdMirModule> {
         let mut items = vec![];
-        if let Some(interface) = &self.Validator.Compute {
-            for binding in &interface.Bindings {
+        let storage = self
+            .Validator
+            .Compute
+            .as_ref()
+            .map(|interface| &interface.Bindings)
+            .or_else(|| {
+                self.Validator
+                    .GraphicsStorage
+                    .as_ref()
+                    .map(|(_, bindings)| bindings)
+            });
+        if let Some(bindings) = storage {
+            for binding in bindings {
                 items.push(VdMirItem::StorageBinding(VdMirStorageBinding {
                     Name: StorageName(&binding.Name),
                     ..binding.clone()
@@ -516,6 +527,14 @@ impl Lowerer<'_> {
                     return Err(FallibleDiagnostic(span));
                 }
                 let mut callee = lower(Callee)?;
+                if self.Module.Canonical
+                    && let Scope::Shader { Shader, Locals, .. } = scope
+                    && let SdslvExpression::Identifier(name) = Callee.as_ref()
+                    && !Locals.contains_key(name)
+                    && Shader.Methods.iter().any(|method| method.Name == *name)
+                {
+                    callee.Kind = Kind::Name(format!("{}_{name}", Shader.Name));
+                }
                 if let Scope::Shader {
                     Specialization: Some(specialization),
                     ..

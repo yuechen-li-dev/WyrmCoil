@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use super::ast::*;
 use super::canonical_graphics::AttributeIndex;
 use super::diagnostic::SdslvDiagnostic;
-use super::vdmir::{VdMirBuiltin, VdMirScalar, VdMirStorageBinding};
+use super::vdmir::{VdMirBuiltin, VdMirStorageBinding, VdMirStorageElement};
 
 pub(super) struct ComputeInterface {
     pub Shader: String,
@@ -92,47 +92,7 @@ pub(super) fn ResolveCompute(
             Some(SdslvResourceDecl::Inline(fields)) => fields,
             None => &[],
         };
-        let mut bindings = vec![];
-        let mut names = HashSet::new();
-        let mut slots = HashSet::new();
-        for field in fields {
-            let [attribute] = field.Attributes.as_slice() else {
-                return Err(SdslvDiagnostic::New(
-                    "compute storage requires one [binding(n)]",
-                    field.Span,
-                ));
-            };
-            if attribute.Name != "binding" {
-                return Err(SdslvDiagnostic::New(
-                    "compute storage requires [binding(n)]",
-                    attribute.Span,
-                ));
-            }
-            let binding = AttributeIndex(attribute, "compute storage")?;
-            if !slots.insert(binding) || !names.insert(&field.Name) {
-                return Err(SdslvDiagnostic::New(
-                    "duplicate compute storage name or binding",
-                    field.Span,
-                ));
-            }
-            let Some(access) = field.Access else {
-                return Err(SdslvDiagnostic::New(
-                    "compute storage requires readonly or readwrite access",
-                    field.Span,
-                ));
-            };
-            bindings.push(VdMirStorageBinding {
-                Name: field.Name.clone(),
-                Binding: binding,
-                Element: StorageElement(&field.TypeName).ok_or_else(|| {
-                    SdslvDiagnostic::New(
-                        "compute storage requires array<f32>, array<i32>, or array<u32>",
-                        field.TypeSpan,
-                    )
-                })?,
-                Writable: access == SdslvResourceAccess::Readwrite,
-            });
-        }
+        let bindings = ResolveStorageFields(fields, false)?;
         compute = Some(ComputeInterface {
             Shader: shader.Name.clone(),
             Input: input,
@@ -142,6 +102,110 @@ pub(super) fn ResolveCompute(
         });
     }
     Ok(compute)
+}
+
+pub(super) fn ResolveGraphicsStorage(
+    module: &SdslvModule,
+    has_compute: bool,
+) -> Result<Option<(String, Vec<VdMirStorageBinding>)>, SdslvDiagnostic> {
+    let mut storage = None;
+    for declaration in &module.Declarations {
+        let SdslvDecl::Shader(shader) = declaration else {
+            continue;
+        };
+        if shader
+            .StageMethods
+            .iter()
+            .any(|method| method.Stage.as_deref() == Some("compute"))
+        {
+            continue;
+        }
+        let Some(resources) = &shader.Resources else {
+            continue;
+        };
+        let SdslvResourceDecl::Inline(fields) = resources else {
+            continue;
+        };
+        let Some(vertex) = shader
+            .StageMethods
+            .iter()
+            .find(|method| method.Stage.as_deref() == Some("vertex"))
+        else {
+            continue;
+        };
+        if storage.is_some()
+            || has_compute
+            || !shader.GenericParameters.is_empty()
+            || !shader.Implements.is_empty()
+        {
+            return Err(SdslvDiagnostic::New(
+                "graphics storage requires one standalone shader",
+                vertex.ReturnTypeSpan,
+            ));
+        }
+        storage = Some((shader.Name.clone(), ResolveStorageFields(fields, true)?));
+    }
+    Ok(storage)
+}
+
+fn ResolveStorageFields(
+    fields: &[SdslvFieldDecl],
+    graphics: bool,
+) -> Result<Vec<VdMirStorageBinding>, SdslvDiagnostic> {
+    let mut bindings = vec![];
+    let mut names = HashSet::new();
+    let mut slots = HashSet::new();
+    for field in fields {
+        let [attribute] = field.Attributes.as_slice() else {
+            return Err(SdslvDiagnostic::New(
+                "compute storage requires one [binding(n)]",
+                field.Span,
+            ));
+        };
+        if attribute.Name != "binding" {
+            return Err(SdslvDiagnostic::New(
+                "compute storage requires [binding(n)]",
+                attribute.Span,
+            ));
+        }
+        let binding = AttributeIndex(attribute, "compute storage")?;
+        if !slots.insert(binding) || !names.insert(&field.Name) {
+            return Err(SdslvDiagnostic::New(
+                "duplicate compute storage name or binding",
+                field.Span,
+            ));
+        }
+        let Some(access) = field.Access else {
+            return Err(SdslvDiagnostic::New(
+                "compute storage requires readonly or readwrite access",
+                field.Span,
+            ));
+        };
+        let element = StorageElement(&field.TypeName);
+        if graphics
+            && (access != SdslvResourceAccess::Readonly
+                || element != Some(VdMirStorageElement::Float4))
+        {
+            return Err(SdslvDiagnostic::New(
+                "graphics storage requires readonly array<float4>",
+                field.TypeSpan,
+            ));
+        }
+        bindings.push(VdMirStorageBinding {
+            Name: field.Name.clone(),
+            Binding: binding,
+            Element: element
+                .filter(|element| graphics || *element != VdMirStorageElement::Float4)
+                .ok_or_else(|| {
+                    SdslvDiagnostic::New(
+                        "compute storage requires array<f32>, array<i32>, or array<u32>",
+                        field.TypeSpan,
+                    )
+                })?,
+            Writable: access == SdslvResourceAccess::Readwrite,
+        });
+    }
+    Ok(bindings)
 }
 
 fn FindStream<'a>(module: &'a SdslvModule, name: &str) -> Option<&'a SdslvStreamDecl> {
@@ -194,7 +258,7 @@ pub(super) fn ComputeBuiltin(name: &str) -> Option<VdMirBuiltin> {
     })
 }
 
-fn StorageElement(ty: &SdslvTypeRef) -> Option<VdMirScalar> {
+fn StorageElement(ty: &SdslvTypeRef) -> Option<VdMirStorageElement> {
     let SdslvTypeRef::Applied {
         Name,
         Arguments,
@@ -211,18 +275,19 @@ fn StorageElement(ty: &SdslvTypeRef) -> Option<VdMirScalar> {
         return None;
     };
     Some(match element.ToDisplayString().as_str() {
-        "f32" => VdMirScalar::F32,
-        "i32" => VdMirScalar::I32,
-        "u32" => VdMirScalar::U32,
+        "f32" => VdMirStorageElement::F32,
+        "i32" => VdMirStorageElement::I32,
+        "u32" => VdMirStorageElement::U32,
+        "float4" => VdMirStorageElement::Float4,
         _ => return None,
     })
 }
 
-pub(super) fn ScalarName(scalar: VdMirScalar) -> &'static str {
-    match scalar {
-        VdMirScalar::F32 => "f32",
-        VdMirScalar::I32 => "i32",
-        VdMirScalar::U32 => "u32",
-        VdMirScalar::Bool => "bool",
+pub(super) fn StorageElementName(element: VdMirStorageElement) -> &'static str {
+    match element {
+        VdMirStorageElement::F32 => "f32",
+        VdMirStorageElement::I32 => "i32",
+        VdMirStorageElement::U32 => "u32",
+        VdMirStorageElement::Float4 => "float4",
     }
 }

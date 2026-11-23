@@ -57,6 +57,62 @@ pub struct PaletteMesh {
     vertices: usize,
 }
 
+/// Vulkan vertex binding lanes. The absent normal lane matches the viewport's
+/// existing baked color lighting. Joint indices address the assembled palette.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct SkinVertex {
+    pub PositionColor: [f32; 4],
+    pub Joints: [u32; 4],
+    pub Weights: [f32; 4],
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PaletteSlot {
+    Joint(usize, SceneMatrix),
+    Rigid(usize),
+}
+
+/// Immutable bind geometry plus the mapping from palette slots to glTF nodes.
+pub struct SkinMesh {
+    pub Vertices: Vec<SkinVertex>,
+    pub Indices: Vec<u16>,
+    model: Arc<ModelAsset>,
+    slots: Vec<PaletteSlot>,
+}
+
+impl std::fmt::Debug for SkinMesh {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkinMesh")
+            .field("identity", &self.model.Identity)
+            .field("vertices", &self.Vertices.len())
+            .field("slots", &self.slots.len())
+            .finish()
+    }
+}
+
+impl SkinMesh {
+    pub fn PaletteSize(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn Palette(&self, clip: Option<&Clip>, time: f32) -> Result<Vec<[[f32; 4]; 4]>, String> {
+        let world = self.model.Pose(clip, time)?;
+        let mut palette = Vec::with_capacity(self.slots.len());
+        for slot in &self.slots {
+            let matrix = match *slot {
+                PaletteSlot::Joint(node, inverse) => world[node].Multiply(inverse),
+                PaletteSlot::Rigid(node) => world[node],
+            };
+            if !matrix.0.iter().flatten().all(|value| value.is_finite()) {
+                return Err("nonfinite joint palette".into());
+            }
+            palette.push(matrix.0);
+        }
+        Ok(palette)
+    }
+}
+
 impl PaletteMesh {
     pub fn New(model: Arc<ModelAsset>) -> Result<Self, String> {
         let mut base = 0;
@@ -104,6 +160,61 @@ impl PaletteMesh {
         self.vertices += atlas.Vertices.len();
         self.attachments.push((node, atlas.Vertices));
         Ok(())
+    }
+
+    pub fn SkinMesh(&self) -> Result<SkinMesh, String> {
+        if !self.model.Primitives.iter().any(|part| part.Skin.is_some()) {
+            return Err("mesh has no skinned primitives".into());
+        }
+        let mut slots = Vec::new();
+        let mut bases = std::collections::BTreeMap::new();
+        let mut vertices = Vec::with_capacity(self.vertices);
+        for (part, colors) in self.model.Primitives.iter().zip(&self.colors) {
+            if let Some(index) = part.Skin {
+                let base = *bases.entry(index).or_insert_with(|| {
+                    let base = slots.len() as u32;
+                    let skin = &self.model.Skins[index];
+                    for (&node, &inverse) in skin.Joints.iter().zip(&skin.InverseBind) {
+                        slots.push(PaletteSlot::Joint(node, inverse));
+                    }
+                    base
+                });
+                for (index, (&[x, y, z], &color)) in part.Positions.iter().zip(colors).enumerate() {
+                    vertices.push(SkinVertex {
+                        PositionColor: [x, y, z, color],
+                        Joints: part.Joints[index].map(|joint| base + u32::from(joint)),
+                        Weights: part.Weights[index],
+                    });
+                }
+            } else {
+                let slot = slots.len() as u32;
+                slots.push(PaletteSlot::Rigid(part.Node));
+                for (&[x, y, z], &color) in part.Positions.iter().zip(colors) {
+                    vertices.push(SkinVertex {
+                        PositionColor: [x, y, z, color],
+                        Joints: [slot; 4],
+                        Weights: [1.0, 0.0, 0.0, 0.0],
+                    });
+                }
+            }
+        }
+        for (node, equipment) in &self.attachments {
+            let slot = slots.len() as u32;
+            slots.push(PaletteSlot::Rigid(*node));
+            for &vertex in equipment {
+                vertices.push(SkinVertex {
+                    PositionColor: vertex,
+                    Joints: [slot; 4],
+                    Weights: [1.0, 0.0, 0.0, 0.0],
+                });
+            }
+        }
+        Ok(SkinMesh {
+            Vertices: vertices,
+            Indices: self.indices.clone(),
+            model: self.model.clone(),
+            slots,
+        })
     }
 
     pub fn AppendPose(

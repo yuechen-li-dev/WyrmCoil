@@ -111,12 +111,12 @@ function Apply-ZedPatch([string]$name, [string[]]$paths, [string[]]$previous, [s
     }
 }
 Apply-ZedPatch 'm0' @('.', ':(exclude)crates/gpui', ':(exclude)crates/gpui_windows') @() @('m6v-workspace', 'm7-workspace', 'm8-workspace', 'm9-workspace')
-Apply-ZedPatch 'm4' @('crates/gpui', 'crates/gpui_windows') @('m3b', 'm3a') @('m6v-gpu', 'm8-gpu')
+Apply-ZedPatch 'm4' @('crates/gpui', 'crates/gpui_windows') @('m3b', 'm3a') @('m6v-gpu', 'm8-gpu', 'm10-gpu')
 
 $crate_path = 'crates/wyrmcoil_view'
 $crate_root = Join-Path $zed_root $crate_path
 New-Item -ItemType Directory -Force -Path (Join-Path $crate_root 'src') | Out-Null
-foreach ($file in 'Cargo.toml', 'src/wyrmcoil_view.rs', 'src/viewport.sdslv', 'src/room.rs', 'src/room.sdslv', 'src/vulkan.rs', 'src/tactical.rs', 'src/tactical_art.rs', 'src/tactical.sdslv') {
+foreach ($file in 'Cargo.toml', 'src/wyrmcoil_view.rs', 'src/viewport.sdslv', 'src/room.rs', 'src/room.sdslv', 'src/vulkan.rs', 'src/tactical.rs', 'src/tactical_art.rs', 'src/tactical.sdslv', 'src/tactical_skin.sdslv') {
     $source = Join-Path $integration_root "wyrmcoil_view/$file"
     $destination = Join-Path $crate_root $file
     if (!(Test-Path -LiteralPath $destination) -or

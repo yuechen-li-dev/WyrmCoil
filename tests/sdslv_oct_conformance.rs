@@ -8,6 +8,63 @@ const OCT_REVISION: &str = "fa5b4993ca61f79b2ce18d09e9e3bbce88b9b9a0";
 const GRAPHICS: &str = "conformance/graphics";
 const INVALID: &str = "conformance/invalid";
 const VECTOR_ADD: &str = include_str!("fixtures/sdslv/vector-add.sdslv");
+const TACTICAL_SKIN: &str =
+    include_str!("../integrations/zed/wyrmcoil_view/src/tactical_skin.sdslv");
+
+#[test]
+fn vertex_skinning_uses_readonly_float4_storage() {
+    let artifact =
+        CompileCanonicalSourceToShaderArtifact("tactical_skin.sdslv", TACTICAL_SKIN).unwrap();
+    assert!(
+        artifact
+            .Hlsl
+            .contains("StructuredBuffer<float4> __sdslv_storage_JointColumns : register(t0)")
+    );
+    assert!(artifact.Hlsl.contains("vk::binding(0, 0)"));
+    assert!(
+        artifact
+            .Hlsl
+            .contains("TacticalSkin_Project(TacticalSkin_SkinPosition(input), instance)")
+    );
+    let invalid = TACTICAL_SKIN.replace("readonly array<float4>", "readwrite array<float4>");
+    let errors =
+        CompileCanonicalSourceToShaderArtifact("invalid-skin.sdslv", &invalid).unwrap_err();
+    assert!(format!("{errors:?}").contains("graphics storage requires readonly array<float4>"));
+}
+
+#[test]
+#[ignore = "requires DXC and SPIRV-Tools"]
+fn tactical_skin_validates_vulkan_vertex_storage() {
+    let artifact =
+        CompileCanonicalSourceToShaderArtifact("tactical_skin.sdslv", TACTICAL_SKIN).unwrap();
+    let options = DxcOptions {
+        ExtraArgs: vec!["-fspv-target-env=vulkan1.3".into()],
+        ..Default::default()
+    };
+    for entry in &artifact.EntryPoints {
+        let compiled = CompileArtifactEntryWithDxc(&artifact, entry, &options).unwrap();
+        RunSpirvTool(
+            "spirv-val",
+            &["--target-env", "vulkan1.3", "-"],
+            &compiled.OutputBytes,
+        );
+        if entry.Stage == SdslvShaderStage::Vertex {
+            let ir = RunSpirvTool("spirv-dis", &["--no-header", "-"], &compiled.OutputBytes);
+            for decoration in [
+                "DescriptorSet 0",
+                "Binding 0",
+                "Location 6",
+                "Location 7",
+                "ArrayStride 16",
+            ] {
+                assert!(
+                    ir.lines().any(|line| line.ends_with(decoration)),
+                    "{decoration}"
+                );
+            }
+        }
+    }
+}
 
 fn OctFixtures() -> PathBuf {
     let root = PathBuf::from(std::env::var_os("WYRMCOIL_OCT_ROOT").expect("set WYRMCOIL_OCT_ROOT"));
@@ -118,9 +175,9 @@ fn oct_vector_add_lowers_to_typed_compute_and_storage() {
     assert_eq!(
         bindings,
         [
-            (0, VdMirScalar::F32, false),
-            (1, VdMirScalar::F32, false),
-            (2, VdMirScalar::F32, true),
+            (0, VdMirStorageElement::F32, false),
+            (1, VdMirStorageElement::F32, false),
+            (2, VdMirStorageElement::F32, true),
         ]
     );
     let (function, entry) = mir.EntryPoints().next().unwrap();

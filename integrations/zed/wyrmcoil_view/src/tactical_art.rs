@@ -9,11 +9,25 @@ use wyrmcoil::Engine::asset::gltf::{AssetLibrary, MeshAtlas, PackColor, PaletteM
 use wyrmcoil::Engine::shader::sdslv::CompileCanonicalSourceToShaderArtifact;
 use wyrmcoil::GameRuntime::{ActorMotion, TacticalArt, TacticalOrder, TacticalView};
 
+#[cfg(target_os = "windows")]
+use super::vulkan::SkinSource;
+#[cfg(target_os = "windows")]
+use wyrmcoil::Engine::asset::gltf::ClipSet;
+
 pub(super) struct TacticalGraphics {
     pub shader: Arc<GpuViewportShader>,
     props: Vec<(RoomMatrix, [u32; 3])>,
     actors: BTreeMap<u16, [PoseRanges; 6]>,
     marker: [u32; 3],
+    #[cfg(target_os = "windows")]
+    skin: Option<SkinAnimation>,
+}
+
+#[cfg(target_os = "windows")]
+struct SkinAnimation {
+    actor: u16,
+    source: Arc<SkinSource>,
+    clips: [(Arc<ClipSet>, String); 6],
 }
 
 #[derive(Clone)]
@@ -25,7 +39,50 @@ struct PoseRanges {
 const POSE_HZ: f32 = 10.0;
 
 impl TacticalGraphics {
-    pub fn New(root: &Path, art: &TacticalArt) -> Result<Self, String> {
+    pub fn New(root: &Path, art: &TacticalArt, last_watch: bool) -> Result<Self, String> {
+        let d3d11 = std::env::var("WYRMCOIL_GRAPHICS_BACKEND")
+            .is_ok_and(|value| value.eq_ignore_ascii_case("d3d11"));
+        let gpu_skin = last_watch
+            && !d3d11
+            && !std::env::var("WYRMCOIL_SKINNING")
+                .is_ok_and(|value| value.eq_ignore_ascii_case("cpu"));
+        Self::Build(root, art, d3d11, gpu_skin)
+    }
+
+    pub fn D3dFallback(root: &Path, art: &TacticalArt) -> Result<Self, String> {
+        Self::Build(root, art, true, false)
+    }
+
+    pub fn SkinStatus(&self, backend: &str) -> &'static str {
+        #[cfg(target_os = "windows")]
+        if self.skin.is_some() {
+            if backend.starts_with("Vulkan · ")
+                && !matches!(
+                    backend,
+                    "Vulkan · initializing" | "Vulkan · waiting for first frame"
+                )
+            {
+                return "Alda · Vulkan vertex skinning";
+            }
+            return "Alda · Vulkan skinning pending";
+        }
+        "Characters · CPU cached poses"
+    }
+
+    pub fn FallbackReason(&self) -> Option<String> {
+        #[cfg(target_os = "windows")]
+        if self.skin.is_some()
+            && let Some(producer) = &self.shader.producer
+        {
+            let status = producer.status();
+            if status.starts_with("D3D11 fallback") {
+                return Some(status);
+            }
+        }
+        None
+    }
+
+    fn Build(root: &Path, art: &TacticalArt, d3d11: bool, gpu_skin: bool) -> Result<Self, String> {
         let started = Instant::now();
         if art.Actors.len() > 32 || art.Props.len() > 128 {
             return Err("tactical art exceeds the viewport instance budget".into());
@@ -77,6 +134,8 @@ impl TacticalGraphics {
         let mut equipment = BTreeMap::new();
         let mut cached_poses = BTreeMap::new();
         let mut actors = BTreeMap::new();
+        #[cfg(target_os = "windows")]
+        let mut skin = None;
         for actor in &art.Actors {
             let mesh_key = (actor.Mesh.as_str(), actor.Equipment.as_slice());
             if !meshes.contains_key(&mesh_key) {
@@ -102,6 +161,26 @@ impl TacticalGraphics {
                 meshes.insert(mesh_key, mesh);
             }
             let mesh = &meshes[&mesh_key];
+            #[cfg(target_os = "windows")]
+            if gpu_skin && actor.Id == 0 && actor.Mesh == "characters/Knight.glb" {
+                if skin.is_some() {
+                    return Err("duplicate tactical actor art".into());
+                }
+                match mesh.SkinMesh() {
+                    Ok(mesh) => {
+                        skin = Some(SkinAnimation {
+                            actor: actor.Id,
+                            source: Arc::new(SkinSource::New(mesh)),
+                            clips: actor
+                                .Clips
+                                .each_ref()
+                                .map(|clip| (clips[clip.File.as_str()].clone(), clip.Name.clone())),
+                        });
+                        continue;
+                    }
+                    Err(error) => log::warn!("Alda CPU skin fallback: {error}"),
+                }
+            }
             let mut poses = Vec::new();
             for requested in &actor.Clips {
                 let key = (mesh_key, requested.File.as_str(), requested.Name.as_str());
@@ -118,7 +197,7 @@ impl TacticalGraphics {
                 }
                 let pose = PoseRanges {
                     ranges,
-                    clip_ticks: (clip.Duration * 60.0).round().max(1.0) as u32,
+                    clip_ticks: ClipTicks(clip.Duration),
                 };
                 cached_poses.insert(key, pose.clone());
                 poses.push(pose);
@@ -155,12 +234,17 @@ impl TacticalGraphics {
             first_instance_indices: 0,
         });
         #[cfg(target_os = "windows")]
-        if !std::env::var("WYRMCOIL_GRAPHICS_BACKEND")
-            .is_ok_and(|value| value.eq_ignore_ascii_case("d3d11"))
-        {
-            shader.producer = Some(Arc::new(super::vulkan::RoomProducer::WithAtlas(
-                artifact, atlas,
-            )));
+        if !d3d11 {
+            let mut producer = super::vulkan::RoomProducer::WithAtlas(artifact, atlas);
+            if let Some(skin) = &skin {
+                let artifact = CompileCanonicalSourceToShaderArtifact(
+                    "tactical_skin.sdslv",
+                    include_str!("tactical_skin.sdslv"),
+                )
+                .map_err(|errors| format!("tactical skin shader: {errors:?}"))?;
+                producer = producer.WithSkin(artifact, skin.source.clone());
+            }
+            shader.producer = Some(Arc::new(producer));
         }
         log::info!(
             "Tactical art: {} meshes, {} clips, {total_poses} cached poses, {vertex_bytes} vertex bytes, {index_bytes} index bytes, prepared in {:.2?}",
@@ -173,6 +257,8 @@ impl TacticalGraphics {
             props,
             actors,
             marker,
+            #[cfg(target_os = "windows")]
+            skin,
         })
     }
 
@@ -193,11 +279,10 @@ impl TacticalGraphics {
         for &(model, range) in &self.props {
             push(model, [1.0; 4], range);
         }
+        #[cfg(target_os = "windows")]
+        let mut skin_frame = None;
         for actor in &view.Actors {
             let [x, z] = actor.Position;
-            let Some(poses) = self.actors.get(&actor.Id) else {
-                continue;
-            };
             let (motion, looped) = match actor.Motion {
                 ActorMotion::Idle => (0, true),
                 ActorMotion::Walk => (1, true),
@@ -206,7 +291,6 @@ impl TacticalGraphics {
                 ActorMotion::Hit => (4, false),
                 ActorMotion::Death => (5, false),
             };
-            let pose = &poses[motion];
             let ticks = u32::from(actor.MotionTicks);
             let scale = if actor.PartySlot.is_none() && actor.MaxHealth >= 150 {
                 0.96
@@ -218,11 +302,22 @@ impl TacticalGraphics {
             } else {
                 [1.0, 0.64, 0.60, 1.0]
             };
-            push(
-                RoomMatrix::Placement([x, 0.0, z], [scale; 3], -actor.Yaw),
-                tint,
-                pose.At(ticks, looped),
-            );
+            let model = RoomMatrix::Placement([x, 0.0, z], [scale; 3], -actor.Yaw);
+            if let Some(poses) = self.actors.get(&actor.Id) {
+                push(model, tint, poses[motion].At(ticks, looped));
+            }
+            #[cfg(target_os = "windows")]
+            if let Some(skin) = &self.skin
+                && skin.actor == actor.Id
+            {
+                let (set, name) = &skin.clips[motion];
+                let clip = &set.Clips[name];
+                let clip_ticks = ClipTicks(clip.Duration);
+                let tick = SampleTick(ticks, looped, clip_ticks);
+                let time = clip.Duration * tick as f32 / clip_ticks as f32;
+                let [x, y, z, t] = projection.Multiply(model).0;
+                skin_frame = Some(([x, y, z, t, tint], motion, tick, clip, time));
+            }
             if actor.Health > 0 {
                 let marker = if actor.Id == view.Selected {
                     [0.25, 0.82, 1.0, 1.0]
@@ -237,6 +332,10 @@ impl TacticalGraphics {
                     self.marker,
                 );
             }
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(skin) = &self.skin {
+            skin.source.Prepare(skin_frame);
         }
         for order in &view.Orders {
             if let TacticalOrder::MoveTo([x, z]) = *order {
@@ -253,12 +352,20 @@ impl TacticalGraphics {
 
 impl PoseRanges {
     fn At(&self, ticks: u32, looped: bool) -> [u32; 3] {
-        let ticks = if looped {
-            ticks % self.clip_ticks
-        } else {
-            ticks.min(self.clip_ticks)
-        };
+        let ticks = SampleTick(ticks, looped, self.clip_ticks);
         let index = ticks as usize * (self.ranges.len() - 1) / self.clip_ticks as usize;
         self.ranges[index]
+    }
+}
+
+fn ClipTicks(duration: f32) -> u32 {
+    (duration * 60.0).round().max(1.0) as u32
+}
+
+fn SampleTick(ticks: u32, looped: bool, clip_ticks: u32) -> u32 {
+    if looped {
+        ticks % clip_ticks
+    } else {
+        ticks.min(clip_ticks)
     }
 }

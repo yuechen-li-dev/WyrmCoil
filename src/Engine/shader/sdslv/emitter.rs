@@ -850,13 +850,19 @@ fn HlslParameters(parameters: &[VdMirParameter]) -> String {
     values.join(", ")
 }
 
-fn HlslStorageType(element: VdMirScalar, writable: bool) -> String {
+fn HlslStorageType(element: VdMirStorageElement, writable: bool) -> String {
     let buffer = if writable {
         "RWStructuredBuffer"
     } else {
         "StructuredBuffer"
     };
-    format!("{buffer}<{}>", HlslType(&VdMirType::Scalar(element)))
+    let element = match element {
+        VdMirStorageElement::F32 => "float",
+        VdMirStorageElement::I32 => "int",
+        VdMirStorageElement::U32 => "uint",
+        VdMirStorageElement::Float4 => "float4",
+    };
+    format!("{buffer}<{element}>")
 }
 
 fn HlslType(ty: &VdMirType) -> String {

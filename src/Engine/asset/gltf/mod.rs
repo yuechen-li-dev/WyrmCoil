@@ -13,7 +13,7 @@ use ::gltf::{
 
 mod palette;
 mod source;
-pub use palette::{MeshAtlas, PackColor, PaletteMesh, PoseTimings};
+pub use palette::{MeshAtlas, PackColor, PaletteMesh, PoseTimings, SkinMesh, SkinVertex};
 pub use source::{AssetError, AssetStage, ImportTimings, Texture};
 use source::{Resolve, Source};
 

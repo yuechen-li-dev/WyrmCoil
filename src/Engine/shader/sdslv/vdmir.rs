@@ -65,7 +65,7 @@ pub enum VdMirType {
         Length: usize,
     },
     StorageArray {
-        Element: VdMirScalar,
+        Element: VdMirStorageElement,
         Writable: bool,
     },
     Nominal {
@@ -135,8 +135,16 @@ pub enum VdMirBuiltin {
 pub struct VdMirStorageBinding {
     pub Name: String,
     pub Binding: u32,
-    pub Element: VdMirScalar,
+    pub Element: VdMirStorageElement,
     pub Writable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VdMirStorageElement {
+    F32,
+    I32,
+    U32,
+    Float4,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

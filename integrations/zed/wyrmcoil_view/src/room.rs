@@ -29,6 +29,7 @@ pub(super) struct RoomPreview {
     identity: String,
     notice: String,
     game: Option<GameSession>,
+    game_started: Instant,
     game_notice: Option<String>,
     game_observation: Option<Observation>,
     game_clock: Option<EngineClock>,
@@ -51,6 +52,7 @@ impl RoomPreview {
             identity: scene.Identity().to_owned(),
             notice: format!("Built-in {} · {}", scene.Data().name, scene.Identity()),
             game: None,
+            game_started: Instant::now(),
             game_notice: None,
             game_observation: None,
             game_clock: None,
@@ -171,6 +173,7 @@ impl RoomPreview {
 
     pub fn StartGame(&mut self, root: Result<&Path, String>) {
         self.Suspend();
+        self.game_started = Instant::now();
         match root.and_then(GameSession::Start) {
             Ok(game) => {
                 self.game = Some(game);
@@ -218,6 +221,22 @@ impl RoomPreview {
     }
 
     fn AdvanceGame(&mut self, now: Instant) -> Result<bool, String> {
+        if let Some((root, art, graphics)) = &mut self.game_art
+            && let Some(reason) = graphics.FallbackReason()
+        {
+            match TacticalGraphics::D3dFallback(root, art) {
+                Ok(cpu) => {
+                    *graphics = Arc::new(cpu);
+                    self.art_error = Some(reason);
+                }
+                Err(error) => {
+                    self.game_art = None;
+                    self.art_error = Some(format!("{reason} · CPU art failed: {error}"));
+                }
+            }
+            self.step.Pause();
+            return Ok(true);
+        }
         let Some(game) = &mut self.game else {
             return Ok(false);
         };
@@ -262,7 +281,6 @@ impl RoomPreview {
             if let Some(view) = game.Tactical() {
                 if mounting {
                     self.tactical = Some(TacticalPreview::New(view.clone(), self.snapshot.Camera));
-                    self.art_error = None;
                     if let Some(art) = game.TacticalArt() {
                         let root = game.Project();
                         let cached = self
@@ -271,7 +289,9 @@ impl RoomPreview {
                             .is_some_and(|(path, config, _)| path == root && config == art);
                         if !cached {
                             self.game_art = None;
-                            match TacticalGraphics::New(root, art) {
+                            self.art_error = None;
+                            match TacticalGraphics::New(root, art, game.Name() == "the-last-watch")
+                            {
                                 Ok(graphics) => {
                                     self.game_art =
                                         Some((root.to_path_buf(), art.clone(), Arc::new(graphics)))
@@ -282,8 +302,13 @@ impl RoomPreview {
                                 }
                             }
                         }
+                        log::info!(
+                            "Tactical game mount in {:.2?}; art cache hit: {cached}",
+                            self.game_started.elapsed()
+                        );
                     } else {
                         self.game_art = None;
+                        self.art_error = None;
                     }
                     self.step.Pause();
                 } else if let Some(tactical) = &mut self.tactical {
@@ -380,7 +405,12 @@ impl RoomPreview {
                 }
             }
             if let Some(error) = &self.art_error {
-                status = status.child(format!("Art unavailable · diagnostic geometry · {error}"));
+                let message = if tactical_graphics.is_some() {
+                    error.clone()
+                } else {
+                    format!("Art unavailable · diagnostic geometry · {error}")
+                };
+                status = status.child(div().truncate().px_3().text_sm().child(message));
             }
         }
         #[cfg(target_os = "windows")]
@@ -389,7 +419,21 @@ impl RoomPreview {
                 .producer
                 .as_ref()
                 .map(|producer| producer.status())
-                .unwrap_or_else(|| "D3D11 · selected explicitly".into());
+                .unwrap_or_else(|| {
+                    if self
+                        .art_error
+                        .as_deref()
+                        .is_some_and(|error| error.starts_with("D3D11 fallback"))
+                    {
+                        "D3D11 · CPU fallback".into()
+                    } else {
+                        "D3D11 · selected explicitly".into()
+                    }
+                });
+            if let Some(graphics) = &tactical_graphics {
+                let skin = graphics.SkinStatus(&backend);
+                status = status.child(div().truncate().px_3().text_sm().child(skin));
+            }
             status = status.child(div().truncate().px_3().pb_2().text_sm().child(backend));
         }
         (

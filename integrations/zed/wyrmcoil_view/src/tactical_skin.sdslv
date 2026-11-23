@@ -1,0 +1,70 @@
+// Indexed palette and world-after-deform ordering follow Aurelian's
+// HumanoidSkinning.v.ts. KayKit uses glTF linear-blend matrices.
+type ClipPosition = float4 @space(clip.position);
+
+stream SkinVertex {
+    [location(0)] PositionColor: float4;
+    [location(6)] Joints: uint4;
+    [location(7)] Weights: float4;
+}
+
+stream Instance {
+    [location(1)] ColumnX: float4;
+    [location(2)] ColumnY: float4;
+    [location(3)] ColumnZ: float4;
+    [location(4)] ColumnW: float4;
+    [location(5)] Color: float4;
+}
+
+stream Surface {
+    Position: ClipPosition;
+    [location(0)] Color: float4;
+}
+
+shader TacticalSkin {
+    resources {
+        [binding(0)] JointColumns: readonly array<float4>;
+    }
+
+    fn WeightedPoint(position: float4, joint: u32, weight: f32) -> float4 {
+        if (weight == 0.0) {
+            return float4(0.0, 0.0, 0.0, 0.0);
+        }
+        let column: u32 = joint * 4u;
+        return (JointColumns[column] * position.x
+              + JointColumns[column + 1u] * position.y
+              + JointColumns[column + 2u] * position.z
+              + JointColumns[column + 3u]) * weight;
+    }
+
+    fn SkinPosition(input: SkinVertex) -> float4 {
+        let bind_position: float4 = input.PositionColor;
+        let weight: float4 = input.Weights;
+        return WeightedPoint(bind_position, input.Joints.x, weight.x)
+             + WeightedPoint(bind_position, input.Joints.y, weight.y)
+             + WeightedPoint(bind_position, input.Joints.z, weight.z)
+             + WeightedPoint(bind_position, input.Joints.w, weight.w);
+    }
+
+    fn Project(local: float4, instance: Instance) -> float4 {
+        return instance.ColumnX * local.x + instance.ColumnY * local.y
+             + instance.ColumnZ * local.z + instance.ColumnW;
+    }
+
+    stage vertex fn VS(input: SkinVertex, instance: Instance) -> Surface {
+        let position: float4 = Project(SkinPosition(input), instance);
+        let packed: u32 = uint(input.PositionColor.w);
+        let red: f32 = float((packed >> 16u) & 255u) / 255.0;
+        let green: f32 = float((packed >> 8u) & 255u) / 255.0;
+        let blue: f32 = float(packed & 255u) / 255.0;
+        return Surface {
+            Position: position;
+            Color: float4(red * instance.Color.x, green * instance.Color.y,
+                          blue * instance.Color.z, instance.Color.w);
+        };
+    }
+
+    stage pixel fn PS(surface: Surface) -> float4 {
+        return surface.Color;
+    }
+}
