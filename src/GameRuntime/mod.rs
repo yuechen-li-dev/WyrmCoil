@@ -12,6 +12,7 @@ pub use wyrmcoil_game::{GAME_ARTIFACT, GameState, Observation, PROTOCOL};
 use wyrmcoil_game::{GameInput, GameTick};
 
 use crate::Demo::room::{RoomInput, RoomSnapshot, RoomWorld, TryNewRoomEngineFromScene};
+use crate::Engine::startup::StartupStage;
 use crate::Engine::{Engine, EngineClock, World};
 use crate::Scene::DecodeArtifact;
 
@@ -195,11 +196,18 @@ impl GameSession {
             None if Instant::now() >= deadline => return Err("game response timed out".into()),
             None => return Ok(false),
         };
+        if let Pending::Start(deadline) = pending {
+            StartupStage::Mark(
+                "game_handshake_observed",
+                (Instant::now() + START_LIMIT).saturating_duration_since(*deadline),
+            );
+        }
         match (pending, reply) {
             (_, Reply::Failed(message)) => return Err(message),
             (Pending::Start(_), Reply::Started { Scene, Observation }) => {
                 ValidateObservation(&Observation)?;
-                let scene = DecodeArtifact(Scene.as_bytes())?;
+                let scene =
+                    StartupStage::Call("game_scene_artifact", || DecodeArtifact(Scene.as_bytes()))?;
                 self.engine = Some(TryNewRoomEngineFromScene(&scene)?);
                 self.name = scene.Data().name.clone();
                 self.observation = Some(Observation);
@@ -209,7 +217,8 @@ impl GameSession {
                 if View.Frame != 0 {
                     return Err("initial tactical frame must be zero".into());
                 }
-                let scene = DecodeArtifact(Scene.as_bytes())?;
+                let scene =
+                    StartupStage::Call("game_scene_artifact", || DecodeArtifact(Scene.as_bytes()))?;
                 self.engine = Some(TryNewRoomEngineFromScene(&scene)?);
                 self.name = scene.Data().name.clone();
                 self.tactical = Some(View);

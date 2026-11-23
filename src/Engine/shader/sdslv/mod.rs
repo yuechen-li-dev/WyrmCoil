@@ -11,6 +11,7 @@ pub mod lexer;
 mod lower;
 pub mod parser;
 pub mod runner;
+pub mod spirv_cache;
 pub mod token;
 pub mod validation;
 pub mod vdmir;

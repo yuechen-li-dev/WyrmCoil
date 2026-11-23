@@ -1,0 +1,180 @@
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -1072,6 +1072,9 @@
+     /// Optional external producer for the Windows shared-texture viewport.
+     #[cfg(target_os = "windows")]
+     pub producer: Option<std::sync::Arc<dyn GpuViewportProducer>>,
++    /// SM4.1 vertex and pixel bytecode prepared before painting.
++    #[cfg(target_os = "windows")]
++    pub dxbc: Option<[Vec<u8>; 2]>,
+ }
+ 
+ /// Creates one producer on the physical adapter selected by the compositor.
+diff --git a/crates/gpui_windows/src/gpui_windows.rs b/crates/gpui_windows/src/gpui_windows.rs
+--- a/crates/gpui_windows/src/gpui_windows.rs
++++ b/crates/gpui_windows/src/gpui_windows.rs
+@@ -39,5 +39,6 @@
+ pub(crate) use wrapper::*;
+ 
+ pub use platform::WindowsPlatform;
++pub use directx_renderer::compile_viewport_shader_model41;
+ 
+ pub(crate) use windows::Win32::Foundation::HWND;
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -3,7 +3,7 @@
+     os::windows::io::{FromRawHandle, OwnedHandle},
+     slice,
+     sync::{Arc, OnceLock},
+-    time::{Duration, Instant},
++    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+ };
+ 
+ use anyhow::{Context, Result};
+@@ -96,6 +96,8 @@
+     external: Option<ExternalViewport>,
+     external_start: Option<Task<Result<Box<dyn GpuViewportProducerSession>, String>>>,
+     external_failed: bool,
++    fallback_first_draw: Option<Instant>,
++    fallback_presented: bool,
+ }
+ 
+ struct ExternalViewport {
+@@ -119,9 +121,10 @@
+ }
+ 
+ fn viewport_time(stage: &str, time: Duration) {
++    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+     log::info!(
+-        "wyrmcoil_vk stage={stage} event=end thread={:?} elapsed_us={}",
+-        std::thread::current().id(), time.as_micros()
++        "wyrmcoil_vk stage={stage} event=end thread={:?} elapsed_us={} unix_ms={} pid={}",
++        std::thread::current().id(), time.as_micros(), stamp.as_millis(), std::process::id()
+     );
+ }
+ 
+@@ -431,24 +434,15 @@
+             *slot = None;
+             let start = std::time::Instant::now();
+             let shader = surface.gpu_viewport.clone();
+-            let vertex = compile_viewport_shader(
+-                &shader.source,
+-                &shader.vertex_entry,
+-                windows::core::s!("vs_4_1"),
+-            )?;
+-            let pixel = compile_viewport_shader(
+-                &shader.source,
+-                &shader.pixel_entry,
+-                windows::core::s!("ps_4_1"),
+-            )?;
++            let [vertex, pixel] = shader.dxbc.as_ref().context("viewport shader is uncompiled")?;
+             let mesh = shader
+                 .mesh
+                 .as_ref()
+                 .map(|mesh| GpuViewportMeshState::new(&devices.device, mesh))
+                 .transpose()?;
+-            let layout = create_viewport_input_layout(&devices.device, &vertex, mesh.is_some())?;
+-            let vertex = create_vertex_shader(&devices.device, &vertex)?;
+-            let pixel = create_fragment_shader(&devices.device, &pixel)?;
++            let layout = create_viewport_input_layout(&devices.device, vertex, mesh.is_some())?;
++            let vertex = create_vertex_shader(&devices.device, vertex)?;
++            let pixel = create_fragment_shader(&devices.device, pixel)?;
+             *slot = Some(Self {
+                 shader,
+                 vertex,
+@@ -461,6 +455,8 @@
+                 external: None,
+                 external_start: None,
+                 external_failed: false,
++                fallback_first_draw: None,
++                fallback_presented: false,
+             });
+             log::info!(
+                 "GPU viewport: SM4.1 pipeline ready in {:.2?}",
+@@ -541,6 +537,9 @@
+                 GpuViewportDraw::Mesh(instances) => pass.render(devices, instances, instances)?,
+             }
+             pass.target.as_mut().unwrap().draw = Some(draw.clone());
++            if viewport_diagnostics() && !pass.fallback_presented {
++                pass.fallback_first_draw.get_or_insert_with(Instant::now);
++            }
+         }
+         Ok(())
+     }
+@@ -858,8 +857,9 @@
+ fn gpu_viewport_reuses_and_resizes_its_target_then_drops_the_pass() -> Result<()> {
+     let devices = DirectXRendererDevices::new(&DirectXDevices::new()?, true)?;
+     set_rasterizer_state(&devices.device, &devices.device_context)?;
+-    let shader = Arc::new(GpuViewportShader {
++    let mut shader = GpuViewportShader {
+         producer: None,
++        dxbc: None,
+         source: r#"
+             struct Varying { float4 position : SV_Position; float4 color : TEXCOORD0; };
+             Varying vs(uint id : SV_VertexID, float4 transform : TEXCOORD0, float4 color : TEXCOORD1) {
+@@ -875,7 +875,13 @@
+         vertex_entry: "vs".into(),
+         pixel_entry: "ps".into(),
+         mesh: None,
+-    });
++    };
++    shader.dxbc = Some(compile_viewport_shader_model41(
++        &shader.source,
++        &shader.vertex_entry,
++        &shader.pixel_entry,
++    )?);
++    let shader = Arc::new(shader);
+     let bounds = Bounds::new(
+         point(ScaledPixels(0.0), ScaledPixels(0.0)),
+         size(ScaledPixels(24.0), ScaledPixels(16.0)),
+@@ -968,9 +974,11 @@
+         }
+         float4 ps(Out input) : SV_Target { return input.c; }
+     "#;
++    let dxbc = compile_viewport_shader_model41(source, "vs", "ps")?;
+     let shader = |indices| {
+         Arc::new(GpuViewportShader {
+             producer: None,
++            dxbc: Some(dxbc.clone()),
+             source: source.into(),
+             vertex_entry: "vs".into(),
+             pixel_entry: "ps".into(),
+@@ -1126,6 +1134,18 @@
+     Ok(pixels)
+ }
+ 
++/// Compile a Windows viewport's fallback shaders without a D3D device.
++pub fn compile_viewport_shader_model41(
++    source: &str,
++    vertex: &str,
++    pixel: &str,
++) -> Result<[Vec<u8>; 2]> {
++    Ok([
++        compile_viewport_shader(source, vertex, windows::core::s!("vs_4_1"))?,
++        compile_viewport_shader(source, pixel, windows::core::s!("ps_4_1"))?,
++    ])
++}
++
+ fn compile_viewport_shader(
+     source: &str,
+     entry: &str,
+@@ -1448,12 +1468,16 @@
+         }
+         self.render(scene, background_appearance)?;
+         let first_present = viewport_diagnostics() && self.gpu_viewports.iter().flatten().any(|pass| {
+-            pass.external.as_ref().and_then(|external| external.first_frame.as_ref())
++            pass.fallback_first_draw.is_some() || pass.external.as_ref().and_then(|external| external.first_frame.as_ref())
+                 .is_some_and(|first| first.handed_off.is_some() && !first.presented)
+         });
+         if first_present {
+             viewport_stage("first_dxgi_present_call", || self.present())?;
+             for pass in self.gpu_viewports.iter_mut().flatten() {
++                if let Some(drawn) = pass.fallback_first_draw.take() {
++                    viewport_time("first_d3d11_present_success", drawn.elapsed());
++                    pass.fallback_presented = true;
++                }
+                 if let Some(first) = pass.external.as_mut().and_then(|external| external.first_frame.as_mut())
+                     && let Some(handoff) = first.handed_off
+                     && !first.presented

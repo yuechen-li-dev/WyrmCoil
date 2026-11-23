@@ -15,6 +15,7 @@ use wyrmcoil::Demo::room::{
     TryNewRoomEngineFromScene,
 };
 use wyrmcoil::Engine::shader::sdslv::CompileCanonicalSourceToShaderArtifact;
+use wyrmcoil::Engine::startup::StartupStage;
 use wyrmcoil::Engine::{Engine, EngineClock};
 use wyrmcoil::GameRuntime::{GameSession, Observation, TacticalArt};
 use wyrmcoil::Scene::{CompiledScene, ReadArtifact};
@@ -44,6 +45,7 @@ pub(super) struct RoomPreview {
     pub input: MovementInput,
     applied: RoomInput,
     shader: Result<Arc<GpuViewportShader>, String>,
+    preparing_shader: Option<Task<Result<Arc<GpuViewportShader>, String>>>,
     identity: String,
     notice: String,
     game: Option<GameSession>,
@@ -64,6 +66,19 @@ impl RoomPreview {
         let scene = BuiltinRoomScene();
         let mut engine = NewRoomEngineFromScene(scene);
         let snapshot = engine.RenderSnapshot();
+        let (shader, preparing_shader) = if !cfg!(target_os = "windows") {
+            (
+                Err("The 3D room requires the Windows D3D11 backend.".into()),
+                None,
+            )
+        } else if let Some(background) = executor.clone() {
+            let room_executor = executor.clone();
+            let task =
+                background.spawn(async move { BuildRoomShader(room_executor).map(Arc::new) });
+            (Err("Preparing room shader…".into()), Some(task))
+        } else {
+            (BuildRoomShader(None).map(Arc::new), None)
+        };
         Self {
             engine,
             snapshot,
@@ -83,11 +98,8 @@ impl RoomPreview {
             loading_art: None,
             executor: executor.clone(),
             art_error: None,
-            shader: if cfg!(target_os = "windows") {
-                BuildRoomShader(executor).map(Arc::new)
-            } else {
-                Err("The 3D room requires the Windows D3D11 backend.".into())
-            },
+            shader,
+            preparing_shader,
         }
     }
 
@@ -169,9 +181,15 @@ impl RoomPreview {
     }
 
     pub fn Advance(&mut self, now: Instant) -> bool {
+        let shader_ready = self.preparing_shader.as_mut().and_then(TakeReady);
+        let shader_changed = shader_ready.is_some();
+        if let Some(result) = shader_ready {
+            self.shader = result;
+            self.preparing_shader = None;
+        }
         if self.game_notice.is_some() {
             return match self.AdvanceGame(now) {
-                Ok(changed) => changed,
+                Ok(changed) => changed || shader_changed,
                 Err(error) => {
                     self.GameError(&error);
                     true
@@ -189,7 +207,7 @@ impl RoomPreview {
             self.engine.TickSimulation();
         }
         if steps == 0 {
-            return false;
+            return shader_changed;
         }
         self.snapshot = self.engine.RenderSnapshot();
         true
@@ -201,6 +219,7 @@ impl RoomPreview {
         self.loading_art = None;
         self.Suspend();
         self.game_started = Instant::now();
+        StartupStage::Mark("game_launch", Duration::ZERO);
         let root = match root {
             Ok(root) => root.to_path_buf(),
             Err(error) => {
@@ -210,7 +229,7 @@ impl RoomPreview {
         };
         let start_game = move || {
             let start = Instant::now();
-            let result = GameSession::Start(&root);
+            let result = StartupStage::Call("game_stage_and_launch", || GameSession::Start(&root));
             log::debug!(
                 "Tactical host game staging and spawn in {:.2?}",
                 start.elapsed()
@@ -398,8 +417,9 @@ impl RoomPreview {
         let token = cancelled.clone();
         let prepare_cpu = fallback.is_some();
         let build = move || {
-            let draw =
-                TacticalGraphics::New(&root, &art, last_watch, prepare_cpu, executor, &token)?;
+            let draw = StartupStage::Call("game_art_prepare", || {
+                TacticalGraphics::New(&root, &art, last_watch, prepare_cpu, executor, &token)
+            })?;
             Ok((root, art, Arc::new(draw)))
         };
         let task = if let Some(executor) = &self.executor {
@@ -612,7 +632,7 @@ fn Navigation(active: u8) -> RoomInput {
     }
 }
 
-fn TakeReady<T: Unpin + 'static>(task: &mut Task<T>) -> Option<T> {
+pub(super) fn TakeReady<T: Unpin + 'static>(task: &mut Task<T>) -> Option<T> {
     if !task.is_ready() {
         return None;
     }

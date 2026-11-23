@@ -6,6 +6,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::Engine::startup::StartupStage;
 use wyrmcoil_game::Wire::{ReadFrame, Reply, Request, WriteFrame};
 
 pub(super) struct GameProcess {
@@ -70,10 +71,11 @@ impl Drop for SessionFiles {
 
 impl GameProcess {
     pub fn Start(project: &Path, artifact: &Path) -> Result<Self, String> {
-        let project = project
-            .canonicalize()
+        let project = StartupStage::Call("game_discover", || project.canonicalize())
             .map_err(|error| format!("open game project: {error}"))?;
-        let files = SessionFiles::Stage(&project, artifact)?;
+        let files = StartupStage::Call("game_stage_executable", || {
+            SessionFiles::Stage(&project, artifact)
+        })?;
         let stderr = File::create(&files.stderr)
             .map_err(|error| format!("open game diagnostics: {error}"))?;
         let mut command = Command::new(&files.binary);
@@ -88,8 +90,7 @@ impl GameProcess {
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             command.creation_flags(CREATE_NO_WINDOW);
         }
-        let mut child = command
-            .spawn()
+        let mut child = StartupStage::Call("game_process_spawn", || command.spawn())
             .map_err(|error| format!("start game executable: {error}"))?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");

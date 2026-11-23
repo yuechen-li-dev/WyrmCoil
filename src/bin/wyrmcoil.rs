@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 use wyrmcoil::Demo::room::RoomInput;
 use wyrmcoil::Engine::asset::gltf::AssetLibrary;
+use wyrmcoil::Engine::shader::sdslv::spirv_cache::{InspectShaderCache, ShaderCacheDirectory};
 use wyrmcoil::GameRuntime::{GAME_ARTIFACT, GameState, TacticalCommand};
 use wyrmcoil::Playtest::{ContentIdentity, Input, Run, Runner};
 
@@ -13,7 +14,8 @@ mod guardhouse;
 #[path = "../../examples/games/last-watch/playtest.rs"]
 mod last_watch;
 
-const USAGE: &str = "wyrmcoil asset inspect <asset> [--root <project>] [--poses <count>]
+const USAGE: &str = "wyrmcoil shader-cache stats|clear
+wyrmcoil asset inspect <asset> [--root <project>] [--poses <count>]
 wyrmcoil playtest --project <directory> [--game <executable>] --output <directory> (--scenario guardhouse|last-watch | --stdio)";
 
 fn main() -> ExitCode {
@@ -37,6 +39,19 @@ fn Execute(args: &[String]) -> Result<(), String> {
             Inspect(Path::new(path), flags)
         }
         [playtest, flags @ ..] if playtest == "playtest" => Playtest(flags),
+        [cache, action]
+            if cache == "shader-cache" && matches!(action.as_str(), "stats" | "clear") =>
+        {
+            let path = ShaderCacheDirectory().ok_or("Shader cache is disabled")?;
+            let stats = InspectShaderCache(&path, action == "clear")
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            println!("{} {}", action, path.display());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&stats).map_err(|error| error.to_string())?
+            );
+            Ok(())
+        }
         _ => Err(USAGE.into()),
     }
 }

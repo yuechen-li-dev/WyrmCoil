@@ -2,11 +2,12 @@
 //! and consumes the completed image using the keyed mutex.
 
 use crate::Engine::asset::gltf::SkinVertex;
+pub use crate::Engine::startup::StartupStage;
 use ash::{Entry, vk};
 use std::ffi::CStr;
 use std::io::Cursor;
-use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[path = "vulkan_skin.rs"]
 mod skin;
@@ -38,52 +39,6 @@ pub struct VulkanSkinInstance {
 }
 
 type Result<T> = std::result::Result<T, String>;
-
-/// Diagnostic wall time for one startup call. The begin record also survives
-/// a call that fails to return. Opt in with WYRMCOIL_VULKAN_STARTUP=1.
-pub struct StartupStage {
-    name: &'static str,
-    start: Option<Instant>,
-}
-
-impl StartupStage {
-    pub fn Enabled() -> bool {
-        static ENABLED: OnceLock<bool> = OnceLock::new();
-        *ENABLED.get_or_init(|| std::env::var("WYRMCOIL_VULKAN_STARTUP").as_deref() == Ok("1"))
-    }
-
-    pub fn Begin(name: &'static str) -> Self {
-        let start = Self::Enabled().then(Instant::now);
-        if start.is_some() {
-            Self::Write(name, "begin", 0);
-        }
-        Self { name, start }
-    }
-
-    pub fn Call<T>(name: &'static str, work: impl FnOnce() -> T) -> T {
-        let _stage = Self::Begin(name);
-        work()
-    }
-
-    fn Write(name: &str, event: &str, micros: u128) {
-        let time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
-        eprintln!(
-            "wyrmcoil_vk stage={name} event={event} unix_ms={} thread={:?} elapsed_us={micros}",
-            time.as_millis(),
-            std::thread::current().id()
-        );
-    }
-}
-
-impl Drop for StartupStage {
-    fn drop(&mut self) {
-        if let Some(start) = self.start {
-            Self::Write(self.name, "end", start.elapsed().as_micros());
-        }
-    }
-}
 
 fn Check<T>(operation: &str, result: ash::prelude::VkResult<T>) -> Result<T> {
     result.map_err(|error| format!("{operation}: {error:?}"))

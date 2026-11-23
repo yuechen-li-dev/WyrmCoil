@@ -6,12 +6,15 @@ use super::emitter::EmitVdMirHlsl;
 use super::lower::LowerToVdMir;
 use super::parser::{ParseCanonicalSource, ParseSource};
 use super::vdmir::VdMirEntryKind;
+use crate::Engine::startup::StartupStage;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdslvShaderArtifact {
     pub SourceName: String,
     pub Hlsl: String,
     pub EntryPoints: Vec<SdslvEntryPoint>,
+    pub(super) SourceDigest: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,16 +37,20 @@ pub fn CompileSourceToShaderArtifact(
     source_name: &str,
     source: &str,
 ) -> Result<SdslvShaderArtifact, Vec<SdslvDiagnostic>> {
-    let module = ParseSource(source)?;
-    BuildShaderArtifact(source_name, &module)
+    let module = StartupStage::Call("sdslv_parse", || ParseSource(source))?;
+    let mut artifact = BuildShaderArtifact(source_name, &module)?;
+    artifact.SourceDigest = Some(Sha256::digest(source).into());
+    Ok(artifact)
 }
 
 pub fn CompileCanonicalSourceToShaderArtifact(
     source_name: &str,
     source: &str,
 ) -> Result<SdslvShaderArtifact, Vec<SdslvDiagnostic>> {
-    let module = ParseCanonicalSource(source)?;
-    BuildShaderArtifact(source_name, &module)
+    let module = StartupStage::Call("sdslv_parse", || ParseCanonicalSource(source))?;
+    let mut artifact = BuildShaderArtifact(source_name, &module)?;
+    artifact.SourceDigest = Some(Sha256::digest(source).into());
+    Ok(artifact)
 }
 
 pub fn BuildShaderArtifact(
@@ -51,7 +58,7 @@ pub fn BuildShaderArtifact(
     module: &SdslvModule,
 ) -> Result<SdslvShaderArtifact, Vec<SdslvDiagnostic>> {
     let mir = LowerToVdMir(module)?;
-    let hlsl = EmitVdMirHlsl(&mir)?;
+    let hlsl = StartupStage::Call("sdslv_hlsl", || EmitVdMirHlsl(&mir))?;
     let entry_points = mir
         .EntryPoints()
         .map(|(function, entry)| {
@@ -73,6 +80,7 @@ pub fn BuildShaderArtifact(
         SourceName: source_name.to_string(),
         Hlsl: hlsl,
         EntryPoints: entry_points,
+        SourceDigest: None,
     })
 }
 

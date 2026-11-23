@@ -1,10 +1,11 @@
 #![allow(non_snake_case)]
 
 use super::artifact::{SdslvEntryPoint, SdslvShaderArtifact};
+use crate::Engine::startup::StartupStage;
 use std::env;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -123,28 +124,53 @@ pub fn CompileHlslWithDxc(
     request: &DxcCompileRequest,
     options: &DxcOptions,
 ) -> Result<DxcCompileResult, DxcError> {
-    if !FindDxc(options) {
-        return Err(DxcError::ToolUnavailable {
-            Path: options.DxcPath.clone(),
-        });
-    }
-
     let (input_path, output_path) = BuildTempPaths();
-    fs::write(&input_path, &request.Hlsl).map_err(|e| DxcError::IoError {
+    let result = CompileTempHlsl(request, options, &input_path, &output_path);
+    CleanupTempFiles(&input_path, &output_path);
+    result
+}
+
+fn CompileTempHlsl(
+    request: &DxcCompileRequest,
+    options: &DxcOptions,
+    input_path: &str,
+    output_path: &str,
+) -> Result<DxcCompileResult, DxcError> {
+    fs::write(input_path, &request.Hlsl).map_err(|e| DxcError::IoError {
         Message: format!("failed writing HLSL temp file '{}': {}", input_path, e),
     })?;
 
     let mut args = BuildDxcCommand(request, options);
-    args.push(input_path.clone());
+    args.push(input_path.into());
     args.push("-Fo".to_string());
-    args.push(output_path.clone());
+    args.push(output_path.into());
 
-    let output = Command::new(&options.DxcPath)
+    let mut command = Command::new(&options.DxcPath);
+    command
         .args(&args)
-        .output()
-        .map_err(|e| DxcError::IoError {
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let child = StartupStage::Call("dxc_spawn", || command.spawn()).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            return DxcError::ToolUnavailable {
+                Path: options.DxcPath.clone(),
+            };
+        }
+        DxcError::IoError {
             Message: format!("failed spawning DXC '{}': {}", options.DxcPath, e),
-        })?;
+        }
+    })?;
+    let output = StartupStage::Call("dxc_execute", || child.wait_with_output()).map_err(|e| {
+        DxcError::IoError {
+            Message: format!("failed waiting for DXC '{}': {}", options.DxcPath, e),
+        }
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -159,16 +185,14 @@ pub fn CompileHlslWithDxc(
     };
 
     if !output.status.success() {
-        CleanupTempFiles(&input_path, &output_path);
         return Err(DxcError::CompileFailed { Result: result });
     }
 
-    result.OutputBytes = fs::read(&output_path).map_err(|_| DxcError::OutputMissing {
-        OutputPath: output_path.clone(),
+    result.OutputBytes = fs::read(output_path).map_err(|_| DxcError::OutputMissing {
+        OutputPath: output_path.into(),
         Result: result.clone(),
     })?;
 
-    CleanupTempFiles(&input_path, &output_path);
     Ok(result)
 }
 

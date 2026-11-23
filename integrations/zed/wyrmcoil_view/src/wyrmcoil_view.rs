@@ -242,6 +242,7 @@ enum Scene {
         session: PreviewSession,
         camera: Vec2,
         shader: Option<Arc<gpui::GpuViewportShader>>,
+        preparing_shader: Option<Task<Option<Arc<gpui::GpuViewportShader>>>>,
     },
     Room(RoomPreview),
 }
@@ -278,10 +279,19 @@ impl Scene {
     fn Advance(&mut self, now: Instant) -> bool {
         match self {
             Self::Planar {
-                session, camera, ..
+                session,
+                camera,
+                shader,
+                preparing_shader,
             } => {
+                let shader_ready = preparing_shader.as_mut().and_then(room::TakeReady);
+                let shader_changed = shader_ready.is_some();
+                if let Some(result) = shader_ready {
+                    *shader = result;
+                    *preparing_shader = None;
+                }
                 if !session.Advance(now) {
-                    return false;
+                    return shader_changed;
                 }
                 let player = session.engine.Player;
                 if let Some(item) = session
@@ -315,7 +325,11 @@ impl Preview {
             Mode::Planar => Scene::Planar {
                 session: PreviewSession::New(),
                 camera: Vec2::Zero(),
-                shader: NewViewportShader(),
+                shader: None,
+                preparing_shader: Some(
+                    cx.background_executor()
+                        .spawn(async { NewViewportShader() }),
+                ),
             },
             Mode::Room => Scene::Room(RoomPreview::New(Some(cx.background_executor().clone()))),
         };
@@ -462,6 +476,11 @@ fn ViewportShader(artifact: &SdslvShaderArtifact) -> Result<gpui::GpuViewportSha
     if vertex.Stage != SdslvShaderStage::Vertex || pixel.Stage != SdslvShaderStage::Pixel {
         return Err("expected a vertex and pixel pair".to_string());
     }
+    #[cfg(target_os = "windows")]
+    let dxbc = wyrmcoil::Engine::startup::StartupStage::Call("d3d11_compile_sm41", || {
+        gpui_windows::compile_viewport_shader_model41(&artifact.Hlsl, &vertex.Name, &pixel.Name)
+    })
+    .map_err(|error| format!("{}: {error:#}", artifact.SourceName))?;
     Ok(gpui::GpuViewportShader {
         source: artifact.Hlsl.clone(),
         vertex_entry: vertex.Name.clone(),
@@ -469,6 +488,8 @@ fn ViewportShader(artifact: &SdslvShaderArtifact) -> Result<gpui::GpuViewportSha
         mesh: None,
         #[cfg(target_os = "windows")]
         producer: None,
+        #[cfg(target_os = "windows")]
+        dxbc: Some(dxbc),
     })
 }
 
@@ -658,6 +679,7 @@ impl Render for Preview {
                 session,
                 camera,
                 shader,
+                ..
             } => DrawPlanar(session, *camera, shader.clone(), controls),
             Scene::Room(room) => {
                 let preview = cx.weak_entity();

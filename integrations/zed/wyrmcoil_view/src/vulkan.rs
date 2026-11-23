@@ -14,9 +14,8 @@ use wyrmcoil::Engine::asset::gltf::{MeshAtlas, SkinClip, SkinMesh, SkinPose};
 use wyrmcoil::Engine::render::backend::vulkan::{
     StartupStage, VulkanRoom, VulkanRoomInstance, VulkanSkinGeometry, VulkanSkinInstance,
 };
-use wyrmcoil::Engine::shader::sdslv::{
-    CompileArtifactEntryWithDxc, DxcOptions, SdslvShaderArtifact,
-};
+use wyrmcoil::Engine::shader::sdslv::SdslvShaderArtifact;
+use wyrmcoil::Engine::shader::sdslv::spirv_cache::{DxcSpirvCompiler, SpirvConfig};
 
 type SpirvStage = (Vec<u8>, CString);
 
@@ -30,6 +29,7 @@ struct Status {
 pub(super) struct RoomProducer {
     executor: Option<BackgroundExecutor>,
     artifact: SdslvShaderArtifact,
+    compiler: OnceLock<Result<DxcSpirvCompiler, String>>,
     stages: OnceLock<Result<[SpirvStage; 2], String>>,
     status: Mutex<Status>,
     atlas: Option<Arc<MeshAtlas>>,
@@ -171,6 +171,7 @@ impl RoomProducer {
         Self {
             executor,
             artifact,
+            compiler: OnceLock::new(),
             stages: OnceLock::new(),
             status: Mutex::default(),
             atlas: None,
@@ -196,12 +197,22 @@ impl RoomProducer {
     fn Build(&self, adapter_luid: [u8; 8]) -> Result<Box<dyn GpuViewportProducerSession>, String> {
         let start = Instant::now();
         let _startup = StartupStage::Begin("producer_build");
+        let compiler = || {
+            self.compiler
+                .get_or_init(|| DxcSpirvCompiler::New(&DxcPath()))
+                .as_ref()
+                .map_err(Clone::clone)
+        };
         let [(vs, vs_entry), (ps, ps_entry)] = self
             .stages
-            .get_or_init(|| StartupStage::Call("room_dxc", || CompileRoom(&self.artifact)))
+            .get_or_init(|| {
+                StartupStage::Call("room_shader_artifacts", || {
+                    CompileRoom(&self.artifact, compiler()?)
+                })
+            })
             .as_ref()
             .map_err(Clone::clone)?;
-        let shader_time = start.elapsed();
+        let mut shader_time = start.elapsed();
         let (vertices, indices) = RoomCube();
         let (vertices, indices, first) = self
             .atlas
@@ -220,11 +231,17 @@ impl RoomProducer {
         .map_err(|error| error.to_string())?;
         let mut skin = None;
         if let Some((artifact, source)) = &self.skin {
+            let shader_start = Instant::now();
             let [(vs, vs_name), (ps, ps_name)] = self
                 .skin_stages
-                .get_or_init(|| StartupStage::Call("skin_dxc", || CompileRoom(artifact)))
+                .get_or_init(|| {
+                    StartupStage::Call("skin_shader_artifacts", || {
+                        CompileRoom(artifact, compiler()?)
+                    })
+                })
                 .as_ref()
                 .map_err(Clone::clone)?;
+            shader_time += shader_start.elapsed();
             let geometry: Vec<_> = source
                 .meshes
                 .iter()
@@ -401,20 +418,17 @@ impl GpuViewportProducerSession for RoomSession {
     }
 }
 
-fn CompileRoom(artifact: &SdslvShaderArtifact) -> Result<[SpirvStage; 2], String> {
+fn CompileRoom(
+    artifact: &SdslvShaderArtifact,
+    compiler: &DxcSpirvCompiler,
+) -> Result<[SpirvStage; 2], String> {
     let [vertex, pixel] = artifact.EntryPoints.as_slice() else {
         return Err("expected exactly two room shader entries".into());
     };
-    let options = DxcOptions {
-        DxcPath: DxcPath(),
-        ExtraArgs: vec!["-fspv-target-env=vulkan1.3".into()],
-        ..Default::default()
-    };
     let compile = |entry| {
-        let spirv = CompileArtifactEntryWithDxc(artifact, entry, &options)
-            .map_err(|error| format!("DXC SPIR-V: {error:?}"))?;
+        let spirv = compiler.Compile(artifact, entry, SpirvConfig::VULKAN_13)?;
         let name = CString::new(entry.Name.as_str()).map_err(|error| error.to_string())?;
-        Ok::<_, String>((spirv.OutputBytes, name))
+        Ok::<_, String>((spirv, name))
     };
     Ok([compile(vertex)?, compile(pixel)?])
 }

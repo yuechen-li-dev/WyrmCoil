@@ -1,0 +1,19 @@
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -22849,6 +22849,7 @@
+  "margaret-core",
+  "serde",
+  "serde_json",
++ "sha2",
+  "toml 0.8.23",
+  "urlencoding",
+  "wgpu 24.0.5",
+@@ -22878,6 +22879,7 @@
+ version = "0.1.0"
+ dependencies = [
+  "gpui",
++ "gpui_windows",
+  "log",
+  "project",
+  "workspace",

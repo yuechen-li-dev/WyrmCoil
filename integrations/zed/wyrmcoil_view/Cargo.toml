@@ -16,5 +16,8 @@ project.workspace = true
 workspace.workspace = true
 wyrmcoil = { path = "../../../.." }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+gpui_windows.workspace = true
+
 [lints]
 workspace = true

@@ -1,5 +1,6 @@
 //! Validation and lowering from source syntax into the owned VD-MIR module.
 
+use crate::Engine::startup::StartupStage;
 use std::collections::HashMap;
 
 use super::ast::*;
@@ -15,7 +16,8 @@ type LowerResult<T> = Result<T, SdslvDiagnostic>;
 type Locals = HashMap<String, TypeRef>;
 
 pub fn LowerToVdMir(module: &SdslvModule) -> Result<VdMirModule, Vec<SdslvDiagnostic>> {
-    let validator = ValidateForLowering(module)?;
+    let validator = StartupStage::Call("sdslv_validate", || ValidateForLowering(module))?;
+    let _lowering = StartupStage::Begin("sdslv_vdmir");
     Lowerer {
         Module: module,
         Validator: validator,
