@@ -1,7 +1,12 @@
-use wyrmcoil::GameRuntime::{ControlMode, GameState, TacticalCommand::*, TacticalOrder};
+use wyrmcoil::GameRuntime::{
+    ControlMode, GameState, PlayerAction, PlayerError, PlayerRequest, PlayerResult,
+    TacticalCommand::*, TacticalOrder,
+};
 use wyrmcoil::Playtest::{Input, Runner};
 
 pub fn Scenario(run: &mut Runner) -> Result<(), String> {
+    Players(run)?;
+    run.Restart()?;
     ThreatScenario(run)?;
     run.Restart()?;
     AgentScenario(run)?;
@@ -120,6 +125,135 @@ pub fn Scenario(run: &mut Runner) -> Result<(), String> {
     )?;
     run.Rewind(run.Checkpoint())?;
     Ok(())
+}
+
+fn Players(run: &mut Runner) -> Result<(), String> {
+    use PlayerAction::{Ability as UseAbility, Claim, Leave, Move, Possess, Release};
+    PlayerStep(run, 1, 1, Claim, PlayerResult::Accepted)?;
+    PlayerStep(run, 2, 2, Claim, PlayerResult::Accepted)?;
+    PlayerStep(run, 1, 3, Possess { character: 1 }, PlayerResult::Accepted)?;
+    PlayerStep(
+        run,
+        2,
+        4,
+        Possess { character: 1 },
+        PlayerResult::Rejected(PlayerError::Occupied),
+    )?;
+    PlayerStep(run, 2, 5, Possess { character: 2 }, PlayerResult::Accepted)?;
+    let view = run.Observe().Tactical()?.clone();
+    run.Equal(
+        "human and two guests possess independently",
+        view.Players
+            .unwrap()
+            .Seats
+            .into_iter()
+            .map(|s| s.Character)
+            .collect::<Vec<_>>(),
+        vec![Some(0), Some(1), Some(2)],
+    )?;
+    run.Step(Input::Tactical(vec![SelectParty(1)]))?;
+    run.Equal(
+        "human input cannot steal a guest's character",
+        run.Observe().Tactical()?.Selected,
+        0,
+    )?;
+    PlayerStep(run, 2, 6, Leave, PlayerResult::Accepted)?;
+    PlayerStep(
+        run,
+        1,
+        7,
+        Move {
+            position: [-2., 4.],
+        },
+        PlayerResult::Queued,
+    )?;
+    run.Step(Input::Tactical(vec![MoveTo([0., 4.]), TogglePause]))?;
+    run.Advance(20, Input::Idle)?;
+    let view = run.Observe().Tactical()?.clone();
+    run.Equal(
+        "human movement reaches its own destination",
+        view.Actors[0].Position,
+        [0., 4.],
+    )?;
+    run.Equal(
+        "guest movement reaches its own destination",
+        view.Actors[1].Position,
+        [-2., 4.],
+    )?;
+    run.Equal(
+        "guest character brain stays suspended",
+        view.Agents[1].Clock,
+        0,
+    )?;
+    run.Check("unowned Vey runs independently", view.Agents[2].Clock > 0)?;
+    run.Step(Input::Tactical(vec![TogglePause, Attack(3)]))?;
+    PlayerStep(run, 1, 8, UseAbility { target: 3 }, PlayerResult::Queued)?;
+    run.Step(Input::Tactical(vec![TogglePause]))?;
+    for _ in 0..250 {
+        if run
+            .Observe()
+            .Tactical()?
+            .Players
+            .as_ref()
+            .unwrap()
+            .Events
+            .iter()
+            .any(|event| event.Receipt == 8 && event.Result == PlayerResult::Completed)
+        {
+            break;
+        }
+        run.Step(Input::Idle)?;
+    }
+    let view = run.Observe().Tactical()?.clone();
+    run.Check(
+        "guest Backstab completes in the real encounter",
+        view.Players
+            .as_ref()
+            .unwrap()
+            .Events
+            .iter()
+            .any(|event| event.Receipt == 8 && event.Result == PlayerResult::Completed),
+    )?;
+    run.Check(
+        "Backstab produces authoritative health and cooldown changes",
+        view.Actors[3].Health < 94 && view.Actors[1].Cooldown > 0,
+    )?;
+    PlayerStep(run, 1, 9, Release, PlayerResult::Accepted)?;
+    let released = run.Observe().Tactical()?.Agents[1].clone();
+    run.Equal(
+        "released Merrit immediately resumes arbitration",
+        released.Decision.unwrap().Tick,
+        released.Clock,
+    )?;
+    run.CaptureAgents("M15 guest returns Merrit to Dunewyrm")?;
+    run.Rewind(run.Checkpoint())
+}
+
+fn PlayerStep(
+    run: &mut Runner,
+    seat: u8,
+    receipt: u64,
+    action: PlayerAction,
+    result: PlayerResult,
+) -> Result<(), String> {
+    let revision = run.Observe().Tactical()?.Players.as_ref().unwrap().Revision;
+    run.Step(Input::Tactical(vec![Player(PlayerRequest {
+        Seat: seat,
+        Receipt: receipt,
+        Observed: revision,
+        Action: action,
+    })]))?;
+    let actual = run
+        .Observe()
+        .Tactical()?
+        .Players
+        .as_ref()
+        .unwrap()
+        .Events
+        .iter()
+        .find(|event| event.Receipt == receipt)
+        .map(|event| event.Result);
+    run.Equal(&format!("seat {seat} {action:?}"), actual, Some(result))
 }
 
 fn AgentScenario(run: &mut Runner) -> Result<(), String> {

@@ -71,7 +71,7 @@ fn last_watch_receives_orders_over_the_real_game_pipe_while_paused() {
     );
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(output.join("report.json")).unwrap()).unwrap();
-    assert_eq!(report["sessions_started"], 9);
+    assert_eq!(report["sessions_started"], 11);
     assert!(report["agent_samples"].as_array().unwrap().len() >= 6);
     assert_eq!(report["final_observation"]["view"]["State"], "Lost");
     assert!(report["first_divergence"].is_null());

@@ -16,7 +16,8 @@ mod last_watch;
 
 const USAGE: &str = "wyrmcoil shader-cache stats|clear
 wyrmcoil asset inspect <asset> [--root <project>] [--poses <count>]
-wyrmcoil playtest --project <directory> [--game <executable>] --output <directory> (--scenario guardhouse|last-watch | --stdio)";
+wyrmcoil playtest --project <directory> [--game <executable>] --output <directory> (--scenario guardhouse|last-watch | --stdio)
+wyrmcoil game-mcp --session <local-label>";
 
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -39,6 +40,9 @@ fn Execute(args: &[String]) -> Result<(), String> {
             Inspect(Path::new(path), flags)
         }
         [playtest, flags @ ..] if playtest == "playtest" => Playtest(flags),
+        [mcp, flag, label] if mcp == "game-mcp" && flag == "--session" => {
+            wyrmcoil::GameRuntime::collaboration::mcp::Serve(label)
+        }
         [cache, action]
             if cache == "shader-cache" && matches!(action.as_str(), "stats" | "clear") =>
         {
@@ -123,7 +127,7 @@ fn Playtest(flags: &[String]) -> Result<(), String> {
                 guardhouse::Scenario,
             ),
             Some("last-watch") => (
-                "last-watch/m14.1",
+                "last-watch/m15.1",
                 include_bytes!("../../examples/games/last-watch/playtest.rs"),
                 last_watch::Scenario,
             ),

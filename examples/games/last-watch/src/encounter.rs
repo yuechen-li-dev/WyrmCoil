@@ -1,14 +1,16 @@
 use std::collections::VecDeque;
 use wyrmcoil_game::{
-    ActorMotion, AgentCommand, AgentOrder, CommandOutcome, ControlMode, GameState,
-    Scene::SceneDocument, TacticalActor, TacticalCommand, TacticalGame, TacticalOrder,
-    TacticalView,
+    ActorMotion, AgentCommand, AgentOrder, CommandOutcome, ControlMode, GameState, PlayerError,
+    PlayerRequest, PlayerResult, Scene::SceneDocument, TacticalActor, TacticalCommand,
+    TacticalGame, TacticalOrder, TacticalView,
 };
 
 use crate::scene::{BuildScene, PIERS, RELIC};
 
 mod party;
 use party::{Battle, PartyAgent, Role};
+mod players;
+use players::Controllers;
 
 type Cell = [i32; 2];
 const STEPS: [Cell; 4] = [[0, -1], [-1, 0], [1, 0], [0, 1]];
@@ -24,6 +26,24 @@ enum Order {
     Hold,
     Approach(usize),
     Block,
+}
+
+impl Order {
+    fn View(self) -> TacticalOrder {
+        match self {
+            Order::Move([x, z]) => TacticalOrder::MoveTo([x as f32, z as f32]),
+            Order::Attack(id) | Order::Approach(id) => TacticalOrder::Attack(id as u16),
+            Order::UseAbility(id) => TacticalOrder::Ability(id as u16),
+            Order::Hold | Order::Block => TacticalOrder::Hold,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct QueuedOrder {
+    order: Order,
+    player: Option<PlayerRequest>,
+    executed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -104,7 +124,7 @@ struct Actor {
     block: u16,
     motion: ActorMotion,
     motion_ticks: u16,
-    queue: VecDeque<Order>,
+    queue: VecDeque<QueuedOrder>,
     target: Option<usize>,
     patrol_out: bool,
 }
@@ -137,7 +157,7 @@ pub struct Encounter {
     state: GameState,
     notice: &'static str,
     brains: [PartyAgent; PARTY],
-    possessed: Option<usize>,
+    players: Controllers,
     autonomy: bool,
     resume: [bool; PARTY],
     heavy: [bool; PARTY],
@@ -173,7 +193,7 @@ impl Encounter {
             state: GameState::Playing,
             notice: "Defeat the watch and reach the relic.",
             brains: [Role::Alda, Role::Merrit, Role::Vey].map(Role::Start),
-            possessed: Some(0),
+            players: Controllers::New(),
             autonomy: true,
             resume: [false; PARTY],
             heavy: [false; PARTY],
@@ -183,37 +203,41 @@ impl Encounter {
     }
 
     fn Command(&mut self, command: TacticalCommand) {
+        if self.autonomy && !matches!(command, TacticalCommand::SetPartyAutonomy(_)) {
+            self.HumanCommand(command);
+            return;
+        }
         match command {
             TacticalCommand::TogglePause => self.paused = !self.paused,
-            TacticalCommand::ReleaseParty if self.autonomy => self.Possess(None),
             TacticalCommand::SetPartyAutonomy(enabled)
-                if self.paused && enabled != self.autonomy =>
+                if self.paused && enabled != self.autonomy && !self.players.Guests() =>
             {
                 self.autonomy = enabled;
                 if enabled {
                     self.resume.fill(true);
-                    self.Possess((self.actors[self.selected].health > 0).then_some(self.selected));
+                    self.Transfer(
+                        0,
+                        (self.actors[self.selected].health > 0).then_some(self.selected),
+                    );
                 } else {
-                    self.possessed = None;
+                    self.Transfer(0, None);
                     self.notice = "Manual party orders enabled.";
                 }
             }
             TacticalCommand::SelectParty(slot) if usize::from(slot) < PARTY => {
-                self.Select(usize::from(slot));
+                self.selected = usize::from(slot);
             }
             TacticalCommand::Inspect(id) if usize::from(id) < self.actors.len() => {
                 let index = usize::from(id);
                 if index < PARTY {
-                    self.Select(index);
+                    self.selected = index;
                 } else {
                     self.target = Some(index);
                 }
             }
             TacticalCommand::Clear => {
-                if self.PlayerMayOrder() {
-                    self.actors[self.selected].queue.clear();
-                    self.notice = "Orders cleared.";
-                }
+                self.actors[self.selected].queue.clear();
+                self.notice = "Orders cleared.";
             }
             TacticalCommand::Hold => self.Enqueue(Order::Hold),
             TacticalCommand::MoveTo(position) if position.into_iter().all(f32::is_finite) => {
@@ -230,10 +254,6 @@ impl Encounter {
             }
             TacticalCommand::Ability(slot) if usize::from(slot) < PARTY => {
                 let index = usize::from(slot);
-                if self.autonomy && self.possessed != Some(index) {
-                    self.notice = "Possess that adventurer first.";
-                    return;
-                }
                 self.selected = index;
                 if let Some(target) = self.target.filter(|&index| self.LiveEnemy(index)) {
                     self.Enqueue(Order::UseAbility(target));
@@ -245,55 +265,22 @@ impl Encounter {
         }
     }
 
-    fn Select(&mut self, index: usize) {
-        if !self.autonomy {
-            self.selected = index;
-        } else if self.actors[index].health > 0 {
-            self.Possess(Some(index));
-        } else {
-            self.notice = "That adventurer is down.";
-        }
-    }
-
-    fn Possess(&mut self, next: Option<usize>) {
-        if self.possessed == next {
-            return;
-        }
-        if let Some(previous) = self.possessed {
-            self.resume[previous] = true;
-        }
-        self.possessed = next;
-        if let Some(index) = next {
-            self.selected = index;
-            self.notice = "Adventurer under player control.";
-        } else {
-            self.notice = "All adventurers are autonomous.";
-        }
-    }
-
-    fn PlayerMayOrder(&mut self) -> bool {
-        if self.autonomy && self.possessed.is_none() {
-            self.notice = "Possess an adventurer to issue orders.";
-            return false;
-        }
-        true
-    }
-
     fn LiveEnemy(&self, index: usize) -> bool {
         index >= PARTY && self.actors.get(index).is_some_and(|actor| actor.health > 0)
     }
 
     fn Enqueue(&mut self, order: Order) {
-        if !self.PlayerMayOrder() {
-            return;
-        }
         let actor = &mut self.actors[self.selected];
         if actor.health == 0 {
             self.notice = "That adventurer is down.";
         } else if actor.queue.len() >= LIMIT {
             self.notice = "Order queue full. Clear it with C.";
         } else {
-            actor.queue.push_back(order);
+            actor.queue.push_back(QueuedOrder {
+                order,
+                player: None,
+                executed: false,
+            });
             self.notice = "Order queued.";
         }
     }
@@ -334,15 +321,19 @@ impl Encounter {
                 continue;
             }
             if index < PARTY {
-                if !self.autonomy || self.possessed == Some(index) {
+                if !self.autonomy || self.players.Owner(index).is_some() {
                     self.PartyTurn(index);
                 }
             } else {
                 self.EnemyTurn(index);
             }
         }
-        if self.possessed.is_some_and(|id| self.actors[id].health == 0) {
-            self.Possess(None);
+        for index in 0..PARTY {
+            if self.actors[index].health == 0
+                && let Some(seat) = self.players.Owner(index)
+            {
+                self.Transfer(usize::from(seat), None);
+            }
         }
         if self.actors[..PARTY].iter().all(|actor| actor.health == 0) {
             self.state = GameState::Lost;
@@ -364,9 +355,9 @@ impl Encounter {
         if !self.autonomy {
             return [None; PARTY];
         }
-        let battle = Battle::Read(&self.actors, self.possessed, self.previous_proposals);
+        let battle = Battle::Read(&self.actors, self.players.Human(), self.previous_proposals);
         std::array::from_fn(|index| {
-            if self.possessed == Some(index) || self.actors[index].health == 0 {
+            if self.players.Owner(index).is_some() || self.actors[index].health == 0 {
                 return None;
             }
             let heavy = battle.Heavy(index);
@@ -383,13 +374,35 @@ impl Encounter {
     }
 
     fn PartyTurn(&mut self, index: usize) {
-        let Some(order) = self.actors[index].queue.front().copied() else {
+        let Some(entry) = self.actors[index].queue.front().copied() else {
             return;
         };
         let queued_followup = self.actors[index].queue.len() > 1;
-        let outcome = self.ResolveOrder(index, order, !queued_followup);
+        let before = (self.actors[index].cell, self.actors[index].strike);
+        let outcome = self.ResolveOrder(index, entry.order, !queued_followup);
+        let after = (self.actors[index].cell, self.actors[index].strike);
         if self.autonomy {
-            self.RecordCommand(index, order, outcome);
+            self.RecordCommand(index, entry.order, outcome);
+        }
+        if let Some(request) = entry.player {
+            if !entry.executed && before != after {
+                self.actors[index].queue.front_mut().unwrap().executed = true;
+                self.players
+                    .Event(self.frame, request, Some(index), PlayerResult::Executed);
+            }
+            match outcome {
+                CommandOutcome::Completed => {
+                    self.players
+                        .Event(self.frame, request, Some(index), PlayerResult::Completed)
+                }
+                CommandOutcome::Rejected => self.players.Event(
+                    self.frame,
+                    request,
+                    Some(index),
+                    PlayerResult::Rejected(PlayerError::InvalidTarget),
+                ),
+                CommandOutcome::InProgress => {}
+            }
         }
         if outcome != CommandOutcome::InProgress {
             self.actors[index].queue.pop_front();
@@ -579,11 +592,13 @@ impl Encounter {
                 .health
                 .saturating_sub(if victim.block > 0 { damage / 3 } else { damage });
         if victim.health == 0 {
-            victim.queue.clear();
             victim.travel = 0;
             victim.Motion(ActorMotion::Death);
         } else {
             victim.Motion(ActorMotion::Hit);
+        }
+        if self.actors[target].health == 0 {
+            self.CancelOrders(target);
         }
         true
     }
@@ -627,16 +642,11 @@ impl Encounter {
                 MotionTicks: actor.motion_ticks,
             })
             .collect();
-        let orders = (!self.autonomy || self.possessed.is_some())
+        let orders = (!self.autonomy || self.players.Human().is_some())
             .then_some(&self.actors[self.selected].queue)
             .into_iter()
             .flatten()
-            .map(|order| match *order {
-                Order::Move([x, z]) => TacticalOrder::MoveTo([x as f32, z as f32]),
-                Order::Attack(id) | Order::Approach(id) => TacticalOrder::Attack(id as u16),
-                Order::UseAbility(id) => TacticalOrder::Ability(id as u16),
-                Order::Hold | Order::Block => TacticalOrder::Hold,
-            })
+            .map(|entry| entry.order.View())
             .collect();
         TacticalView {
             Frame: self.frame,
@@ -653,10 +663,10 @@ impl Encounter {
                     .iter()
                     .enumerate()
                     .map(|(index, agent)| {
-                        let mode = if self.possessed == Some(index) {
-                            ControlMode::PlayerControlled
-                        } else {
-                            ControlMode::Autonomous
+                        let mode = match self.players.Owner(index) {
+                            Some(0) => ControlMode::PlayerControlled,
+                            Some(_) => ControlMode::LlmControlled,
+                            None => ControlMode::Autonomous,
                         };
                         let mut inspection = party::Inspect(index, mode, agent);
                         inspection
@@ -668,6 +678,7 @@ impl Encounter {
             } else {
                 Vec::new()
             },
+            Players: self.autonomy.then(|| self.PlayerView()),
         }
     }
 }
@@ -685,6 +696,16 @@ impl TacticalGame for Encounter {
             }
             if !self.paused {
                 self.Advance();
+            }
+            if !commands.is_empty() || !self.paused {
+                self.players.revision += 1;
+            }
+        } else {
+            for &command in commands {
+                if let TacticalCommand::Player(request) = command {
+                    self.PlayerCommand(request);
+                    self.players.revision += 1;
+                }
             }
         }
         Ok(self.View())

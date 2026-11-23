@@ -3,6 +3,7 @@ use gpui::{
     point, px, rgb, size,
 };
 use wyrmcoil::Demo::room::{RoomCamera, RoomMatrix, Vec3};
+use wyrmcoil::GameRuntime::collaboration::LeaseStatus;
 use wyrmcoil::GameRuntime::{
     ActorMotion, AgentInspection, ControlMode, GameState, MAX_TACTICAL_COMMANDS, TacticalActor,
     TacticalCommand, TacticalOrder, TacticalView,
@@ -163,6 +164,7 @@ pub(super) fn Status(
     view: &TacticalView,
     controls: &'static str,
     inspection: Option<usize>,
+    local_players: Option<&[LeaseStatus]>,
 ) -> Div {
     let state = match (view.State, view.Paused) {
         (GameState::Won, _) => "Victory · restart from the command palette",
@@ -216,6 +218,7 @@ pub(super) fn Status(
                 .child(match mode {
                     Some(ControlMode::Autonomous) => format!("{cooldown} · AI"),
                     Some(ControlMode::PlayerControlled) => format!("{cooldown} · Player"),
+                    Some(ControlMode::LlmControlled) => format!("{cooldown} · LLM"),
                     None => cooldown,
                 }),
         );
@@ -285,6 +288,26 @@ pub(super) fn Status(
                 .child("Y Release party  ·  I Cycle inspector"),
         );
     }
+    if let Some(local_players) = local_players
+        && let Some(players) = &view.Players
+    {
+        let mut summary = String::from("Local MCP");
+        for seat in players.Seats.iter().skip(1) {
+            use std::fmt::Write;
+            let label = if seat.Claimed {
+                "connected"
+            } else if seat.Last.is_some() {
+                "disconnected"
+            } else {
+                "available"
+            };
+            let _ = write!(summary, "  ·  LLM {} {label}", seat.Id);
+            if let Some(lease) = local_players.iter().find(|lease| lease.Seat == seat.Id) {
+                let _ = write!(summary, " (idle {}s)", lease.IdleMs / 1_000);
+            }
+        }
+        status = status.child(div().truncate().child(summary));
+    }
     if let Some(agent) = inspection.and_then(|index| view.Agents.get(index)) {
         status = status.child(AgentStatus(view, agent));
     }
@@ -298,10 +321,26 @@ fn AgentStatus(view: &TacticalView, agent: &AgentInspection) -> Div {
             .find(|actor| actor.Id == id)
             .map_or("—", |actor| actor.Name.as_str())
     };
-    let mode = match agent.Mode {
-        ControlMode::Autonomous => "AI",
-        ControlMode::PlayerControlled => "Player",
-    };
+    let owner = view
+        .Players
+        .as_ref()
+        .and_then(|p| p.Seats.iter().find(|s| s.Character == Some(agent.Actor)));
+    let mode = owner.map_or_else(
+        || {
+            if agent.Mode == ControlMode::Autonomous {
+                "Autonomous".into()
+            } else {
+                "Player".into()
+            }
+        },
+        |seat| {
+            if seat.Id == 0 {
+                "Human · seat 0 · brain suspended".into()
+            } else {
+                format!("LLM · seat {} · brain suspended", seat.Id)
+            }
+        },
+    );
     let mut panel = div()
         .rounded_md()
         .bg(rgb(0x202b3d))
@@ -315,6 +354,12 @@ fn AgentStatus(view: &TacticalView, agent: &AgentInspection) -> Div {
             if agent.Blocking { " · blocking" } else { "" },
         )))
         .child(div().truncate().child(agent.Stack.join(" → ")));
+    if let Some(event) = owner.and_then(|seat| seat.Last) {
+        panel = panel.child(div().truncate().child(format!(
+            "Player {:?} · {:?} at tick {}",
+            event.Action, event.Result, event.Tick
+        )));
+    }
     if let Some(decision) = &agent.Decision {
         let candidates = decision
             .Candidates
@@ -492,6 +537,7 @@ mod tests {
         };
         let mut preview = TacticalPreview::New(
             TacticalView {
+                Players: None,
                 Agents: Vec::new(),
                 Frame: 0,
                 Paused: true,

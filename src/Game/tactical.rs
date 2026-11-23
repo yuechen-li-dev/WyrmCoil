@@ -18,6 +18,7 @@ pub enum TacticalCommand {
     Hold,
     ReleaseParty,
     SetPartyAutonomy(bool),
+    Player(super::PlayerRequest),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +58,7 @@ pub enum TacticalOrder {
 pub enum ControlMode {
     Autonomous,
     PlayerControlled,
+    LlmControlled,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -134,6 +136,8 @@ pub struct TacticalView {
     pub Relic: [f32; 2],
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub Agents: Vec<AgentInspection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub Players: Option<super::PlayerView>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

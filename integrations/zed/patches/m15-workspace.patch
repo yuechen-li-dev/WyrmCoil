@@ -1,0 +1,11 @@
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -22849,6 +22849,7 @@
+ dependencies = [
+  "ash",
+  "dunewyrm",
++ "getrandom 0.3.4",
+  "gltf",
+  "image",
+  "margaret-core",

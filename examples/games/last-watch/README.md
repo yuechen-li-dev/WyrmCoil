@@ -48,3 +48,9 @@ The task writes `target/playtests/report.json`. The
 [M9 playtest guide](../../../docs/zed-integration-m9.md) also covers
 running the scenario from the shell and inspecting the KayKit assets.
 [M14 agent runtime and qualification](../../../docs/zed-integration-m14.md)
+
+For local co-op with an agent, launch the integrated editor with
+`WYRMCOIL_GAME_MCP=last-watch` and configure the workspace's MCP server.
+The host reserves seat 0 for human input, initially controlling Alda,
+and lets guests possess
+unowned adventurers. [M15 setup and qualification](../../../docs/zed-integration-m15.md)

@@ -5,6 +5,8 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 pub use wyrmcoil_scene as Scene;
+mod player;
+pub use player::*;
 mod tactical;
 pub use tactical::*;
 

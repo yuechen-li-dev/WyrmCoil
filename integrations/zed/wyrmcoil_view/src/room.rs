@@ -285,7 +285,7 @@ impl RoomPreview {
             || self
                 .game
                 .as_ref()
-                .is_some_and(|game| game.Busy() || game.Playing())
+                .is_some_and(|game| game.Busy() || game.Playing() || game.HasLocalPlayers())
     }
 
     fn AdvanceGame(&mut self, now: Instant) -> Result<bool, String> {
@@ -326,21 +326,41 @@ impl RoomPreview {
             return Ok(false);
         }
         let mounting = self.game_notice.as_deref() == Some("Starting game…") && changed;
+        if mounting && let Err(error) = game.EnableLocalPlayers() {
+            log::warn!("WyrmCoil local player bridge could not start: {error}");
+        }
         let steps = self.step.Steps(now);
         let mut camera_changed = false;
         for _ in 0..if mounting { 0 } else { steps } {
-            if !game.Playing() {
+            if !game.Playing() && !game.HasLocalPlayers() {
                 break;
             }
             let navigation = Navigation(self.input.TakeActive());
             if game.Tactical().is_some() {
-                let commands = if let Some(tactical) = &mut self.tactical {
+                let mut commands = if game.Playing()
+                    && let Some(tactical) = &mut self.tactical
+                {
                     camera_changed |= tactical.Pan(navigation.Strafe, navigation.Forward);
                     tactical.TakeCommands()
                 } else {
                     Vec::new()
                 };
-                if commands.is_empty() && game.Tactical().is_some_and(|view| view.Paused) {
+                let external = game.PollLocalPlayers(now);
+                // Leave room for the bounded guest-seat batch. Defer excess local input in FIFO order.
+                let local_limit =
+                    wyrmcoil::GameRuntime::MAX_TACTICAL_COMMANDS.saturating_sub(external.len());
+                if commands.len() > local_limit {
+                    let deferred = commands.split_off(local_limit);
+                    if let Some(tactical) = &mut self.tactical {
+                        for command in deferred {
+                            tactical.Queue(command);
+                        }
+                    }
+                }
+                commands.extend(external);
+                if commands.is_empty()
+                    && (!game.Playing() || game.Tactical().is_some_and(|view| view.Paused))
+                {
                     continue;
                 }
                 game.BeginTacticalTick(commands)?;
@@ -542,12 +562,18 @@ impl RoomPreview {
             );
         }
         if let Some(view) = &tactical_view {
+            let local_players = self
+                .game
+                .as_ref()
+                .filter(|game| game.HasLocalPlayers())
+                .map(|game| game.PlayerLiveness(Instant::now()));
             status = tactical::Status(
                 view,
                 controls,
                 self.tactical
                     .as_ref()
                     .and_then(|tactical| tactical.inspection),
+                local_players.as_deref(),
             );
             if let Some(notice) = self.game_notice.as_ref() {
                 if notice.starts_with("Game stopped")

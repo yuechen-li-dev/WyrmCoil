@@ -11,12 +11,16 @@ pub use wyrmcoil_game::{
 };
 pub use wyrmcoil_game::{GAME_ARTIFACT, GameState, Observation, PROTOCOL};
 use wyrmcoil_game::{GameInput, GameTick};
+pub use wyrmcoil_game::{
+    PlayerAction, PlayerError, PlayerEvent, PlayerKind, PlayerRequest, PlayerResult, PlayerView,
+};
 
 use crate::Demo::room::{RoomInput, RoomSnapshot, RoomWorld, TryNewRoomEngineFromScene};
 use crate::Engine::startup::StartupStage;
 use crate::Engine::{Engine, EngineClock, World};
 use crate::Scene::DecodeArtifact;
 
+pub mod collaboration;
 mod process;
 use process::GameProcess;
 
@@ -38,6 +42,7 @@ pub struct GameSession {
     tactical: Option<TacticalView>,
     tactical_tick: u64,
     art: Option<TacticalArt>,
+    collaboration: Option<collaboration::Bridge>,
 }
 
 impl GameSession {
@@ -63,6 +68,7 @@ impl GameSession {
             tactical: None,
             tactical_tick: 0,
             art: None,
+            collaboration: None,
         })
     }
 
@@ -129,8 +135,58 @@ impl GameSession {
         self.art.as_ref()
     }
 
+    pub fn EnableLocalPlayers(&mut self) -> Result<(), String> {
+        if self
+            .tactical
+            .as_ref()
+            .is_some_and(|view| view.Players.is_some())
+        {
+            self.collaboration = collaboration::Bridge::FromEnvironment(&self.name)?;
+        }
+        Ok(())
+    }
+
+    pub fn HasLocalPlayers(&self) -> bool {
+        self.collaboration.is_some()
+    }
+
+    /// Explicit opt-in for a caller-owned local tactical host.
+    pub fn OpenLocalPlayers(&mut self, label: &str, timeout: Duration) -> Result<(), String> {
+        if self.collaboration.is_some()
+            || !self
+                .tactical
+                .as_ref()
+                .is_some_and(|view| view.Players.is_some())
+            || !(Duration::from_secs(5)..=Duration::from_secs(1800)).contains(&timeout)
+        {
+            return Err("local players require a ready tactical game and a bounded lease".into());
+        }
+        self.collaboration = Some(collaboration::Bridge::ForLabel(&self.name, label, timeout)?);
+        Ok(())
+    }
+
+    pub fn PlayerLiveness(&self, now: Instant) -> Vec<collaboration::LeaseStatus> {
+        self.collaboration
+            .as_ref()
+            .map_or_else(Vec::new, |bridge| bridge.Status(now))
+    }
+
+    pub fn PollLocalPlayers(&mut self, now: Instant) -> Vec<TacticalCommand> {
+        match (&mut self.collaboration, &self.tactical) {
+            (Some(bridge), Some(view)) => bridge.Poll(view, now),
+            _ => Vec::new(),
+        }
+    }
+
     pub fn BeginTacticalTick(&mut self, commands: Vec<TacticalCommand>) -> Result<(), String> {
-        if self.tactical.is_none() || self.Busy() || !self.Playing() {
+        if self.tactical.is_none()
+            || self.Busy()
+            || (!self.Playing()
+                && (commands.is_empty()
+                    || !commands
+                        .iter()
+                        .all(|command| matches!(command, TacticalCommand::Player(_)))))
+        {
             return Err("game cannot accept a tactical tick".into());
         }
         let index = self
@@ -296,6 +352,64 @@ fn ValidateTactical(view: &TacticalView) -> Result<(), String> {
         }
     }
     ValidateAgents(view, &ids)?;
+    if let Some(players) = &view.Players {
+        ValidatePlayers(view, players, &ids)?;
+    }
+    Ok(())
+}
+
+fn ValidatePlayers(
+    view: &TacticalView,
+    players: &PlayerView,
+    ids: &std::collections::BTreeSet<u16>,
+) -> Result<(), String> {
+    use wyrmcoil_game::{MAX_PLAYER_EVENTS, PLAYER_SEATS};
+    if players.Revision < view.Frame
+        || players.Seats.len() != PLAYER_SEATS
+        || players.Events.len() > MAX_PLAYER_EVENTS
+        || players.Obstacles.len() > 64
+        || players.Battle.len() != view.Actors.len()
+    {
+        return Err("invalid player snapshot bounds".into());
+    }
+    let mut owners = std::collections::BTreeSet::new();
+    for (index, seat) in players.Seats.iter().enumerate() {
+        if usize::from(seat.Id) != index
+            || (index == 0 && (!seat.Claimed || seat.Kind != PlayerKind::Human))
+            || (index > 0 && seat.Kind != PlayerKind::Llm)
+            || seat.Orders.len() > 16
+            || seat.Target.is_some_and(|id| !ids.contains(&id))
+            || seat.Character.is_some_and(|id| {
+                !seat.Claimed
+                    || !owners.insert(id)
+                    || !view
+                        .Actors
+                        .iter()
+                        .any(|a| a.Id == id && a.PartySlot.is_some() && a.Health > 0)
+            })
+        {
+            return Err("invalid player seat".into());
+        }
+    }
+    if players
+        .Events
+        .windows(2)
+        .any(|events| events[0].Sequence >= events[1].Sequence)
+        || players
+            .Events
+            .iter()
+            .any(|event| event.Tick > view.Frame || usize::from(event.Seat) >= PLAYER_SEATS)
+    {
+        return Err("invalid player event history".into());
+    }
+    let mut battle_ids = std::collections::BTreeSet::new();
+    if players.Battle.iter().any(|fact| {
+        !ids.contains(&fact.Id)
+            || !battle_ids.insert(fact.Id)
+            || fact.Target.is_some_and(|id| !ids.contains(&id))
+    }) {
+        return Err("invalid battle actor".into());
+    }
     Ok(())
 }
 
