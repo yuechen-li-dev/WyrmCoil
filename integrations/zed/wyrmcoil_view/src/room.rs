@@ -542,7 +542,13 @@ impl RoomPreview {
             );
         }
         if let Some(view) = &tactical_view {
-            status = tactical::Status(view, controls);
+            status = tactical::Status(
+                view,
+                controls,
+                self.tactical
+                    .as_ref()
+                    .and_then(|tactical| tactical.inspection),
+            );
             if let Some(notice) = self.game_notice.as_ref() {
                 if notice.starts_with("Game stopped")
                     || notice.starts_with("Game failed")

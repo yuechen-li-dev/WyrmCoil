@@ -1,12 +1,14 @@
 #![allow(non_snake_case)]
 
 mod board;
+pub mod brain;
 mod control;
 mod ids;
 mod mailbox;
 mod phase;
 mod registry;
 mod session;
+mod stack;
 
 pub use board::{
     DwBoard, DwBoardChunk, DwBoardKind, DwBoardSnapshot, DwBoardSnapshotEntry, DwBoardTtlEntry,

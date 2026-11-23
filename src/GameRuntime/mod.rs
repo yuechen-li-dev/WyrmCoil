@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 pub use wyrmcoil_game::TacticalArt;
 use wyrmcoil_game::Wire::{Reply, Request};
 pub use wyrmcoil_game::{
-    ActorMotion, MAX_TACTICAL_COMMANDS, TacticalActor, TacticalCommand, TacticalOrder, TacticalView,
+    ActorMotion, AgentInspection, AgentOrder, ControlMode, MAX_TACTICAL_COMMANDS, TacticalActor,
+    TacticalCommand, TacticalOrder, TacticalView,
 };
 pub use wyrmcoil_game::{GAME_ARTIFACT, GameState, Observation, PROTOCOL};
 use wyrmcoil_game::{GameInput, GameTick};
@@ -292,6 +293,73 @@ fn ValidateTactical(view: &TacticalView) -> Result<(), String> {
             && !position.iter().all(|axis| axis.is_finite())
         {
             return Err("invalid tactical destination".into());
+        }
+    }
+    ValidateAgents(view, &ids)?;
+    Ok(())
+}
+
+fn ValidateAgents(
+    view: &TacticalView,
+    ids: &std::collections::BTreeSet<u16>,
+) -> Result<(), String> {
+    let label = |s: &str| !s.is_empty() && s.len() <= 96 && !s.chars().any(char::is_control);
+    let stack = |states: &[String]| states.len() <= 32 && states.iter().all(|s| label(s));
+    let mut seen = std::collections::BTreeSet::new();
+    let mut possessed = false;
+    if view.Agents.len() > view.Actors.len() {
+        return Err("too many tactical agent reports".into());
+    }
+    for agent in &view.Agents {
+        if !seen.insert(agent.Actor)
+            || !view
+                .Actors
+                .iter()
+                .any(|a| a.Id == agent.Actor && a.PartySlot.is_some())
+            || agent.Clock > view.Frame
+            || agent.Stack.is_empty()
+            || !stack(&agent.Stack)
+            || agent.Target.is_some_and(|id| !ids.contains(&id))
+            || (agent.Mode == ControlMode::PlayerControlled
+                && (agent.Actor != view.Selected || std::mem::replace(&mut possessed, true)))
+            || agent.Transitions.len() > 8
+            || agent.Transitions.iter().any(|t| {
+                t.Tick > agent.Clock
+                    || t.WorldTick > view.Frame
+                    || !label(&t.Reason)
+                    || !stack(&t.Before)
+                    || !stack(&t.After)
+            })
+            || agent.Commands.len() > 8
+            || agent.Commands.iter().any(|c| {
+                c.Tick > view.Frame
+                    || match c.Order {
+                        AgentOrder::Approach(id)
+                        | AgentOrder::Attack(id)
+                        | AgentOrder::Ability(id) => !ids.contains(&id),
+                        _ => false,
+                    }
+            })
+            || agent.Decisions.len() > 8
+            || agent.Decision.iter().chain(&agent.Decisions).any(|d| {
+                d.Tick > agent.Clock
+                    || d.WorldTick > view.Frame
+                    || !label(&d.Reason)
+                    || !d.Hysteresis.is_finite()
+                    || d.Hysteresis < 0.0
+                    || d.Candidates.len() > 8
+                    || d.Invalid.len() > 8
+                    || d.Invalid.iter().any(|name| !label(name))
+                    || d.Selected.as_ref().is_some_and(|name| !label(name))
+                    || d.Current
+                        .as_ref()
+                        .is_some_and(|(name, score)| !label(name) || !score.is_finite())
+                    || d.Candidates
+                        .iter()
+                        .any(|(name, score)| !label(name) || score.is_some_and(|s| !s.is_finite()))
+            })
+        {
+            return Err("invalid tactical agent report".into());
         }
     }
     Ok(())

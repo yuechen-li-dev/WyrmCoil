@@ -7,4 +7,5 @@ license = "MIT"
 [workspace]
 
 [dependencies]
+dunewyrm = { path = "../../../src/Dunewyrm" }
 wyrmcoil-game = { path = "../../../src/Game" }

@@ -637,7 +637,8 @@ impl DwSession {
                     self.FailNow("replace target frame not found");
                     return;
                 }
-                self.Stack.pop();
+                let keep = self.Stack.len() - 1;
+                super::stack::Unwind(&mut self.Stack, keep, drop);
                 self.Stack.push(DwRuntimeFrame { Id: Target, Pc: 0 });
             }
             DwControl::Stay => {}

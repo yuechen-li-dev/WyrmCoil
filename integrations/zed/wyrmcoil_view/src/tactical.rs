@@ -4,14 +4,15 @@ use gpui::{
 };
 use wyrmcoil::Demo::room::{RoomCamera, RoomMatrix, Vec3};
 use wyrmcoil::GameRuntime::{
-    ActorMotion, GameState, MAX_TACTICAL_COMMANDS, TacticalActor, TacticalCommand, TacticalOrder,
-    TacticalView,
+    ActorMotion, AgentInspection, ControlMode, GameState, MAX_TACTICAL_COMMANDS, TacticalActor,
+    TacticalCommand, TacticalOrder, TacticalView,
 };
 
 pub(super) struct TacticalPreview {
     pub view: TacticalView,
     pub bounds: Option<Bounds<Pixels>>,
     pub camera: RoomCamera,
+    pub inspection: Option<usize>,
     commands: Vec<TacticalCommand>,
 }
 
@@ -21,6 +22,7 @@ impl TacticalPreview {
             view,
             bounds: None,
             camera,
+            inspection: None,
             commands: Vec::new(),
         }
     }
@@ -54,6 +56,16 @@ impl TacticalPreview {
     }
 
     pub fn Key(&mut self, key: &str, repeat: bool) -> bool {
+        if key == "i" && !self.view.Agents.is_empty() {
+            if !repeat {
+                self.inspection = match self.inspection {
+                    None => Some(0),
+                    Some(index) if index + 1 < self.view.Agents.len() => Some(index + 1),
+                    Some(_) => None,
+                };
+            }
+            return true;
+        }
         let command = match key {
             "space" | " " => TacticalCommand::TogglePause,
             "escape" if !self.view.Paused => TacticalCommand::TogglePause,
@@ -66,6 +78,7 @@ impl TacticalPreview {
             "r" => TacticalCommand::Ability(2),
             "c" => TacticalCommand::Clear,
             "h" => TacticalCommand::Hold,
+            "y" if !self.view.Agents.is_empty() => TacticalCommand::ReleaseParty,
             _ => return false,
         };
         if !repeat {
@@ -135,7 +148,22 @@ fn ActorHit(eye: Vec3, ray: Vec3, actor: &TacticalActor) -> Option<f32> {
     (distance >= 0.0).then_some(distance)
 }
 
-pub(super) fn Status(view: &TacticalView, controls: &'static str) -> Div {
+pub(super) fn PlayerSelection(view: &TacticalView) -> Option<u16> {
+    if view.Agents.is_empty() {
+        Some(view.Selected)
+    } else {
+        view.Agents
+            .iter()
+            .find(|agent| agent.Mode == ControlMode::PlayerControlled)
+            .map(|agent| agent.Actor)
+    }
+}
+
+pub(super) fn Status(
+    view: &TacticalView,
+    controls: &'static str,
+    inspection: Option<usize>,
+) -> Div {
     let state = match (view.State, view.Paused) {
         (GameState::Won, _) => "Victory · restart from the command palette",
         (GameState::Lost, _) => "Defeat · restart from the command palette",
@@ -153,17 +181,25 @@ pub(super) fn Status(view: &TacticalView, controls: &'static str) -> Div {
             format!("{ability} · ready")
         };
         let health = f32::from(actor.Health) / f32::from(actor.MaxHealth);
+        let mode = view
+            .Agents
+            .iter()
+            .find(|agent| agent.Actor == actor.Id)
+            .map(|agent| agent.Mode);
+        let possessed = mode == Some(ControlMode::PlayerControlled);
         party = party.child(
             div()
-                .w(px(155.0))
+                .w(px(180.0))
                 .px_2()
                 .py_1()
                 .rounded_md()
-                .bg(rgb(if actor.Id == view.Selected {
-                    0x375369
-                } else {
-                    0x263247
-                }))
+                .bg(rgb(
+                    if possessed || (mode.is_none() && actor.Id == view.Selected) {
+                        0x375369
+                    } else {
+                        0x263247
+                    },
+                ))
                 .child(format!(
                     "{}  {}  {}/{}",
                     slot + 1,
@@ -175,9 +211,13 @@ pub(super) fn Status(view: &TacticalView, controls: &'static str) -> Div {
                     div()
                         .h(px(3.0))
                         .bg(rgb(0x151b26))
-                        .child(div().h_full().w(px(138.0 * health)).bg(rgb(0x7acf90))),
+                        .child(div().h_full().w(px(164.0 * health)).bg(rgb(0x7acf90))),
                 )
-                .child(cooldown),
+                .child(match mode {
+                    Some(ControlMode::Autonomous) => format!("{cooldown} · AI"),
+                    Some(ControlMode::PlayerControlled) => format!("{cooldown} · Player"),
+                    None => cooldown,
+                }),
         );
     }
     let mut orders = String::new();
@@ -223,7 +263,7 @@ pub(super) fn Status(view: &TacticalView, controls: &'static str) -> Div {
         .iter()
         .filter(|actor| actor.PartySlot.is_none() && actor.Health > 0)
         .count();
-    div()
+    let mut status = div()
         .flex_none()
         .flex()
         .flex_col()
@@ -237,7 +277,86 @@ pub(super) fn Status(view: &TacticalView, controls: &'static str) -> Div {
         ))
         .child(controls)
         .child(party)
-        .child(div().truncate().child(format!("{orders}{target}")))
+        .child(div().truncate().child(format!("{orders}{target}")));
+    if !view.Agents.is_empty() {
+        status = status.child(
+            div()
+                .truncate()
+                .child("Y Release party  ·  I Cycle inspector"),
+        );
+    }
+    if let Some(agent) = inspection.and_then(|index| view.Agents.get(index)) {
+        status = status.child(AgentStatus(view, agent));
+    }
+    status
+}
+
+fn AgentStatus(view: &TacticalView, agent: &AgentInspection) -> Div {
+    let name = |id| {
+        view.Actors
+            .iter()
+            .find(|actor| actor.Id == id)
+            .map_or("—", |actor| actor.Name.as_str())
+    };
+    let mode = match agent.Mode {
+        ControlMode::Autonomous => "AI",
+        ControlMode::PlayerControlled => "Player",
+    };
+    let mut panel = div()
+        .rounded_md()
+        .bg(rgb(0x202b3d))
+        .px_2()
+        .py_1()
+        .child(div().truncate().child(format!(
+            "{} · {mode} · brain tick {} · target {}{}",
+            name(agent.Actor),
+            agent.Clock,
+            agent.Target.map_or("—", name),
+            if agent.Blocking { " · blocking" } else { "" },
+        )))
+        .child(div().truncate().child(agent.Stack.join(" → ")));
+    if let Some(decision) = &agent.Decision {
+        let candidates = decision
+            .Candidates
+            .iter()
+            .map(|(option, score)| match score {
+                Some(score) => format!("{option} {score:.2}"),
+                None => format!("{option} —"),
+            })
+            .collect::<Vec<_>>()
+            .join("  ·  ");
+        let current = decision
+            .Current
+            .as_ref()
+            .map_or_else(|| "—".into(), |(_, score)| format!("{score:.2}"));
+        panel = panel
+            .child(div().truncate().child(candidates))
+            .child(div().truncate().child(format!(
+                "{} · {} · current {current} · margin {:.2} · commitment {} at world tick {}",
+                decision.Selected.as_deref().unwrap_or("—"),
+                decision.Reason,
+                decision.Hysteresis,
+                decision.CommitRemaining,
+                decision.WorldTick,
+            )));
+    } else {
+        panel = panel
+            .child(div().truncate().child("No utility evaluation yet"))
+            .child(div().truncate().child("—"));
+    }
+    let transition = agent
+        .Transitions
+        .last()
+        .map_or_else(|| "—".into(), |t| format!("{} @{}", t.Reason, t.WorldTick));
+    let command = agent.Commands.last().map_or_else(
+        || "—".into(),
+        |c| format!("{:?} {:?} @{}", c.Order, c.Outcome, c.Tick),
+    );
+    panel.child(
+        div()
+            .truncate()
+            .child(format!("Transition {transition}  ·  Command {command}")),
+    )
 }
 
 pub(super) fn AppendInstances(
@@ -254,6 +373,7 @@ pub(super) fn AppendInstances(
             indices: [0; 3],
         })
     };
+    let selected = PlayerSelection(view);
     for actor in &view.Actors {
         let [x, z] = actor.Position;
         if actor.Health == 0 {
@@ -271,8 +391,8 @@ pub(super) fn AppendInstances(
             0.0
         };
         push([x, 0.62 + offset, z], [0.54, 1.22, 0.46], -actor.Yaw, color);
-        if actor.Id == view.Selected || view.Target == Some(actor.Id) {
-            let marker = if actor.Id == view.Selected {
+        if selected == Some(actor.Id) || view.Target == Some(actor.Id) {
+            let marker = if selected == Some(actor.Id) {
                 [0.23, 0.78, 0.96, 1.0]
             } else {
                 [0.98, 0.57, 0.26, 1.0]
@@ -372,6 +492,7 @@ mod tests {
         };
         let mut preview = TacticalPreview::New(
             TacticalView {
+                Agents: Vec::new(),
                 Frame: 0,
                 Paused: true,
                 State: GameState::Playing,

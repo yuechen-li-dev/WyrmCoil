@@ -1,0 +1,22 @@
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5285,6 +5285,10 @@
+ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+ 
+ [[package]]
++name = "dunewyrm"
++version = "0.1.0"
++
++[[package]]
+ name = "dwrote"
+ version = "0.11.5"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -22844,6 +22848,7 @@
+ version = "0.1.0"
+ dependencies = [
+  "ash",
++ "dunewyrm",
+  "gltf",
+  "image",
+  "margaret-core",

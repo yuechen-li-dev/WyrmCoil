@@ -4,7 +4,7 @@
 pub const ProjectName: fn() -> &'static str = || "WyrmCoil";
 
 pub mod Demo;
-pub mod Dunewyrm;
+pub use dunewyrm as Dunewyrm;
 pub mod Engine;
 pub mod GameRuntime;
 pub mod Playtest;

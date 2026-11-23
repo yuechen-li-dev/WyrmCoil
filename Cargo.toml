@@ -7,6 +7,7 @@ license = "MIT"
 [workspace]
 members = [
     ".",
+    "src/Dunewyrm",
     "src/Game",
     "src/Scene",
     "src/Margaret/margaret-core",
@@ -16,6 +17,7 @@ members = [
     "src/Margaret/margaret-cli",
     "src/Margaret/margaret-vk",
 ]
+default-members = [".", "src/Dunewyrm"]
 
 [workspace.package]
 version = "0.1.0"
@@ -29,6 +31,7 @@ margaret-testutil = { path = "src/Margaret/margaret-testutil" }
 margaret-cpu = { path = "src/Margaret/margaret-cpu" }
 
 [dependencies]
+dunewyrm = { path = "src/Dunewyrm" }
 winit = "0.30"
 wgpu = "24"
 gltf = "=1.4.1"

@@ -10,6 +10,7 @@ use wyrmcoil::Engine::asset::gltf::{AssetLibrary, MeshAtlas, PackColor, PaletteM
 use wyrmcoil::Engine::shader::sdslv::CompileCanonicalSourceToShaderArtifact;
 use wyrmcoil::GameRuntime::{ActorMotion, TacticalActor, TacticalArt, TacticalOrder, TacticalView};
 
+use super::tactical::PlayerSelection;
 #[cfg(target_os = "windows")]
 use super::vulkan::{SkinActor, SkinSource};
 #[cfg(target_os = "windows")]
@@ -359,6 +360,7 @@ impl TacticalGraphics {
         for &(model, range) in &self.props {
             push(model, [1.0; 4], range);
         }
+        let selected = PlayerSelection(view);
         for actor in &view.Actors {
             if let Some(poses) = self.actors.get(&actor.Id) {
                 let (motion, looped) = Motion(actor.Motion);
@@ -371,7 +373,7 @@ impl TacticalGraphics {
             }
             let [x, z] = actor.Position;
             if actor.Health > 0 {
-                let marker = if actor.Id == view.Selected {
+                let marker = if selected == Some(actor.Id) {
                     [0.25, 0.82, 1.0, 1.0]
                 } else if view.Target == Some(actor.Id) {
                     [1.0, 0.55, 0.28, 1.0]

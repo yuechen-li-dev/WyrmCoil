@@ -16,6 +16,8 @@ pub enum TacticalCommand {
     Ability(u8),
     Clear,
     Hold,
+    ReleaseParty,
+    SetPartyAutonomy(bool),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +53,73 @@ pub enum TacticalOrder {
     Hold,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ControlMode {
+    Autonomous,
+    PlayerControlled,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentDecision {
+    pub Tick: u64,
+    pub WorldTick: u64,
+    pub Candidates: Vec<(String, Option<f32>)>,
+    pub Invalid: Vec<String>,
+    pub Current: Option<(String, f32)>,
+    pub Selected: Option<String>,
+    pub Hysteresis: f32,
+    pub CommitRemaining: u64,
+    pub Reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentTransition {
+    pub Tick: u64,
+    pub WorldTick: u64,
+    pub Before: Vec<String>,
+    pub After: Vec<String>,
+    pub Reason: String,
+    pub Interrupt: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CommandOutcome {
+    InProgress,
+    Completed,
+    Rejected,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentCommand {
+    pub Tick: u64,
+    pub Order: AgentOrder,
+    pub Outcome: CommandOutcome,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentOrder {
+    Move([i32; 2]),
+    Approach(u16),
+    Attack(u16),
+    Ability(u16),
+    Hold,
+    Block,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentInspection {
+    pub Actor: u16,
+    pub Mode: ControlMode,
+    pub Clock: u64,
+    pub Stack: Vec<String>,
+    pub Target: Option<u16>,
+    pub Blocking: bool,
+    pub Decision: Option<AgentDecision>,
+    pub Decisions: Vec<AgentDecision>,
+    pub Transitions: Vec<AgentTransition>,
+    pub Commands: Vec<AgentCommand>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TacticalView {
@@ -63,6 +132,8 @@ pub struct TacticalView {
     pub Actors: Vec<TacticalActor>,
     pub Orders: Vec<TacticalOrder>,
     pub Relic: [f32; 2],
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub Agents: Vec<AgentInspection>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

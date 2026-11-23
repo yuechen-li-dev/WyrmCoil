@@ -123,7 +123,7 @@ fn Playtest(flags: &[String]) -> Result<(), String> {
                 guardhouse::Scenario,
             ),
             Some("last-watch") => (
-                "last-watch/m9.1",
+                "last-watch/m14.1",
                 include_bytes!("../../examples/games/last-watch/playtest.rs"),
                 last_watch::Scenario,
             ),

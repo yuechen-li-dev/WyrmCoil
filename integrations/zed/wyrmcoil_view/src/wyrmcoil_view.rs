@@ -667,6 +667,9 @@ impl Render for Preview {
             "Paused · click to resume"
         } else if !self.TakesInput(window) {
             "Click to play"
+        } else if matches!(&self.scene, Scene::Room(room) if room.tactical.as_ref().is_some_and(|tactical| !tactical.view.Agents.is_empty()))
+        {
+            "Space pause/resume · 1–3 / left click party possess · right click order · C clear · H hold · WASD pan · wheel zoom"
         } else if matches!(&self.scene, Scene::Room(room) if room.tactical.is_some()) {
             "Space pause/resume · 1–3 select · left inspect · right order · C clear · H hold · WASD pan · wheel zoom"
         } else if self.scene.Mode() == Mode::Room {

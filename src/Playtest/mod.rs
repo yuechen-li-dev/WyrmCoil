@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::Demo::room::RoomInput;
 use crate::GameRuntime::{
-    GameSession, GameState, Observation, PROTOCOL, TacticalCommand, TacticalView,
+    AgentInspection, GameSession, GameState, Observation, PROTOCOL, TacticalCommand, TacticalView,
 };
 
 pub const REPORT_VERSION: u32 = 1;
@@ -88,6 +88,14 @@ struct Replay {
 }
 
 #[derive(Serialize)]
+struct AgentSample {
+    label: String,
+    request: usize,
+    frame: u64,
+    agents: Vec<AgentInspection>,
+}
+
+#[derive(Serialize)]
 struct Report {
     schema_version: u32,
     protocol_version: u32,
@@ -102,6 +110,8 @@ struct Report {
     final_observation: Option<Facts>,
     assertions: Vec<Assertion>,
     replays: Vec<Replay>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    agent_samples: Vec<AgentSample>,
     first_divergence: Option<Divergence>,
     first_failure: Option<String>,
     elapsed_ms: u128,
@@ -162,6 +172,22 @@ impl Runner {
 
     pub fn Observe(&self) -> &Facts {
         self.facts.as_ref().expect("successful playtest start")
+    }
+
+    /// Retain an explicit, bounded snapshot of party decisions and recent transitions.
+    pub fn CaptureAgents(&mut self, label: &str) -> Result<(), String> {
+        if self.report.agent_samples.len() >= 32 {
+            return Err("playtest agent sample limit reached".into());
+        }
+        let view = self.Observe().Tactical()?;
+        let sample = AgentSample {
+            label: Bounded(label),
+            request: self.requests,
+            frame: view.Frame,
+            agents: view.Agents.clone(),
+        };
+        self.report.agent_samples.push(sample);
+        Ok(())
     }
 
     fn Deliver(&mut self, input: &Input) -> Result<u64, String> {
@@ -366,6 +392,7 @@ pub fn Run(
             final_observation: None,
             assertions: Vec::new(),
             replays: Vec::new(),
+            agent_samples: Vec::new(),
             first_divergence: None,
             first_failure: None,
             elapsed_ms: 0,

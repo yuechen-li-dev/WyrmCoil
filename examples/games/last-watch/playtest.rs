@@ -1,11 +1,16 @@
-use wyrmcoil::GameRuntime::{GameState, TacticalCommand::*, TacticalOrder};
+use wyrmcoil::GameRuntime::{ControlMode, GameState, TacticalCommand::*, TacticalOrder};
 use wyrmcoil::Playtest::{Input, Runner};
 
 pub fn Scenario(run: &mut Runner) -> Result<(), String> {
+    ThreatScenario(run)?;
+    run.Restart()?;
+    AgentScenario(run)?;
+    run.Restart()?;
     let initial = run.Observe().Tactical()?.clone();
     run.Check("starts paused", initial.Paused)?;
     run.Equal("six actors", initial.Actors.len(), 6)?;
     run.Step(Input::Tactical(vec![
+        SetPartyAutonomy(false),
         SelectParty(1),
         MoveTo([-2.0, 4.0]),
         MoveTo([-2.0, 3.0]),
@@ -94,6 +99,7 @@ pub fn Scenario(run: &mut Runner) -> Result<(), String> {
         initial,
     )?;
     run.Step(Input::Tactical(vec![
+        SetPartyAutonomy(false),
         MoveTo([0.0, -3.0]),
         SelectParty(1),
         MoveTo([-1.0, -3.0]),
@@ -112,6 +118,206 @@ pub fn Scenario(run: &mut Runner) -> Result<(), String> {
         run.Observe().State(),
         GameState::Lost,
     )?;
+    run.Rewind(run.Checkpoint())?;
+    Ok(())
+}
+
+fn AgentScenario(run: &mut Runner) -> Result<(), String> {
+    let initial = run.Observe().Tactical()?.clone();
+    run.Equal("three independent party brains", initial.Agents.len(), 3)?;
+    run.Equal(
+        "starts in control of Alda",
+        initial.Agents[0].Mode,
+        ControlMode::PlayerControlled,
+    )?;
+    run.Step(Input::Tactical(vec![Attack(3), TogglePause]))?;
+    run.Advance(24, Input::Idle)?;
+    let underway = run.Observe().Tactical()?.clone();
+    run.Equal(
+        "possessed Alda brain stays at tick zero",
+        underway.Agents[0].Clock,
+        0,
+    )?;
+    for agent in &underway.Agents[1..] {
+        run.Equal(
+            "autonomous brain follows eligible world ticks",
+            agent.Clock,
+            underway.Frame,
+        )?;
+        run.Check(
+            "autonomous agent records a nested stack",
+            agent.Transitions.iter().any(|t| t.After.len() > 2),
+        )?;
+        run.Check(
+            "autonomous agent records utility candidates",
+            agent
+                .Decision
+                .as_ref()
+                .is_some_and(|d| d.Candidates.len() >= 4),
+        )?;
+    }
+    run.Check(
+        "automated orders reach world authority",
+        underway.Agents[1..].iter().all(|a| !a.Commands.is_empty()),
+    )?;
+    run.CaptureAgents("Alda under player control")?;
+    run.Step(Input::Tactical(vec![TogglePause, SelectParty(1)]))?;
+    let paused = run.Observe().Tactical()?.clone();
+    for _ in 0..20 {
+        run.Step(Input::Idle)?;
+    }
+    let after_pause = run.Observe().Tactical()?.clone();
+    run.Equal(
+        "tactical pause freezes the whole decision trace",
+        after_pause,
+        paused.clone(),
+    )?;
+    run.Step(Input::Tactical(vec![TogglePause]))?;
+    let reassigned = run.Observe().Tactical()?.clone();
+    run.Equal(
+        "Merrit preserves her brain while possessed",
+        &reassigned.Agents[1],
+        &paused.Agents[1],
+    )?;
+    run.Equal(
+        "released Alda evaluates on her first eligible tick",
+        reassigned.Agents[0].Decision.as_ref().map(|d| d.Tick),
+        Some(reassigned.Agents[0].Clock),
+    )?;
+    run.Step(Input::Tactical(vec![ReleaseParty]))?;
+    let released = run.Observe().Tactical()?.clone();
+    run.Check(
+        "all party members become autonomous",
+        released
+            .Agents
+            .iter()
+            .all(|a| a.Mode == ControlMode::Autonomous),
+    )?;
+    run.Equal(
+        "Merrit resumes with immediate arbitration",
+        released.Agents[1].Decision.as_ref().map(|d| d.Tick),
+        Some(paused.Agents[1].Clock + 1),
+    )?;
+    run.CaptureAgents("all party members released")?;
+    let mut evidence = [false; 3];
+    for _ in 0..850 {
+        let view = run.Observe().Tactical()?;
+        if view.State != GameState::Playing || view.Actors[3..].iter().all(|a| a.Health == 0) {
+            break;
+        }
+        run.Step(Input::Idle)?;
+        let view = run.Observe().Tactical()?;
+        let witnessed = [
+            view.Agents[1]
+                .Decision
+                .as_ref()
+                .and_then(|d| d.Selected.as_deref())
+                == Some("Flank"),
+            view.Agents[0].Transitions.iter().any(|t| {
+                t.Before.ends_with(&["ShieldBash".into()])
+                    && t.After.ends_with(&["AttackCycle".into()])
+                    && t.Reason == "Succeed"
+            }),
+            view.Agents[0].Transitions.iter().any(|t| {
+                t.Interrupt
+                    && t.Before.contains(&"AttackCycle".into())
+                    && t.After
+                        .ends_with(&["AttackCycle".into(), "BlockThreat".into()])
+            }),
+        ];
+        for (index, label) in [
+            "Merrit flanks a distracted target",
+            "Shield Bash returns to AttackCycle",
+            "Alda interrupts AttackCycle to block",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if witnessed[index] && !evidence[index] {
+                run.CaptureAgents(label)?;
+                evidence[index] = true;
+            }
+        }
+    }
+    run.Check(
+        "Merrit flanks a distracted target during combat",
+        evidence[0],
+    )?;
+    run.Check("Alda returns from nested Shield Bash", evidence[1])?;
+    run.Check("Alda interrupts AttackCycle to block", evidence[2])?;
+    let view = run.Observe().Tactical()?;
+    run.Check(
+        "the hybrid party defeats all three guards",
+        view.Actors[3..].iter().all(|a| a.Health == 0),
+    )?;
+    run.Step(Input::Tactical(vec![
+        SelectParty(0),
+        Clear,
+        MoveTo([0.0, -6.0]),
+    ]))?;
+    for _ in 0..350 {
+        if run.Observe().State() != GameState::Playing {
+            break;
+        }
+        run.Step(Input::Idle)?;
+    }
+    run.Equal(
+        "possessing Alda recovers the relic",
+        run.Observe().State(),
+        GameState::Won,
+    )?;
+    let checkpoint = run.Checkpoint();
+    run.Rewind(checkpoint)?;
+    Ok(())
+}
+
+fn ThreatScenario(run: &mut Runner) -> Result<(), String> {
+    run.Step(Input::Tactical(vec![
+        SelectParty(2),
+        MoveTo([4.0, 2.0]),
+        TogglePause,
+    ]))?;
+    for _ in 0..160 {
+        let view = run.Observe().Tactical()?;
+        if view.Agents[0]
+            .Decision
+            .as_ref()
+            .and_then(|d| d.Selected.as_deref())
+            == Some("ProtectParty")
+            && view.Actors[3..].iter().any(|a| {
+                a.Health > 0
+                    && (a.Position[0] - view.Actors[2].Position[0]).abs()
+                        + (a.Position[1] - view.Actors[2].Position[1]).abs()
+                        <= 1.1
+            })
+        {
+            break;
+        }
+        run.Step(Input::Idle)?;
+    }
+    let view = run.Observe().Tactical()?;
+    run.Equal(
+        "Alda protects the threatened mage",
+        view.Agents[0]
+            .Decision
+            .as_ref()
+            .and_then(|d| d.Selected.clone())
+            .as_deref(),
+        Some("ProtectParty"),
+    )?;
+    run.CaptureAgents("Alda protects the threatened mage")?;
+    run.Step(Input::Tactical(vec![ReleaseParty]))?;
+    let view = run.Observe().Tactical()?;
+    run.Equal(
+        "Vey keeps range on possession release",
+        view.Agents[2]
+            .Decision
+            .as_ref()
+            .and_then(|d| d.Selected.clone())
+            .as_deref(),
+        Some("MaintainDistance"),
+    )?;
+    run.CaptureAgents("Vey keeps her distance")?;
     run.Rewind(run.Checkpoint())?;
     Ok(())
 }
