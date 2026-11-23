@@ -1,15 +1,26 @@
-use super::{Buffer, Check, CreatePipeline, Device, Result, SkinVertex, vk};
+use super::{
+    Buffer, Check, CreatePipeline, Device, Result, StartupStage, VulkanSkinGeometry,
+    VulkanSkinInstance, vk,
+};
 use std::ffi::CStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 type JointMatrix = [[f32; 4]; 4];
 
+struct BindRange {
+    first: u32,
+    count: u32,
+    vertex: i32,
+    joints: usize,
+}
+
 pub(super) struct SkinPass {
     device: Arc<Device>,
     vertices: Buffer,
     indices: Buffer,
-    index_count: u32,
+    meshes: Vec<BindRange>,
+    instances: Buffer,
     palette: Buffer,
     last_palette: Vec<JointMatrix>,
     pool: vk::DescriptorPool,
@@ -19,14 +30,15 @@ pub(super) struct SkinPass {
     pipeline: vk::Pipeline,
     pub(super) upload_time: Duration,
     pub(super) uploads: u64,
+    pub(super) uploaded_bytes: u64,
 }
 
 impl SkinPass {
     pub(super) fn New(
         device: &Arc<Device>,
-        vertices: &[SkinVertex],
-        indices: &[u16],
+        geometry: &[VulkanSkinGeometry<'_>],
         slots: usize,
+        capacity: usize,
         vertex: (&[u8], &CStr),
         pixel: (&[u8], &CStr),
         color: vk::Format,
@@ -35,43 +47,73 @@ impl SkinPass {
             .checked_mul(size_of::<JointMatrix>())
             .filter(|&bytes| bytes > 0 && bytes <= device.max_storage)
             .ok_or("Vulkan joint palette exceeds the device storage buffer range")?;
-        if indices.is_empty()
-            || !indices.len().is_multiple_of(3)
-            || indices
-                .iter()
-                .any(|&index| usize::from(index) >= vertices.len())
-        {
-            return Err("invalid Vulkan skin triangle indices".into());
+        if geometry.is_empty() || !(1..=super::MAX_INSTANCES).contains(&capacity) {
+            return Err("invalid Vulkan skin mesh or instance capacity".into());
         }
-        for vertex in vertices {
-            if vertex.Joints.iter().any(|&joint| joint as usize >= slots)
-                || vertex
-                    .Weights
+        let mut meshes = Vec::with_capacity(geometry.len());
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for mesh in geometry {
+            if mesh.Indices.is_empty()
+                || !mesh.Indices.len().is_multiple_of(3)
+                || mesh
+                    .Indices
                     .iter()
-                    .any(|weight| !weight.is_finite() || *weight < 0.0)
-                || (vertex.Weights.iter().sum::<f32>() - 1.0).abs() > 0.01
-                || vertex.PositionColor.iter().any(|value| !value.is_finite())
+                    .any(|&index| usize::from(index) >= mesh.Vertices.len())
+                || mesh.Joints == 0
+                || mesh.Joints > slots
             {
-                return Err("invalid Vulkan skin joint or vertex weight".into());
+                return Err("invalid Vulkan skin geometry range".into());
             }
+            for vertex in mesh.Vertices {
+                if vertex
+                    .Joints
+                    .iter()
+                    .any(|&joint| joint as usize >= mesh.Joints)
+                    || vertex
+                        .Weights
+                        .iter()
+                        .any(|weight| !weight.is_finite() || *weight < 0.0)
+                    || (vertex.Weights.iter().sum::<f32>() - 1.0).abs() > 0.01
+                    || vertex.PositionColor.iter().any(|value| !value.is_finite())
+                {
+                    return Err("invalid Vulkan skin joint or vertex weight".into());
+                }
+            }
+            meshes.push(BindRange {
+                first: u32::try_from(indices.len()).map_err(|_| "too many Vulkan skin indices")?,
+                count: u32::try_from(mesh.Indices.len())
+                    .map_err(|_| "too many Vulkan skin indices")?,
+                vertex: i32::try_from(vertices.len())
+                    .map_err(|_| "too many Vulkan skin vertices")?,
+                joints: mesh.Joints,
+            });
+            vertices.extend_from_slice(mesh.Vertices);
+            indices.extend_from_slice(mesh.Indices);
         }
+        let buffers = StartupStage::Begin("skin_buffers_and_upload");
         let vertex_buffer = Buffer::New(
             device,
-            size_of_val(vertices),
+            size_of_val(vertices.as_slice()),
             vk::BufferUsageFlags::VERTEX_BUFFER,
         )?;
-        vertex_buffer.Upload(vertices)?;
+        vertex_buffer.Upload(&vertices)?;
         let index_buffer = Buffer::New(
             device,
-            size_of_val(indices),
+            size_of_val(indices.as_slice()),
             vk::BufferUsageFlags::INDEX_BUFFER,
         )?;
-        index_buffer.Upload(indices)?;
+        index_buffer.Upload(&indices)?;
         let mut skin = Self {
             device: device.clone(),
             vertices: vertex_buffer,
             indices: index_buffer,
-            index_count: indices.len() as u32,
+            meshes,
+            instances: Buffer::New(
+                device,
+                capacity * size_of::<VulkanSkinInstance>(),
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+            )?,
             palette: Buffer::New(device, bytes, vk::BufferUsageFlags::STORAGE_BUFFER)?,
             last_palette: Vec::with_capacity(slots),
             pool: vk::DescriptorPool::null(),
@@ -81,10 +123,13 @@ impl SkinPass {
             pipeline: vk::Pipeline::null(),
             upload_time: Duration::ZERO,
             uploads: 0,
+            uploaded_bytes: 0,
         };
+        drop(buffers);
         // All handles belong to the in-construction pass and are dropped on error.
         unsafe {
             let raw = &device.raw;
+            let descriptor = StartupStage::Begin("skin_descriptors");
             let bindings = [vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
@@ -137,30 +182,68 @@ impl SkinPass {
                     None,
                 ),
             )?;
+            drop(descriptor);
             skin.pipeline = CreatePipeline(raw, skin.layout, vertex, pixel, true, color)?;
         }
         Ok(skin)
     }
 
     /// The room's submission fence must have completed before any upload.
+    pub(super) fn Prepare(
+        &mut self,
+        draws: &[VulkanSkinInstance],
+        palette: &[JointMatrix],
+    ) -> Result<()> {
+        let mut end = 0;
+        for draw in draws {
+            let mesh = self
+                .meshes
+                .get(draw.Mesh as usize)
+                .ok_or("Vulkan skin mesh is missing")?;
+            let base = draw.PaletteBase as usize;
+            if base < end
+                || base
+                    .checked_add(mesh.joints)
+                    .is_none_or(|end| end > palette.len())
+            {
+                return Err("overlapping or out-of-range Vulkan skin palette".into());
+            }
+            end = base + mesh.joints;
+        }
+        self.instances.Upload(draws)?;
+        self.Upload(palette)
+    }
+
     pub(super) fn Upload(&mut self, palette: &[JointMatrix]) -> Result<()> {
         if size_of_val(palette) != self.palette.size {
             return Err("wrong Vulkan joint palette length".into());
         }
-        if self.last_palette == palette {
-            return Ok(());
-        }
         let now = Instant::now();
-        self.palette.Upload(palette)?;
-        self.last_palette.clear();
-        self.last_palette.extend_from_slice(palette);
+        let (first, end) = if self.last_palette.len() != palette.len() {
+            (0, palette.len())
+        } else {
+            let mut before = self.last_palette.iter().zip(palette);
+            let Some(first) = before.clone().position(|(old, new)| old != new) else {
+                return Ok(());
+            };
+            let end = before.rposition(|(old, new)| old != new).unwrap() + 1;
+            (first, end)
+        };
+        self.palette
+            .UploadAt(first * size_of::<JointMatrix>(), &palette[first..end])?;
+        if self.last_palette.is_empty() {
+            self.last_palette.extend_from_slice(palette);
+        } else {
+            self.last_palette[first..end].copy_from_slice(&palette[first..end]);
+        }
         self.upload_time += now.elapsed();
         self.uploads += 1;
+        self.uploaded_bytes += size_of_val(&palette[first..end]) as u64;
         Ok(())
     }
 
-    /// Record inside the room's active graphics pass.
-    pub(super) fn Draw(&self, command: vk::CommandBuffer, instances: vk::Buffer, first: u32) {
+    /// Record inside the room's active graphics pass after Prepare.
+    pub(super) fn Draw(&self, command: vk::CommandBuffer, draws: &[VulkanSkinInstance]) {
         unsafe {
             let raw = &self.device.raw;
             raw.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
@@ -172,9 +255,30 @@ impl SkinPass {
                 &[self.set],
                 &[],
             );
-            raw.cmd_bind_vertex_buffers(command, 0, &[self.vertices.raw, instances], &[0, 0]);
+            raw.cmd_bind_vertex_buffers(
+                command,
+                0,
+                &[self.vertices.raw, self.instances.raw],
+                &[0, 0],
+            );
             raw.cmd_bind_index_buffer(command, self.indices.raw, 0, vk::IndexType::UINT16);
-            raw.cmd_draw_indexed(command, self.index_count, 1, 0, 0, first);
+            let mut first = 0;
+            while first < draws.len() {
+                let mesh = &self.meshes[draws[first].Mesh as usize];
+                let mut end = first + 1;
+                while end < draws.len() && draws[end].Mesh == draws[first].Mesh {
+                    end += 1;
+                }
+                raw.cmd_draw_indexed(
+                    command,
+                    mesh.count,
+                    (end - first) as u32,
+                    mesh.first,
+                    mesh.vertex,
+                    first as u32,
+                );
+                first = end;
+            }
         }
     }
 }

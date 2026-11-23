@@ -14,6 +14,7 @@ stream Instance {
     [location(3)] ColumnZ: float4;
     [location(4)] ColumnW: float4;
     [location(5)] Color: float4;
+    [location(8)] PaletteBase: u32;
 }
 
 stream Surface {
@@ -37,13 +38,13 @@ shader TacticalSkin {
               + JointColumns[column + 3u]) * weight;
     }
 
-    fn SkinPosition(input: SkinVertex) -> float4 {
+    fn SkinPosition(input: SkinVertex, base: u32) -> float4 {
         let bind_position: float4 = input.PositionColor;
         let weight: float4 = input.Weights;
-        return WeightedPoint(bind_position, input.Joints.x, weight.x)
-             + WeightedPoint(bind_position, input.Joints.y, weight.y)
-             + WeightedPoint(bind_position, input.Joints.z, weight.z)
-             + WeightedPoint(bind_position, input.Joints.w, weight.w);
+        return WeightedPoint(bind_position, base + input.Joints.x, weight.x)
+             + WeightedPoint(bind_position, base + input.Joints.y, weight.y)
+             + WeightedPoint(bind_position, base + input.Joints.z, weight.z)
+             + WeightedPoint(bind_position, base + input.Joints.w, weight.w);
     }
 
     fn Project(local: float4, instance: Instance) -> float4 {
@@ -52,7 +53,7 @@ shader TacticalSkin {
     }
 
     stage vertex fn VS(input: SkinVertex, instance: Instance) -> Surface {
-        let position: float4 = Project(SkinPosition(input), instance);
+        let position: float4 = Project(SkinPosition(input, instance.PaletteBase), instance);
         let packed: u32 = uint(input.PositionColor.w);
         let red: f32 = float((packed >> 16u) & 255u) / 255.0;
         let green: f32 = float((packed >> 8u) & 255u) / 255.0;

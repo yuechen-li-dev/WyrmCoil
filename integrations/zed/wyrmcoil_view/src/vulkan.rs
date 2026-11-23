@@ -5,10 +5,15 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use gpui::{GpuViewportMeshInstance, GpuViewportProducer, GpuViewportProducerSession};
-use wyrmcoil::Demo::room::RoomCube;
-use wyrmcoil::Engine::asset::gltf::{Clip, MeshAtlas, SkinMesh};
-use wyrmcoil::Engine::render::backend::vulkan::{VulkanRoom, VulkanRoomInstance};
+use gpui::{
+    BackgroundExecutor, GpuViewportMeshInstance, GpuViewportProducer, GpuViewportProducerSession,
+    Task,
+};
+use wyrmcoil::Demo::room::{RoomCube, RoomMatrix};
+use wyrmcoil::Engine::asset::gltf::{MeshAtlas, SkinClip, SkinMesh, SkinPose};
+use wyrmcoil::Engine::render::backend::vulkan::{
+    StartupStage, VulkanRoom, VulkanRoomInstance, VulkanSkinGeometry, VulkanSkinInstance,
+};
 use wyrmcoil::Engine::shader::sdslv::{
     CompileArtifactEntryWithDxc, DxcOptions, SdslvShaderArtifact,
 };
@@ -22,25 +27,53 @@ struct Status {
     pending: bool,
 }
 
-#[derive(Debug)]
 pub(super) struct RoomProducer {
+    executor: Option<BackgroundExecutor>,
     artifact: SdslvShaderArtifact,
     stages: OnceLock<Result<[SpirvStage; 2], String>>,
     status: Mutex<Status>,
     atlas: Option<Arc<MeshAtlas>>,
     skin: Option<(SdslvShaderArtifact, Arc<SkinSource>)>,
+    skin_stages: OnceLock<Result<[SpirvStage; 2], String>>,
 }
 
-#[derive(Debug)]
+impl std::fmt::Debug for RoomProducer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RoomProducer").finish_non_exhaustive()
+    }
+}
+
+pub(super) struct SkinActor {
+    pub id: u16,
+    pub mesh: u32,
+    pub clips: [Arc<SkinClip>; 6],
+}
+
 pub(super) struct SkinSource {
-    mesh: SkinMesh,
+    meshes: Vec<SkinMesh>,
+    actors: Vec<SkinActor>,
     frame: Mutex<SkinFrame>,
 }
 
-#[derive(Debug, Default)]
-struct SkinFrame {
-    instance: Option<VulkanRoomInstance>,
+impl std::fmt::Debug for SkinSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkinSource")
+            .field("meshes", &self.meshes)
+            .field("actors", &self.actors.len())
+            .finish()
+    }
+}
+
+#[derive(Default)]
+struct ActorPose {
     sample: Option<(usize, u32)>,
+    instance: Option<VulkanSkinInstance>,
+}
+
+struct SkinFrame {
+    actors: Vec<ActorPose>,
+    draws: Vec<VulkanSkinInstance>,
+    scratch: SkinPose,
     palette: Vec<[[f32; 4]; 4]>,
     revision: u64,
     errors: Option<String>,
@@ -49,57 +82,109 @@ struct SkinFrame {
 }
 
 impl SkinSource {
-    pub fn New(mesh: SkinMesh) -> Self {
+    pub fn New(meshes: Vec<SkinMesh>, actors: Vec<SkinActor>) -> Self {
+        let slots = actors
+            .iter()
+            .map(|actor| meshes[actor.mesh as usize].PaletteSize())
+            .sum();
+        let count = actors.len();
         Self {
-            mesh,
-            frame: Mutex::default(),
+            meshes,
+            actors,
+            frame: Mutex::new(SkinFrame {
+                actors: (0..count).map(|_| ActorPose::default()).collect(),
+                draws: Vec::with_capacity(count),
+                scratch: SkinPose::default(),
+                palette: vec![[[0.0; 4]; 4]; slots],
+                revision: 0,
+                errors: None,
+                samples: 0,
+                evaluate: Duration::ZERO,
+            }),
         }
     }
 
-    pub fn Prepare(&self, draw: Option<(VulkanRoomInstance, usize, u32, &Clip, f32)>) {
-        let mut frame = self.frame.lock().unwrap();
-        let Some((instance, motion, tick, clip, time)) = draw else {
-            if frame.instance.take().is_some() {
+    pub fn Count(&self) -> usize {
+        self.actors.len()
+    }
+
+    pub fn Prepare(&self, view: &wyrmcoil::GameRuntime::TacticalView, projection: RoomMatrix) {
+        let mut lock = self.frame.lock().unwrap();
+        let frame = &mut *lock;
+        if frame.errors.is_some() {
+            return;
+        }
+        let mut base = 0;
+        frame.draws.clear();
+        for (actor, pose) in self.actors.iter().zip(&mut frame.actors) {
+            let mesh = &self.meshes[actor.mesh as usize];
+            let end = base + mesh.PaletteSize();
+            let offset = base;
+            base = end;
+            let Some(state) = view.Actors.iter().find(|state| state.Id == actor.id) else {
+                if pose.instance.take().is_some() {
+                    frame.revision += 1;
+                }
+                continue;
+            };
+            let (motion, looped) = super::tactical_art::Motion(state.Motion);
+            let clip = &actor.clips[motion];
+            let clip_ticks = super::tactical_art::ClipTicks(clip.Duration());
+            let tick =
+                super::tactical_art::SampleTick(u32::from(state.MotionTicks), looped, clip_ticks);
+            if pose.sample != Some((motion, tick)) {
+                let now = Instant::now();
+                let time = clip.Duration() * tick as f32 / clip_ticks as f32;
+                if let Err(error) = mesh.Sample(
+                    clip,
+                    time,
+                    &mut frame.scratch,
+                    &mut frame.palette[offset..end],
+                ) {
+                    frame.errors = Some(format!("actor {} skin: {error}", actor.id));
+                    frame.revision += 1;
+                    return;
+                }
+                pose.sample = Some((motion, tick));
+                frame.revision += 1;
+                frame.samples += 1;
+                frame.evaluate += now.elapsed();
+            }
+            let (model, tint) = super::tactical_art::ActorPlacement(state);
+            let [x, y, z, t] = projection.Multiply(model).0;
+            let draw = VulkanSkinInstance {
+                Transform: [x, y, z, t, tint],
+                PaletteBase: offset as u32,
+                Mesh: actor.mesh,
+            };
+            if pose.instance != Some(draw) {
+                pose.instance = Some(draw);
                 frame.revision += 1;
             }
-            return;
-        };
-        if frame.sample != Some((motion, tick)) {
-            let now = Instant::now();
-            match self.mesh.Palette(Some(clip), time) {
-                Ok(palette) => {
-                    frame.palette = palette;
-                    frame.sample = Some((motion, tick));
-                    frame.revision += 1;
-                    frame.samples += 1;
-                    frame.evaluate += now.elapsed();
-                }
-                Err(error) => {
-                    frame.errors = Some(error);
-                    frame.revision += 1;
-                }
-            }
-        }
-        if frame.instance != Some(instance) {
-            frame.instance = Some(instance);
-            frame.revision += 1;
+            frame.draws.push(draw);
         }
     }
 }
 
 impl RoomProducer {
-    pub fn New(artifact: SdslvShaderArtifact) -> Self {
+    pub fn New(artifact: SdslvShaderArtifact, executor: Option<BackgroundExecutor>) -> Self {
         Self {
+            executor,
             artifact,
             stages: OnceLock::new(),
             status: Mutex::default(),
             atlas: None,
             skin: None,
+            skin_stages: OnceLock::new(),
         }
     }
 
-    pub fn WithAtlas(artifact: SdslvShaderArtifact, atlas: MeshAtlas) -> Self {
-        let mut producer = Self::New(artifact);
+    pub fn WithAtlas(
+        artifact: SdslvShaderArtifact,
+        atlas: MeshAtlas,
+        executor: Option<BackgroundExecutor>,
+    ) -> Self {
+        let mut producer = Self::New(artifact, executor);
         producer.atlas = Some(Arc::new(atlas));
         producer
     }
@@ -108,14 +193,12 @@ impl RoomProducer {
         self.skin = Some((artifact, source));
         self
     }
-}
-
-impl GpuViewportProducer for RoomProducer {
-    fn create(&self, adapter_luid: [u8; 8]) -> Result<Box<dyn GpuViewportProducerSession>, String> {
+    fn Build(&self, adapter_luid: [u8; 8]) -> Result<Box<dyn GpuViewportProducerSession>, String> {
         let start = Instant::now();
+        let _startup = StartupStage::Begin("producer_build");
         let [(vs, vs_entry), (ps, ps_entry)] = self
             .stages
-            .get_or_init(|| CompileRoom(&self.artifact))
+            .get_or_init(|| StartupStage::Call("room_dxc", || CompileRoom(&self.artifact)))
             .as_ref()
             .map_err(Clone::clone)?;
         let shader_time = start.elapsed();
@@ -137,21 +220,37 @@ impl GpuViewportProducer for RoomProducer {
         .map_err(|error| error.to_string())?;
         let mut skin = None;
         if let Some((artifact, source)) = &self.skin {
-            let [(vs, vs_name), (ps, ps_name)] = CompileRoom(artifact)?;
-            let mesh = &source.mesh;
+            let [(vs, vs_name), (ps, ps_name)] = self
+                .skin_stages
+                .get_or_init(|| StartupStage::Call("skin_dxc", || CompileRoom(artifact)))
+                .as_ref()
+                .map_err(Clone::clone)?;
+            let geometry: Vec<_> = source
+                .meshes
+                .iter()
+                .map(|mesh| VulkanSkinGeometry {
+                    Vertices: &mesh.Vertices,
+                    Indices: &mesh.Indices,
+                    Joints: mesh.PaletteSize(),
+                })
+                .collect();
+            let slots = source.frame.lock().unwrap().palette.len();
+            let upload = Instant::now();
             room.ConfigureSkin(
-                &mesh.Vertices,
-                &mesh.Indices,
-                mesh.PaletteSize(),
-                (&vs, &vs_name),
-                (&ps, &ps_name),
+                &geometry,
+                slots,
+                source.Count(),
+                (vs, vs_name),
+                (ps, ps_name),
             )?;
+            let vertices: usize = geometry.iter().map(|mesh| size_of_val(mesh.Vertices)).sum();
+            let indices: usize = geometry.iter().map(|mesh| size_of_val(mesh.Indices)).sum();
             log::info!(
-                "Vulkan skin: {} bind vertex bytes, {} index bytes, {} byte palette in {} slots",
-                size_of_val(mesh.Vertices.as_slice()),
-                size_of_val(mesh.Indices.as_slice()),
-                mesh.PaletteSize() * 64,
-                mesh.PaletteSize()
+                "Vulkan skin: {} actors, {} meshes, {vertices} bind vertex bytes, {indices} index bytes, {} palette bytes, prepared in {:.2?}",
+                source.Count(),
+                geometry.len(),
+                slots * 64,
+                upload.elapsed()
             );
             skin = Some(source.clone());
         }
@@ -176,6 +275,18 @@ impl GpuViewportProducer for RoomProducer {
             rendered: 0,
             created: Instant::now(),
         }))
+    }
+}
+
+impl GpuViewportProducer for RoomProducer {
+    fn create(
+        self: Arc<Self>,
+        adapter_luid: [u8; 8],
+    ) -> Task<Result<Box<dyn GpuViewportProducerSession>, String>> {
+        if let Some(executor) = self.executor.clone() {
+            return executor.spawn(async move { self.Build(adapter_luid) });
+        }
+        Task::ready(self.Build(adapter_luid))
     }
 
     fn report(&self, text: String, pending: bool) {
@@ -215,9 +326,9 @@ impl Drop for RoomSession {
     fn drop(&mut self) {
         if let Some(source) = &self.skin {
             let frame = source.frame.lock().unwrap();
-            let (uploads, upload_time) = self.room.SkinUploadStats();
+            let (uploads, bytes, upload_time) = self.room.SkinUploadStats();
             log::info!(
-                "Vulkan skin retired: {} frames submitted in {:.2?}, {} CPU palette evaluations in {:.2?}, {uploads} palette uploads in {:.2?}",
+                "Vulkan skin retired: {} frames submitted in {:.2?}, {} CPU palette evaluations in {:.2?}, {uploads} palette uploads ({bytes} bytes) in {:.2?}",
                 self.rendered,
                 self.created.elapsed(),
                 frame.samples,
@@ -272,12 +383,14 @@ impl GpuViewportProducerSession for RoomSession {
             if let Some(error) = &frame.errors {
                 return Err(error.clone());
             }
-            if let Some(instance) = frame.instance {
-                let first = self.instances.len();
-                self.instances.push(instance);
+            if !frame.draws.is_empty() {
                 let submitted = unsafe {
-                    self.room
-                        .SubmitSkin(&self.instances, &self.ranges, first, &frame.palette)
+                    self.room.SubmitSkin(
+                        &self.instances,
+                        &self.ranges,
+                        &frame.draws,
+                        &frame.palette,
+                    )
                 }?;
                 self.rendered += u64::from(submitted);
                 return Ok(submitted);

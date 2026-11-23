@@ -53,5 +53,11 @@ path = "src/lib.rs"
 [workspace.lints.rust]
 non_snake_case = "allow"
 
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
 [lints]
 workspace = true

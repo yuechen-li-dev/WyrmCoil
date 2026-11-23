@@ -14,7 +14,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::core::{Interface, PCWSTR};
 
-use super::{Buffer, Device, VulkanRoom, VulkanRoomInstance, vk};
+use super::{Buffer, Device, StartupStage, VulkanRoom, VulkanRoomInstance, vk};
 
 #[path = "vulkan_skin_tests.rs"]
 mod skin_tests;
@@ -73,8 +73,7 @@ fn room_renders_and_dispatches_compute_on_the_same_vulkan_device() {
                 (&ps.OutputBytes, &ps_name),
             )
         };
-        assert!(build([0; 8]).err().unwrap().contains("matches DXGI LUID"));
-        let mut room = build(luid).unwrap();
+        let mut room = StartupStage::Call("proof_room_build", || build(luid)).unwrap();
         println!("Vulkan on {} / DXGI LUID {luid:02x?}", room.DeviceName());
         assert!(room.Attach(0, 0, 0).is_err());
         let snapshot = NewRoomEngine().RenderSnapshot();
@@ -152,6 +151,12 @@ fn room_renders_and_dispatches_compute_on_the_same_vulkan_device() {
                     std::thread::yield_now();
                 }
                 // Check the complete HRESULT. WAIT_TIMEOUT is a nonnegative status.
+                if width == 160 && !reverse && StartupStage::Enabled() {
+                    eprintln!(
+                        "wyrmcoil_vk proof_first_submit_to_fence_us={}",
+                        now.elapsed().as_micros()
+                    );
+                }
                 assert_eq!((mutex.vtable().AcquireSync)(mutex.as_raw(), 1, 0).0, 0);
                 ctx.CopyResource(&staging, &texture);
                 mutex.ReleaseSync(0).unwrap();
@@ -194,6 +199,8 @@ fn room_renders_and_dispatches_compute_on_the_same_vulkan_device() {
                 }
             }
         }
+        drop(room);
+        assert!(build([0; 8]).err().unwrap().contains("matches DXGI LUID"));
     }
 }
 
@@ -348,16 +355,17 @@ impl<'a> ComputeProof<'a> {
             let info = vk::ComputePipelineCreateInfo::default()
                 .stage(stage)
                 .layout(self.layout);
-            self.pipeline =
-                match device.create_compute_pipelines(vk::PipelineCache::null(), &[info], None) {
-                    Ok(pipelines) => pipelines[0],
-                    Err((pipelines, error)) => {
-                        for pipeline in pipelines {
-                            device.destroy_pipeline(pipeline, None);
-                        }
-                        panic!("create vector-add pipeline: {error:?}");
+            self.pipeline = match StartupStage::Call("proof_compute_pipeline", || {
+                device.create_compute_pipelines(vk::PipelineCache::null(), &[info], None)
+            }) {
+                Ok(pipelines) => pipelines[0],
+                Err((pipelines, error)) => {
+                    for pipeline in pipelines {
+                        device.destroy_pipeline(pipeline, None);
                     }
-                };
+                    panic!("create vector-add pipeline: {error:?}");
+                }
+            };
             self.commands = device
                 .create_command_pool(
                     &vk::CommandPoolCreateInfo::default().queue_family_index(self.device.family),

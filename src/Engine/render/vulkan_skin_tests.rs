@@ -3,7 +3,7 @@ use crate::Engine::asset::gltf::{AssetLibrary, MeshAtlas, PaletteMesh};
 use crate::Scene::SceneMatrix;
 use std::path::Path;
 
-use super::super::{Image, skin::SkinPass};
+use super::super::{Image, VulkanSkinGeometry, VulkanSkinInstance, skin::SkinPass};
 
 const SOURCE: &str =
     include_str!("../../../integrations/zed/wyrmcoil_view/src/tactical_skin.sdslv");
@@ -18,28 +18,6 @@ const SIZE: vk::Extent2D = vk::Extent2D {
 fn kaykit_skin_executes_vertex_deformation_against_cpu_oracle() {
     let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/games/last-watch/assets");
     let mut library = AssetLibrary::New(&assets).unwrap();
-    let model = library.Load(Path::new("characters/Knight.glb")).unwrap();
-    assert!(model.Primitives.len() > 1);
-    let mut mesh = PaletteMesh::New(model.clone()).unwrap();
-    for (socket, file) in [
-        ("handslot.r", "equipment/sword_1handed.gltf"),
-        ("handslot.l", "equipment/shield_badge.gltf"),
-    ] {
-        let equipment = PaletteMesh::New(library.Load(Path::new(file)).unwrap()).unwrap();
-        mesh.Attach(socket, &equipment).unwrap();
-    }
-    let skin = mesh.SkinMesh().unwrap();
-    assert_eq!(skin.PaletteSize(), model.Skins[0].Joints.len() + 2);
-    let mut indices = Vec::new();
-    let mut vertices = Vec::new();
-    for &vertex in &skin.Vertices {
-        for _ in 0..3 {
-            indices.push(u16::try_from(vertices.len()).unwrap());
-            vertices.push(vertex);
-        }
-    }
-    assert!(skin.Vertices.len() <= (SIZE.width * SIZE.height) as usize);
-
     // Only the raster position/diagnostic output changes. The functions that
     // fetch, deform and compose the instance transform are from the live VS.
     let source = SOURCE.replace(
@@ -53,7 +31,7 @@ fn kaykit_skin_executes_vertex_deformation_against_cpu_oracle() {
         &source[..start],
         r#"
     stage vertex fn VS(input: SkinVertex, instance: Instance, system: ProbeSystem) -> Surface {
-        let cell: u32 = system.Id / 3u;
+        let cell: u32 = system.Id / 3u + uint(instance.Color.x);
         let corner: u32 = system.Id % 3u;
         let x: f32 = (float(cell % 128u) + 0.5) * (2.0 / 128.0) - 1.0;
         let y: f32 = 1.0 - (float(cell / 128u) + 0.5) * (2.0 / 64.0);
@@ -69,7 +47,7 @@ fn kaykit_skin_executes_vertex_deformation_against_cpu_oracle() {
         }
         return Surface {
             Position: float4(x + dx, y + dy, 0.5, 1.0);
-            Color: Project(SkinPosition(input), instance);
+            Color: Project(SkinPosition(input, instance.PaletteBase), instance);
         };
     }
 "#,
@@ -96,126 +74,51 @@ fn kaykit_skin_executes_vertex_deformation_against_cpu_oracle() {
     let [(vs, vs_entry), (ps, ps_entry)] = compile(&artifact);
     let _ = compile(&live_artifact);
     let device = Device::New(AdapterLuid()).unwrap();
-    let mut pass = SkinPass::New(
-        &device,
-        &vertices,
-        &indices,
-        skin.PaletteSize(),
-        (&vs, &vs_entry),
-        (&ps, &ps_entry),
-        FORMAT,
-    )
-    .unwrap();
-    assert!(
-        SkinPass::New(
-            &device,
-            &vertices,
-            &indices,
-            usize::MAX,
-            (&vs, &vs_entry),
-            (&ps, &ps_entry),
-            FORMAT
-        )
-        .is_err()
-    );
-    let mut malformed = vertices[..3].to_vec();
-    malformed[0].Joints[0] = skin.PaletteSize() as u32;
-    assert!(
-        SkinPass::New(
-            &device,
-            &malformed,
-            &[0, 1, 2],
-            skin.PaletteSize(),
-            (&vs, &vs_entry),
-            (&ps, &ps_entry),
-            FORMAT
-        )
-        .is_err()
-    );
-    malformed[0].Joints[0] = 0;
-    malformed[0].Weights = [0.0; 4];
-    assert!(
-        SkinPass::New(
-            &device,
-            &malformed,
-            &[0, 1, 2],
-            skin.PaletteSize(),
-            (&vs, &vs_entry),
-            (&ps, &ps_entry),
-            FORMAT
-        )
-        .is_err()
-    );
-
-    let model = SceneMatrix([
-        [0.0, 0.0, 0.7, 0.0],
-        [0.0, 1.3, 0.0, 0.0],
-        [-0.5, 0.0, 0.0, 0.0],
-        [2.0, -0.3, -1.0, 1.0],
-    ]);
-    let mut max_error = 0.0_f32;
-    let total = Instant::now();
-    let mut samples = 0;
-    let mut compare = |clip: Option<&crate::Engine::asset::gltf::Clip>, time| {
-        let palette = skin.Palette(clip, time).unwrap();
-        let uploads = pass.uploads;
-        pass.Upload(&palette).unwrap();
-        let after = pass.uploads;
-        assert!(after <= uploads + 1);
-        pass.Upload(&palette).unwrap();
-        assert_eq!(after, pass.uploads);
-        let [x, y, z, t] = model.0;
-        let actual = Render(&device, &pass, [x, y, z, t, [1.0; 4]]);
-        let mut cpu = MeshAtlas::default();
-        mesh.AppendPose(&mut cpu, clip, time).unwrap();
-        for (index, &[x, y, z, _]) in cpu.Vertices.iter().enumerate() {
-            let expected = model.Transform([x, y, z, 1.0]);
-            for axis in 0..4 {
-                let error = (expected[axis] - actual[index][axis]).abs();
-                assert!(
-                    error <= 0.00002,
-                    "vertex {index}, axis {axis}, sample {time}: {expected:?} versus {:?}",
-                    actual[index]
-                );
-                max_error = max_error.max(error);
-            }
-        }
-        samples += 1;
-    };
-    compare(None, 0.0);
-    for (file, name) in [
-        ("General", "Idle_A"),
-        ("MovementBasic", "Walking_A"),
-        ("CombatMelee", "Melee_1H_Attack_Slice_Diagonal"),
-        ("CombatMelee", "Melee_Block_Attack"),
-        ("General", "Hit_A"),
-        ("General", "Death_A"),
+    for (name, equipment, attack, ability) in [
+        (
+            "Knight",
+            &[
+                ("handslot.r", "sword_1handed"),
+                ("handslot.l", "shield_badge"),
+            ][..],
+            MELEE,
+            ("CombatMelee", "Melee_Block_Attack"),
+        ),
+        (
+            "Rogue",
+            &[("handslot.r", "dagger"), ("handslot.l", "dagger")][..],
+            MELEE,
+            ("CombatMelee", "Melee_Dualwield_Attack_Stab"),
+        ),
+        (
+            "Mage",
+            &[("handslot.r", "staff")][..],
+            ("CombatRanged", "Ranged_Magic_Shoot"),
+            ("CombatRanged", "Ranged_Magic_Raise"),
+        ),
+        (
+            "Ranger",
+            &[("handslot.r", "sword_1handed")][..],
+            MELEE,
+            MELEE,
+        ),
+        (
+            "Barbarian",
+            &[("handslot.r", "sword_1handed")][..],
+            MELEE,
+            MELEE,
+        ),
     ] {
-        let path = format!("animations/Rig_Medium_{file}.glb");
-        let clips = library.LoadClips(Path::new(&path), &[name]).unwrap();
-        let clip = &clips.Clips[name];
-        for fraction in [0.0, 0.5, 1.0] {
-            compare(Some(clip), clip.Duration * fraction);
-        }
-        for track in clip
-            .Tracks
-            .iter()
-            .filter(|track| track.Step && track.Times.len() > 1)
-            .take(1)
-        {
-            let boundary = track.Times[1];
-            compare(Some(clip), boundary.next_down().max(0.0));
-            compare(Some(clip), boundary);
-        }
+        CompareRig(
+            &device,
+            &mut library,
+            name,
+            equipment,
+            [attack, ability],
+            (&vs, &vs_entry),
+            (&ps, &ps_entry),
+        );
     }
-    eprintln!(
-        "{}: {samples} poses × {} vertices, max error {max_error}; probe {:.2?}; {} palette uploads in {:.2?}",
-        device.name,
-        skin.Vertices.len(),
-        total.elapsed(),
-        pass.uploads,
-        pass.upload_time
-    );
 
     let identity = [
         [1.0, 0.0, 0.0, 0.0],
@@ -223,7 +126,7 @@ fn kaykit_skin_executes_vertex_deformation_against_cpu_oracle() {
         [0.0, 0.0, 1.0, 0.0],
         [0.0, 0.0, 0.0, 1.0],
     ];
-    let instance = [identity[0], identity[1], identity[2], identity[3], [1.0; 4]];
+    let instance = [identity[0], identity[1], identity[2], identity[3], [0.0; 4]];
     let only_joint = super::super::SkinVertex {
         PositionColor: [0.25, 0.5, -0.75, 0.0],
         Joints: [0; 4],
@@ -242,18 +145,251 @@ fn kaykit_skin_executes_vertex_deformation_against_cpu_oracle() {
         (only_joint, &matrices[..1], [0.25, 0.5, -0.75, 1.0]),
         (blend, &matrices[..], [0.75, 1.0, -1.25, 1.0]),
     ] {
+        const INSTANCES: usize = 12;
         let mut proof = SkinPass::New(
             &device,
-            &[vertex; 3],
-            &[0, 1, 2],
-            palette.len(),
+            &[VulkanSkinGeometry {
+                Vertices: &[vertex; 3],
+                Indices: &[0, 1, 2],
+                Joints: palette.len(),
+            }],
+            palette.len() * INSTANCES,
+            INSTANCES,
             (&vs, &vs_entry),
             (&ps, &ps_entry),
             FORMAT,
         )
         .unwrap();
-        proof.Upload(palette).unwrap();
-        assert_eq!(Render(&device, &proof, instance)[0], expected);
+        let mut joint_matrices = Vec::with_capacity(palette.len() * INSTANCES);
+        let draws: [_; INSTANCES] = std::array::from_fn(|actor| {
+            let mut transform = instance;
+            transform[4][0] = actor as f32;
+            for matrix in palette {
+                let mut shifted = *matrix;
+                shifted[3][0] += actor as f32 * 5.0;
+                joint_matrices.push(shifted);
+            }
+            VulkanSkinInstance {
+                Transform: transform,
+                PaletteBase: (actor * palette.len()) as u32,
+                Mesh: 0,
+            }
+        });
+        assert!(
+            proof
+                .Prepare(&[draws[0], draws[0]], &joint_matrices)
+                .is_err()
+        );
+        assert!(
+            proof
+                .Prepare(&draws, &joint_matrices[..palette.len()])
+                .is_err()
+        );
+        for count in [1, 3, 6, INSTANCES] {
+            let actual = Render(&device, &mut proof, &draws[..count], &joint_matrices);
+            for (actor, position) in actual[..count].iter().enumerate() {
+                let mut expected = expected;
+                expected[0] += actor as f32 * 5.0;
+                assert_eq!(*position, expected);
+            }
+            assert_eq!(actual[count], [0.0; 4]);
+            assert_eq!(proof.uploads, 1);
+        }
+        let before = proof.uploaded_bytes;
+        joint_matrices[palette.len()][3][0] += 2.0;
+        let actual = Render(&device, &mut proof, &draws, &joint_matrices);
+        assert_eq!(actual[0], expected);
+        assert!(actual[1][0] > expected[0] + 5.0);
+        assert_eq!(proof.uploaded_bytes - before, 64);
+    }
+}
+
+const MELEE: (&str, &str) = ("CombatMelee", "Melee_1H_Attack_Slice_Diagonal");
+
+fn CompareRig(
+    device: &std::sync::Arc<Device>,
+    library: &mut AssetLibrary,
+    rig: &str,
+    equipment: &[(&str, &str)],
+    attacks: [(&str, &str); 2],
+    vertex: (&[u8], &std::ffi::CStr),
+    pixel: (&[u8], &std::ffi::CStr),
+) {
+    let name = rig;
+    let model = library
+        .Load(&Path::new("characters").join(format!("{name}.glb")))
+        .unwrap();
+    assert!(model.Primitives.len() > 1);
+    let mut mesh = PaletteMesh::New(model.clone()).unwrap();
+    for &(socket, file) in equipment {
+        let path = format!("equipment/{file}.gltf");
+        let equipment = PaletteMesh::New(library.Load(Path::new(&path)).unwrap()).unwrap();
+        mesh.Attach(socket, &equipment).unwrap();
+    }
+    let skin = mesh.SkinMesh().unwrap();
+    assert_eq!(
+        skin.PaletteSize(),
+        model.Skins[0].Joints.len() + equipment.len()
+    );
+    let mut indices = Vec::new();
+    let mut vertices = Vec::new();
+    for &vertex in &skin.Vertices {
+        for _ in 0..3 {
+            indices.push(u16::try_from(vertices.len()).unwrap());
+            vertices.push(vertex);
+        }
+    }
+    assert!(skin.Vertices.len() <= (SIZE.width * SIZE.height) as usize);
+
+    let geometry = [VulkanSkinGeometry {
+        Vertices: &vertices,
+        Indices: &indices,
+        Joints: skin.PaletteSize(),
+    }];
+    let build = |mesh: &[VulkanSkinGeometry<'_>], slots| {
+        SkinPass::New(device, mesh, slots, 1, vertex, pixel, FORMAT)
+    };
+    let mut pass = build(&geometry, skin.PaletteSize() + 2).unwrap();
+    assert!(build(&geometry, usize::MAX).is_err());
+    let mut malformed = vertices[..3].to_vec();
+    let mut bad_weights = malformed.clone();
+    malformed[0].Joints[0] = skin.PaletteSize() as u32;
+    bad_weights[0].Weights = [0.0; 4];
+    let malformed_mesh = |vertices| {
+        [VulkanSkinGeometry {
+            Vertices: vertices,
+            Indices: &[0, 1, 2],
+            Joints: skin.PaletteSize(),
+        }]
+    };
+    assert!(build(&malformed_mesh(&malformed), skin.PaletteSize()).is_err());
+    assert!(build(&malformed_mesh(&bad_weights), skin.PaletteSize()).is_err());
+
+    let model = SceneMatrix([
+        [0.0, 0.0, 0.7, 0.0],
+        [0.0, 1.3, 0.0, 0.0],
+        [-0.5, 0.0, 0.0, 0.0],
+        [2.0, -0.3, -1.0, 1.0],
+    ]);
+    let mut max_error = 0.0_f32;
+    let total = Instant::now();
+    let mut samples = 0;
+    let mut total_error = 0.0_f64;
+    let mut components = 0_u64;
+    let mut compare = |clip: Option<&crate::Engine::asset::gltf::Clip>, time| {
+        let mut palette = vec![SceneMatrix::IDENTITY.0; 2];
+        palette.extend(skin.Palette(clip, time).unwrap());
+        let uploads = pass.uploads;
+        pass.Upload(&palette).unwrap();
+        let after = pass.uploads;
+        assert!(after <= uploads + 1);
+        pass.Upload(&palette).unwrap();
+        assert_eq!(after, pass.uploads);
+        let [x, y, z, t] = model.0;
+        let draw = VulkanSkinInstance {
+            Transform: [x, y, z, t, [0.0, 1.0, 1.0, 1.0]],
+            PaletteBase: 2,
+            Mesh: 0,
+        };
+        let actual = Render(device, &mut pass, &[draw], &palette);
+        let mut cpu = MeshAtlas::default();
+        mesh.AppendPose(&mut cpu, clip, time).unwrap();
+        for (index, &[x, y, z, _]) in cpu.Vertices.iter().enumerate() {
+            let expected = model.Transform([x, y, z, 1.0]);
+            for axis in 0..4 {
+                let error = (expected[axis] - actual[index][axis]).abs();
+                assert!(
+                    error <= 0.00002,
+                    "vertex {index}, axis {axis}, sample {time}: {expected:?} versus {:?}",
+                    actual[index]
+                );
+                max_error = max_error.max(error);
+                total_error += f64::from(error);
+                components += 1;
+            }
+        }
+        samples += 1;
+    };
+    compare(None, 0.0);
+    for (file, name) in [
+        ("General", "Idle_A"),
+        ("MovementBasic", "Walking_A"),
+        attacks[0],
+        attacks[1],
+        ("General", "Hit_A"),
+        ("General", "Death_A"),
+    ] {
+        let path = format!("animations/Rig_Medium_{file}.glb");
+        let clips = library.LoadClips(Path::new(&path), &[name]).unwrap();
+        let clip = &clips.Clips[name];
+        let bound = skin.BindClip(clips.clone(), name).unwrap();
+        for fraction in [0.0, 0.5, 1.0] {
+            let time = clip.Duration * fraction;
+            let mut palette = vec![SceneMatrix::IDENTITY.0; skin.PaletteSize()];
+            skin.Sample(&bound, time, &mut Default::default(), &mut palette)
+                .unwrap();
+            assert_eq!(palette, skin.Palette(Some(clip), time).unwrap());
+            compare(Some(clip), time);
+        }
+        for track in clip
+            .Tracks
+            .iter()
+            .filter(|track| track.Step && track.Times.len() > 1)
+            .take(1)
+        {
+            let boundary = track.Times[1];
+            compare(Some(clip), boundary.next_down().max(0.0));
+            compare(Some(clip), boundary);
+        }
+    }
+    eprintln!(
+        "{} {rig}: {samples} poses × {} vertices, max error {max_error}; mean component error {:.3e}; probe {:.2?}; {} palette uploads in {:.2?}",
+        device.name,
+        skin.Vertices.len(),
+        total_error / components as f64,
+        total.elapsed(),
+        pass.uploads,
+        pass.upload_time
+    );
+    if rig == "Knight" {
+        let clips = library
+            .LoadClips(
+                Path::new("animations/Rig_Medium_MovementBasic.glb"),
+                &["Walking_A"],
+            )
+            .unwrap();
+        let clip = skin.BindClip(clips, "Walking_A").unwrap();
+        let geometry = [VulkanSkinGeometry {
+            Vertices: &skin.Vertices,
+            Indices: &skin.Indices,
+            Joints: skin.PaletteSize(),
+        }];
+        const UPDATES: u32 = 360;
+        for count in [1, 3, 6, 12] {
+            let slots = count * skin.PaletteSize();
+            let mut batch =
+                SkinPass::New(device, &geometry, slots, count, vertex, pixel, FORMAT).unwrap();
+            let mut matrices = vec![SceneMatrix::IDENTITY.0; slots];
+            let mut scratch = crate::Engine::asset::gltf::SkinPose::default();
+            let mut evaluated = std::time::Duration::ZERO;
+            for tick in 0..UPDATES {
+                let start = Instant::now();
+                for (actor, output) in matrices.chunks_exact_mut(skin.PaletteSize()).enumerate() {
+                    let time = (tick as f32 / 60.0 + actor as f32 / 15.0) % clip.Duration();
+                    skin.Sample(&clip, time, &mut scratch, output).unwrap();
+                }
+                evaluated += start.elapsed();
+                batch.Upload(&matrices).unwrap();
+            }
+            assert_eq!(batch.uploads, u64::from(UPDATES));
+            eprintln!(
+                "Knight walk x{count}, {UPDATES} updates, 1 shared mesh, {} palette bytes, {:.2?} eval/update, {:.2?} mapped copy/update, {} transferred bytes",
+                size_of_val(matrices.as_slice()),
+                evaluated / UPDATES,
+                batch.upload_time / UPDATES,
+                batch.uploaded_bytes
+            );
+        }
     }
 }
 
@@ -271,8 +407,9 @@ fn AdapterLuid() -> [u8; 8] {
 
 fn Render(
     device: &std::sync::Arc<Device>,
-    pass: &SkinPass,
-    instance: VulkanRoomInstance,
+    pass: &mut SkinPass,
+    draws: &[VulkanSkinInstance],
+    palette: &[[[f32; 4]; 4]],
 ) -> Vec<[f32; 4]> {
     let color = Image::Allocate(
         device,
@@ -286,13 +423,7 @@ fn Render(
     let depth = Image::New(device, SIZE, None).unwrap();
     let bytes = (SIZE.width * SIZE.height) as usize * size_of::<[f32; 4]>();
     let readback = Buffer::New(device, bytes, vk::BufferUsageFlags::TRANSFER_DST).unwrap();
-    let instances = Buffer::New(
-        device,
-        size_of_val(&instance),
-        vk::BufferUsageFlags::VERTEX_BUFFER,
-    )
-    .unwrap();
-    instances.Upload(&[instance]).unwrap();
+    pass.Prepare(draws, palette).unwrap();
     let raw = &device.raw;
     // Test-only float target. All resources are retained until queue completion.
     unsafe {
@@ -367,7 +498,7 @@ fn Render(
                 .max_depth(1.0)],
         );
         raw.cmd_set_scissor(command, 0, &[area]);
-        pass.Draw(command, instances.raw, 0);
+        pass.Draw(command, draws);
         raw.cmd_end_rendering(command);
         let layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
         let copy = vk::ImageMemoryBarrier::default()

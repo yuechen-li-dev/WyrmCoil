@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::{Clip, ModelAsset, Primitive};
+use super::{Clip, ClipSet, ModelAsset, PoseScratch, Primitive};
 use crate::Scene::SceneMatrix;
 
 #[derive(Debug, Default)]
@@ -50,6 +50,7 @@ pub fn PackColor([r, g, b]: [f32; 3]) -> f32 {
 }
 
 pub struct PaletteMesh {
+    pub ColorPreparation: Duration,
     model: Arc<ModelAsset>,
     colors: Vec<Vec<f32>>,
     attachments: Vec<(usize, Vec<[f32; 4]>)>,
@@ -81,6 +82,23 @@ pub struct SkinMesh {
     slots: Vec<PaletteSlot>,
 }
 
+/// Clip tracks resolved to the nodes of this model before drawing.
+pub struct SkinClip {
+    model: Arc<ModelAsset>,
+    set: Arc<ClipSet>,
+    name: String,
+    targets: Vec<usize>,
+}
+
+impl SkinClip {
+    pub fn Duration(&self) -> f32 {
+        self.set.Clips[&self.name].Duration
+    }
+}
+
+#[derive(Default)]
+pub struct SkinPose(PoseScratch);
+
 impl std::fmt::Debug for SkinMesh {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SkinMesh")
@@ -98,18 +116,58 @@ impl SkinMesh {
 
     pub fn Palette(&self, clip: Option<&Clip>, time: f32) -> Result<Vec<[[f32; 4]; 4]>, String> {
         let world = self.model.Pose(clip, time)?;
-        let mut palette = Vec::with_capacity(self.slots.len());
-        for slot in &self.slots {
-            let matrix = match *slot {
+        let mut palette = vec![SceneMatrix::IDENTITY.0; self.slots.len()];
+        self.WritePalette(&world, &mut palette)?;
+        Ok(palette)
+    }
+
+    pub fn BindClip(&self, set: Arc<ClipSet>, name: &str) -> Result<SkinClip, String> {
+        let clip = set
+            .Clips
+            .get(name)
+            .ok_or_else(|| format!("missing skin clip '{name}'"))?;
+        Ok(SkinClip {
+            model: self.model.clone(),
+            targets: self.model.ClipTargets(clip)?,
+            name: name.into(),
+            set,
+        })
+    }
+
+    pub fn Sample(
+        &self,
+        clip: &SkinClip,
+        time: f32,
+        scratch: &mut SkinPose,
+        palette: &mut [[[f32; 4]; 4]],
+    ) -> Result<(), String> {
+        if !Arc::ptr_eq(&self.model, &clip.model) || palette.len() != self.slots.len() {
+            return Err("palette or clip does not match the bound skin".into());
+        }
+        self.model.PoseInto(
+            Some((&clip.set.Clips[&clip.name], &clip.targets)),
+            time,
+            &mut scratch.0,
+        )?;
+        self.WritePalette(&scratch.0.world, palette)
+    }
+
+    fn WritePalette(
+        &self,
+        world: &[SceneMatrix],
+        palette: &mut [[[f32; 4]; 4]],
+    ) -> Result<(), String> {
+        for (&slot, output) in self.slots.iter().zip(palette) {
+            let matrix = match slot {
                 PaletteSlot::Joint(node, inverse) => world[node].Multiply(inverse),
                 PaletteSlot::Rigid(node) => world[node],
             };
             if !matrix.0.iter().flatten().all(|value| value.is_finite()) {
                 return Err("nonfinite joint palette".into());
             }
-            palette.push(matrix.0);
+            *output = matrix.0;
         }
-        Ok(palette)
+        Ok(())
     }
 }
 
@@ -118,6 +176,7 @@ impl PaletteMesh {
         let mut base = 0;
         let mut colors = Vec::new();
         let mut indices = Vec::new();
+        let mut color_time = Duration::ZERO;
         for part in &model.Primitives {
             if base + part.Positions.len() > usize::from(u16::MAX) + 1 {
                 return Err("too many vertices for one packed viewport mesh".into());
@@ -127,10 +186,13 @@ impl PaletteMesh {
                     .iter()
                     .map(|&index| (base + index as usize) as u16),
             );
+            let start = Instant::now();
             colors.push(BakeColors(&model, part));
+            color_time += start.elapsed();
             base += part.Positions.len();
         }
         Ok(Self {
+            ColorPreparation: color_time,
             model,
             colors,
             attachments: Vec::new(),

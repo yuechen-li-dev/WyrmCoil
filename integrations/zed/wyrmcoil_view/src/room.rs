@@ -1,10 +1,14 @@
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, Canvas, Div, GpuViewportDraw, GpuViewportMesh, GpuViewportMeshInstance,
-    GpuViewportShader, ParentElement, Pixels, Styled, canvas, div,
+    App, BackgroundExecutor, Bounds, Canvas, Div, GpuViewportDraw, GpuViewportMesh,
+    GpuViewportMeshInstance, GpuViewportShader, ParentElement, Pixels, Styled, Task, canvas, div,
 };
 use wyrmcoil::Demo::room::{
     BuiltinRoomScene, NewRoomEngineFromScene, RoomCube, RoomInput, RoomSnapshot, RoomWorld,
@@ -19,6 +23,20 @@ use super::tactical::{self, TacticalPreview};
 use super::tactical_art::TacticalGraphics;
 use super::{FixedStep, MovementInput, Status, ViewportShader};
 
+type PreparedArt = (PathBuf, TacticalArt, Arc<TacticalGraphics>);
+
+struct ArtRequest {
+    task: Task<Result<PreparedArt, String>>,
+    cancelled: Arc<AtomicBool>,
+    fallback: Option<String>,
+}
+
+impl Drop for ArtRequest {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+}
+
 pub(super) struct RoomPreview {
     engine: Engine<RoomWorld, RoomInput>,
     snapshot: RoomSnapshot,
@@ -29,17 +47,20 @@ pub(super) struct RoomPreview {
     identity: String,
     notice: String,
     game: Option<GameSession>,
+    starting_game: Option<Task<Result<GameSession, String>>>,
     game_started: Instant,
     game_notice: Option<String>,
     game_observation: Option<Observation>,
     game_clock: Option<EngineClock>,
     pub tactical: Option<TacticalPreview>,
-    game_art: Option<(PathBuf, TacticalArt, Arc<TacticalGraphics>)>,
+    executor: Option<BackgroundExecutor>,
+    game_art: Option<PreparedArt>,
+    loading_art: Option<ArtRequest>,
     art_error: Option<String>,
 }
 
 impl RoomPreview {
-    pub fn New() -> Self {
+    pub fn New(executor: Option<BackgroundExecutor>) -> Self {
         let scene = BuiltinRoomScene();
         let mut engine = NewRoomEngineFromScene(scene);
         let snapshot = engine.RenderSnapshot();
@@ -52,15 +73,18 @@ impl RoomPreview {
             identity: scene.Identity().to_owned(),
             notice: format!("Built-in {} · {}", scene.Data().name, scene.Identity()),
             game: None,
+            starting_game: None,
             game_started: Instant::now(),
             game_notice: None,
             game_observation: None,
             game_clock: None,
             tactical: None,
             game_art: None,
+            loading_art: None,
+            executor: executor.clone(),
             art_error: None,
             shader: if cfg!(target_os = "windows") {
-                BuildRoomShader().map(Arc::new)
+                BuildRoomShader(executor).map(Arc::new)
             } else {
                 Err("The 3D room requires the Windows D3D11 backend.".into())
             },
@@ -172,19 +196,39 @@ impl RoomPreview {
     }
 
     pub fn StartGame(&mut self, root: Result<&Path, String>) {
+        self.game = None;
+        self.starting_game = None;
+        self.loading_art = None;
         self.Suspend();
         self.game_started = Instant::now();
-        match root.and_then(GameSession::Start) {
-            Ok(game) => {
-                self.game = Some(game);
-                self.game_notice = Some("Starting game…".into());
+        let root = match root {
+            Ok(root) => root.to_path_buf(),
+            Err(error) => {
+                self.GameError(&error);
+                return;
             }
-            Err(error) => self.GameError(&error),
-        }
+        };
+        let start_game = move || {
+            let start = Instant::now();
+            let result = GameSession::Start(&root);
+            log::debug!(
+                "Tactical host game staging and spawn in {:.2?}",
+                start.elapsed()
+            );
+            result
+        };
+        self.starting_game = Some(if let Some(executor) = &self.executor {
+            executor.spawn(async move { start_game() })
+        } else {
+            Task::ready(start_game())
+        });
+        self.game_notice = Some("Starting game…".into());
     }
 
     fn GameError(&mut self, error: &str) {
         self.game = None;
+        self.starting_game = None;
+        self.loading_art = None;
         let message = error.replace(['\r', '\n'], " ");
         log::warn!("WyrmCoil game: {message}");
         self.game_notice = Some(format!("Game failed · {message}"));
@@ -194,6 +238,8 @@ impl RoomPreview {
     pub fn StopGame(&mut self) {
         if self.game_notice.is_some() {
             self.game = None;
+            self.starting_game = None;
+            self.loading_art = None;
             self.game_notice = Some("Game stopped · Run Game to play".into());
             self.Suspend();
         }
@@ -202,10 +248,12 @@ impl RoomPreview {
     pub fn UseRoom(&mut self) {
         if self.game_notice.take().is_some() {
             self.game = None;
+            self.starting_game = None;
             self.game_clock = None;
             self.game_observation = None;
             self.tactical = None;
             self.game_art = None;
+            self.loading_art = None;
             self.art_error = None;
             self.snapshot = self.engine.RenderSnapshot();
             self.Suspend();
@@ -214,6 +262,7 @@ impl RoomPreview {
 
     pub fn CanAdvance(&self) -> bool {
         self.game_notice.is_none()
+            || self.starting_game.is_some()
             || self
                 .game
                 .as_ref()
@@ -221,21 +270,33 @@ impl RoomPreview {
     }
 
     fn AdvanceGame(&mut self, now: Instant) -> Result<bool, String> {
-        if let Some((root, art, graphics)) = &mut self.game_art
-            && let Some(reason) = graphics.FallbackReason()
-        {
-            match TacticalGraphics::D3dFallback(root, art) {
-                Ok(cpu) => {
-                    *graphics = Arc::new(cpu);
-                    self.art_error = Some(reason);
-                }
-                Err(error) => {
-                    self.game_art = None;
-                    self.art_error = Some(format!("{reason} · CPU art failed: {error}"));
-                }
-            }
+        if let Some(task) = &mut self.starting_game {
+            let Some(result) = TakeReady(task) else {
+                return Ok(false);
+            };
+            self.starting_game = None;
+            self.game = Some(result?);
+        }
+        if self.loading_art.is_some() {
             self.step.Pause();
+            return self.FinishArt();
+        }
+        if let Some(reason) = self
+            .game_art
+            .as_ref()
+            .and_then(|(_, _, draw)| draw.FallbackReason())
+        {
+            let (root, art, _) = self.game_art.take().unwrap();
+            self.RequestArt(root, art, false, Some(reason));
             return Ok(true);
+        }
+        if self
+            .game_art
+            .as_ref()
+            .is_some_and(|(_, _, draw)| draw.Starting())
+        {
+            self.step.Pause();
+            return Ok(false);
         }
         let Some(game) = &mut self.game else {
             return Ok(false);
@@ -275,6 +336,7 @@ impl RoomPreview {
             }
         }
         if changed {
+            let mut prepare = None;
             if let Some(snapshot) = game.Snapshot() {
                 self.snapshot = snapshot;
             }
@@ -290,22 +352,17 @@ impl RoomPreview {
                         if !cached {
                             self.game_art = None;
                             self.art_error = None;
-                            match TacticalGraphics::New(root, art, game.Name() == "the-last-watch")
-                            {
-                                Ok(graphics) => {
-                                    self.game_art =
-                                        Some((root.to_path_buf(), art.clone(), Arc::new(graphics)))
-                                }
-                                Err(error) => {
-                                    log::warn!("WyrmCoil tactical art: {error}");
-                                    self.art_error = Some(error);
-                                }
-                            }
+                            prepare = Some((
+                                root.to_path_buf(),
+                                art.clone(),
+                                game.Name() == "the-last-watch",
+                            ));
+                        } else {
+                            log::info!(
+                                "Tactical game mount in {:.2?}; art cache hit: true",
+                                self.game_started.elapsed()
+                            );
                         }
-                        log::info!(
-                            "Tactical game mount in {:.2?}; art cache hit: {cached}",
-                            self.game_started.elapsed()
-                        );
                     } else {
                         self.game_art = None;
                         self.art_error = None;
@@ -322,8 +379,70 @@ impl RoomPreview {
             self.game_clock = game.Clock();
             self.game_observation = game.Observation().cloned();
             self.game_notice = Some(format!("Game · {}", game.Name()));
+            if let Some((root, art, last_watch)) = prepare {
+                self.RequestArt(root, art, last_watch, None);
+            }
         }
         Ok(changed || camera_changed)
+    }
+
+    fn RequestArt(
+        &mut self,
+        root: PathBuf,
+        art: TacticalArt,
+        last_watch: bool,
+        fallback: Option<String>,
+    ) {
+        let executor = self.executor.clone();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let token = cancelled.clone();
+        let prepare_cpu = fallback.is_some();
+        let build = move || {
+            let draw =
+                TacticalGraphics::New(&root, &art, last_watch, prepare_cpu, executor, &token)?;
+            Ok((root, art, Arc::new(draw)))
+        };
+        let task = if let Some(executor) = &self.executor {
+            executor.spawn(async move { build() })
+        } else {
+            Task::ready(build())
+        };
+        self.loading_art = Some(ArtRequest {
+            task,
+            cancelled,
+            fallback,
+        });
+        self.step.Pause();
+        self.game_notice = Some(if prepare_cpu {
+            "Loading CPU fallback art…".into()
+        } else {
+            "Loading game art…".into()
+        });
+    }
+
+    fn FinishArt(&mut self) -> Result<bool, String> {
+        let request = self.loading_art.as_mut().unwrap();
+        let Some(result) = TakeReady(&mut request.task) else {
+            return Ok(false);
+        };
+        let fallback = request.fallback.take();
+        self.loading_art = None;
+        self.game_art = Some(match (result, &fallback) {
+            (Ok(graphics), _) => graphics,
+            (Err(error), Some(reason)) => {
+                return Err(format!("{reason} · CPU art failed: {error}"));
+            }
+            (Err(error), None) => return Err(error),
+        });
+        self.art_error = fallback;
+        if let Some(game) = &self.game {
+            self.game_notice = Some(format!("Game · {}", game.Name()));
+        }
+        log::info!(
+            "Tactical game mount in {:.2?}; art cache hit: false",
+            self.game_started.elapsed()
+        );
+        Ok(true)
     }
 
     pub fn Suspend(&mut self) {
@@ -352,10 +471,18 @@ impl RoomPreview {
             .game_art
             .as_ref()
             .map(|(_, _, graphics)| graphics.clone());
-        let shader = tactical_graphics
-            .as_ref()
-            .map(|graphics| graphics.shader.clone())
-            .or_else(|| self.shader.as_ref().ok().cloned());
+        let shader = if tactical_graphics.is_none()
+            && (self.starting_game.is_some()
+                || self.loading_art.is_some()
+                || self.game_notice.as_deref() == Some("Starting game…"))
+        {
+            None
+        } else {
+            tactical_graphics
+                .as_ref()
+                .map(|graphics| graphics.shader.clone())
+                .or_else(|| self.shader.as_ref().ok().cloned())
+        };
         let pose = snapshot.Camera;
         let guard = snapshot.Guard.Position;
         let notice = match (&self.game_notice, &self.game_observation) {
@@ -400,6 +527,7 @@ impl RoomPreview {
                 if notice.starts_with("Game stopped")
                     || notice.starts_with("Game failed")
                     || notice.starts_with("Starting")
+                    || notice.starts_with("Loading")
                 {
                     status = status.child(notice.clone());
                 }
@@ -484,7 +612,18 @@ fn Navigation(active: u8) -> RoomInput {
     }
 }
 
-fn BuildRoomShader() -> Result<GpuViewportShader, String> {
+fn TakeReady<T: Unpin + 'static>(task: &mut Task<T>) -> Option<T> {
+    if !task.is_ready() {
+        return None;
+    }
+    let mut cx = std::task::Context::from_waker(Waker::noop());
+    match Pin::new(task).poll(&mut cx) {
+        Poll::Ready(value) => Some(value),
+        Poll::Pending => None,
+    }
+}
+
+fn BuildRoomShader(executor: Option<BackgroundExecutor>) -> Result<GpuViewportShader, String> {
     let artifact = CompileCanonicalSourceToShaderArtifact("room.sdslv", include_str!("room.sdslv"))
         .map_err(|errors| format!("room.sdslv: {errors:?}"))?;
     let mut shader = ViewportShader(&artifact)?;
@@ -498,7 +637,9 @@ fn BuildRoomShader() -> Result<GpuViewportShader, String> {
     if !std::env::var("WYRMCOIL_GRAPHICS_BACKEND")
         .is_ok_and(|value| value.eq_ignore_ascii_case("d3d11"))
     {
-        shader.producer = Some(Arc::new(super::vulkan::RoomProducer::New(artifact)));
+        shader.producer = Some(Arc::new(super::vulkan::RoomProducer::New(
+            artifact, executor,
+        )));
     }
     Ok(shader)
 }
@@ -525,8 +666,50 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn cancelled_request_cannot_install_art_over_the_replacement() {
+        let mut room = RoomPreview::New(None);
+        let stale = Arc::new(AtomicBool::new(false));
+        room.game_notice = Some("Loading game art…".into());
+        room.loading_art = Some(ArtRequest {
+            task: Task::ready(Err("stale decode".into())),
+            cancelled: Arc::clone(&stale),
+            fallback: None,
+        });
+        room.StopGame();
+        assert!(stale.load(Ordering::Relaxed));
+        assert!(room.loading_art.is_none());
+        assert!(room.game_art.is_none());
+
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../examples/games/last-watch");
+        let art = TacticalArt {
+            Props: vec![],
+            Actors: vec![],
+        };
+        room.RequestArt(root, art, false, Some("test fallback".into()));
+        assert!(
+            !room
+                .loading_art
+                .as_ref()
+                .unwrap()
+                .cancelled
+                .load(Ordering::Relaxed)
+        );
+        assert!(room.FinishArt().unwrap());
+        assert!(room.game_art.is_some());
+        let cancelled = Arc::new(AtomicBool::new(true));
+        let (path, config, _) = room.game_art.as_ref().unwrap();
+        assert_eq!(
+            TacticalGraphics::New(path, config, false, true, None, &cancelled)
+                .err()
+                .as_deref(),
+            Some("tactical art preparation cancelled")
+        );
+    }
+
+    #[test]
     fn room_shader_and_instances_use_one_shared_indexed_mesh() {
-        let shader = BuildRoomShader().unwrap();
+        let shader = BuildRoomShader(None).unwrap();
         assert_eq!(shader.vertex_entry, "Room_VS");
         assert_eq!(shader.pixel_entry, "Room_PS");
         assert!(shader.source.contains("ColumnW : TEXCOORD4"));
@@ -540,7 +723,7 @@ mod tests {
             ),
             (24, 36, 6)
         );
-        let room = RoomPreview::New();
+        let room = RoomPreview::New(None);
         let instances = Instances(&room.snapshot, 1.7).unwrap();
         assert_eq!(instances.len(), 8);
         assert_eq!(instances[0].color, room.snapshot.Floor.Color);
@@ -551,7 +734,7 @@ mod tests {
 
     #[test]
     fn room_input_latches_separate_walk_and_look_axes_and_pause_resets_time() {
-        let mut preview = RoomPreview::New();
+        let mut preview = RoomPreview::New(None);
         let initial = preview.snapshot.clone();
         let start = Instant::now();
         let key = |name| gpui::Keystroke {
@@ -572,7 +755,7 @@ mod tests {
         assert!(preview.Advance(start + Duration::from_secs(120) + Duration::from_millis(17)));
         assert_eq!(preview.snapshot.Camera, moved.Camera);
         assert_ne!(preview.snapshot.Guard, moved.Guard);
-        assert_eq!(RoomPreview::New().snapshot, initial);
+        assert_eq!(RoomPreview::New(None).snapshot, initial);
     }
 
     #[test]
@@ -582,7 +765,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target")
             .join(format!("room-reload-test-{}.toml", std::process::id()));
-        let mut room = RoomPreview::New();
+        let mut room = RoomPreview::New(None);
         let shader = room.shader.as_ref().ok().cloned();
         let start = Instant::now();
         room.Advance(start);
@@ -673,7 +856,7 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("wyrmcoil-scene.toml");
         let temporary = directory.join("wyrmcoil-scene.tmp");
-        let mut room = RoomPreview::New();
+        let mut room = RoomPreview::New(None);
         let mut saw_artifact = false;
         let start = Instant::now();
         room.Advance(start);
@@ -715,7 +898,7 @@ mod tests {
     fn failed_engine_construction_leaves_the_running_room_intact() {
         use wyrmcoil::{DwFrameId, DwFrameRegistry, DwMessage};
 
-        let mut room = RoomPreview::New();
+        let mut room = RoomPreview::New(None);
         let start = Instant::now();
         room.Advance(start);
         room.Advance(start + Duration::from_millis(17));

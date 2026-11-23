@@ -13,14 +13,16 @@ use ::gltf::{
 
 mod palette;
 mod source;
-pub use palette::{MeshAtlas, PackColor, PaletteMesh, PoseTimings, SkinMesh, SkinVertex};
-pub use source::{AssetError, AssetStage, ImportTimings, Texture};
-use source::{Resolve, Source};
+pub use palette::{
+    MeshAtlas, PackColor, PaletteMesh, PoseTimings, SkinClip, SkinMesh, SkinPose, SkinVertex,
+};
+pub use source::{AssetError, AssetStage, ImageTimings, ImportTimings, Texture};
+use source::{ImageCache, Resolve, Source};
 
 pub struct AssetLibrary {
     root: PathBuf,
     models: BTreeMap<PathBuf, Arc<ModelAsset>>,
-    textures: BTreeMap<PathBuf, Arc<Texture>>,
+    textures: ImageCache,
     clips: BTreeMap<(PathBuf, Vec<String>), Arc<ClipSet>>,
 }
 
@@ -39,7 +41,7 @@ impl AssetLibrary {
         Ok(Self {
             root,
             models: BTreeMap::new(),
-            textures: BTreeMap::new(),
+            textures: ImageCache::default(),
             clips: BTreeMap::new(),
         })
     }
@@ -92,6 +94,7 @@ impl AssetLibrary {
             total.Parse += timing.Parse;
             total.Buffers += timing.Buffers;
             total.Textures += timing.Textures;
+            total.Images.Add(&timing.Images);
             total.Geometry += timing.Geometry;
             total.Skins += timing.Skins;
             total.Animation += timing.Animation;
@@ -188,8 +191,9 @@ impl AssetLibrary {
             use std::fmt::Write;
             let _ = writeln!(
                 report,
-                "Palette preparation {:.2?} · {poses} poses · evaluation {:.2?} · skinning {:.2?} · atlas append {:.2?} · {} bytes",
+                "Palette preparation {:.2?} · sampling and color packing {:.2?} · {poses} poses · evaluation {:.2?} · skinning {:.2?} · atlas append {:.2?} · {} bytes",
                 palette_elapsed,
+                palette.ColorPreparation,
                 atlas.Timings.Evaluate,
                 atlas.Timings.Skin,
                 atlas.Timings.Append,
@@ -293,34 +297,59 @@ pub struct ModelAsset {
     order: Vec<usize>,
 }
 
+#[derive(Default)]
+struct PoseScratch {
+    local: Vec<Option<Placement>>,
+    world: Vec<SceneMatrix>,
+}
+
 impl ModelAsset {
     /// Evaluate all active world matrices in the original glTF coordinate space.
     pub fn Pose(&self, clip: Option<&Clip>, time: f32) -> Result<Vec<SceneMatrix>, String> {
+        let mut scratch = PoseScratch::default();
+        let targets = clip.map(|clip| self.ClipTargets(clip)).transpose()?;
+        self.PoseInto(clip.zip(targets.as_deref()), time, &mut scratch)?;
+        Ok(scratch.world)
+    }
+
+    fn ClipTargets(&self, clip: &Clip) -> Result<Vec<usize>, String> {
+        let mut targets = Vec::with_capacity(clip.Tracks.len());
+        for track in &clip.Tracks {
+            let index = if self.source_path == clip.source_path {
+                track.Node
+            } else {
+                self.FindNode(
+                    track
+                        .Name
+                        .as_deref()
+                        .ok_or("external clip has an unnamed target")?,
+                )?
+            };
+            if index >= self.Nodes.len()
+                || self.Nodes[index].matrix_only
+                || !self.order.contains(&index)
+            {
+                return Err(format!("invalid animation target node {index}"));
+            }
+            targets.push(index);
+        }
+        Ok(targets)
+    }
+
+    fn PoseInto(
+        &self,
+        bound: Option<(&Clip, &[usize])>,
+        time: f32,
+        scratch: &mut PoseScratch,
+    ) -> Result<(), String> {
         if !time.is_finite() || time < 0.0 {
             return Err("animation time must be finite and nonnegative".into());
         }
-        let mut placements = BTreeMap::new();
-        if let Some(clip) = clip {
-            for track in &clip.Tracks {
-                let index = if self.source_path == clip.source_path {
-                    track.Node
-                } else {
-                    self.FindNode(
-                        track
-                            .Name
-                            .as_deref()
-                            .ok_or("external clip has an unnamed target")?,
-                    )?
-                };
-                if index >= self.Nodes.len()
-                    || self.Nodes[index].matrix_only
-                    || !self.order.contains(&index)
-                {
-                    return Err(format!("invalid animation target node {index}"));
-                }
-                let placement = placements
-                    .entry(index)
-                    .or_insert(self.Nodes[index].placement);
+        scratch.local.resize(self.Nodes.len(), None);
+        scratch.local.fill(None);
+        if let Some((clip, targets)) = bound {
+            for (track, &index) in clip.Tracks.iter().zip(targets) {
+                let placement = scratch.local[index].get_or_insert(self.Nodes[index].placement);
                 let value = track.Sample(time);
                 match track.Property {
                     Property::Translation => placement.translation = [value[0], value[1], value[2]],
@@ -329,20 +358,20 @@ impl ModelAsset {
                 }
             }
         }
-        let mut global = vec![SceneMatrix::IDENTITY; self.Nodes.len()];
+        scratch
+            .world
+            .resize(self.Nodes.len(), SceneMatrix::IDENTITY);
         for &index in &self.order {
             let node = &self.Nodes[index];
-            let local = placements
-                .get(&index)
-                .map_or(node.Local, |placement| placement.Matrix());
-            global[index] = node
+            let local = scratch.local[index].map_or(node.Local, Placement::Matrix);
+            scratch.world[index] = node
                 .Parent
-                .map_or(local, |parent| global[parent].Multiply(local));
-            if !ValidMatrix(global[index]) {
+                .map_or(local, |parent| scratch.world[parent].Multiply(local));
+            if !ValidMatrix(scratch.world[index]) {
                 return Err(format!("nonfinite world transform at node {index}"));
             }
         }
-        Ok(global)
+        Ok(())
     }
 
     pub fn FindNode(&self, name: &str) -> Result<usize, String> {

@@ -1,6 +1,8 @@
 #Requires -Version 7.2
 param(
-    [switch]$PrepareOnly
+    [switch]$PrepareOnly,
+    [ValidateSet('dev', 'release', 'release-fast')]
+    [string]$Profile = 'dev'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -111,7 +113,7 @@ function Apply-ZedPatch([string]$name, [string[]]$paths, [string[]]$previous, [s
     }
 }
 Apply-ZedPatch 'm0' @('.', ':(exclude)crates/gpui', ':(exclude)crates/gpui_windows') @() @('m6v-workspace', 'm7-workspace', 'm8-workspace', 'm9-workspace')
-Apply-ZedPatch 'm4' @('crates/gpui', 'crates/gpui_windows') @('m3b', 'm3a') @('m6v-gpu', 'm8-gpu', 'm10-gpu')
+Apply-ZedPatch 'm4' @('crates/gpui', 'crates/gpui_windows') @('m3b', 'm3a') @('m6v-gpu', 'm8-gpu', 'm10-gpu', 'm12-gpu')
 
 $crate_path = 'crates/wyrmcoil_view'
 $crate_root = Join-Path $zed_root $crate_path
@@ -132,8 +134,13 @@ if ($PrepareOnly) {
 
 Push-Location -LiteralPath $zed_root
 try {
+    $build_options = @('--profile', $Profile)
+    if ($Profile -eq 'dev') {
+        $build_options += @('--config', 'profile.dev.package.png.opt-level=3',
+            '--config', 'profile.dev.package.fdeflate.opt-level=3')
+    }
     foreach ($binary in 'zed', 'cli') {
-        cargo build --locked --package $binary --bin $binary
+        cargo build --locked @build_options --package $binary --bin $binary
         if ($LASTEXITCODE -ne 0) {
             throw "Zed $binary build failed (exit $LASTEXITCODE)."
         }

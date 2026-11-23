@@ -317,7 +317,7 @@ impl Preview {
                 camera: Vec2::Zero(),
                 shader: NewViewportShader(),
             },
-            Mode::Room => Scene::Room(RoomPreview::New()),
+            Mode::Room => Scene::Room(RoomPreview::New(Some(cx.background_executor().clone()))),
         };
         let suffix = if mode == Mode::Planar {
             " Preview (2D)"

@@ -21,11 +21,9 @@ fn vertex_skinning_uses_readonly_float4_storage() {
             .contains("StructuredBuffer<float4> __sdslv_storage_JointColumns : register(t0)")
     );
     assert!(artifact.Hlsl.contains("vk::binding(0, 0)"));
-    assert!(
-        artifact
-            .Hlsl
-            .contains("TacticalSkin_Project(TacticalSkin_SkinPosition(input), instance)")
-    );
+    assert!(artifact.Hlsl.contains(
+        "TacticalSkin_Project(TacticalSkin_SkinPosition(input, instance.PaletteBase), instance)"
+    ));
     let invalid = TACTICAL_SKIN.replace("readonly array<float4>", "readwrite array<float4>");
     let errors =
         CompileCanonicalSourceToShaderArtifact("invalid-skin.sdslv", &invalid).unwrap_err();
@@ -55,6 +53,7 @@ fn tactical_skin_validates_vulkan_vertex_storage() {
                 "Binding 0",
                 "Location 6",
                 "Location 7",
+                "Location 8",
                 "ArrayStride 16",
             ] {
                 assert!(

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
@@ -64,9 +64,43 @@ pub struct ImportTimings {
     pub Parse: Duration,
     pub Buffers: Duration,
     pub Textures: Duration,
+    pub Images: ImageTimings,
     pub Geometry: Duration,
     pub Skins: Duration,
     pub Animation: Duration,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct ImageTimings {
+    pub Resolve: Duration,
+    pub ExternalRead: Duration,
+    pub Extract: Duration,
+    pub Identify: Duration,
+    pub Lookup: Duration,
+    pub Decode: Duration,
+    pub Convert: Duration,
+    pub Retain: Duration,
+    pub EncodedBytes: usize,
+    pub DecodedBytes: usize,
+    pub Hits: usize,
+    pub Misses: usize,
+}
+
+impl ImageTimings {
+    pub(super) fn Add(&mut self, other: &Self) {
+        self.Resolve += other.Resolve;
+        self.ExternalRead += other.ExternalRead;
+        self.Extract += other.Extract;
+        self.Identify += other.Identify;
+        self.Lookup += other.Lookup;
+        self.Decode += other.Decode;
+        self.Convert += other.Convert;
+        self.Retain += other.Retain;
+        self.EncodedBytes += other.EncodedBytes;
+        self.DecodedBytes += other.DecodedBytes;
+        self.Hits += other.Hits;
+        self.Misses += other.Misses;
+    }
 }
 
 #[derive(Debug)]
@@ -74,6 +108,74 @@ pub struct Texture {
     pub Width: u32,
     pub Height: u32,
     pub Rgba: Vec<u8>,
+}
+
+struct CachedImage {
+    format: image::ImageFormat,
+    encoded: Box<[u8]>,
+    rgba8: Arc<Texture>,
+}
+
+/// One import's immutable RGBA8 cache. Exact source bytes and effective
+/// decoder format are the identity, including for embedded GLB data.
+pub(super) struct ImageCache {
+    entries: VecDeque<CachedImage>,
+    bytes: usize,
+    limit: usize,
+}
+
+impl Default for ImageCache {
+    fn default() -> Self {
+        Self {
+            entries: VecDeque::new(),
+            bytes: 0,
+            limit: 64 * 1024 * 1024,
+        }
+    }
+}
+
+impl ImageCache {
+    fn Load(
+        &mut self,
+        bytes: &[u8],
+        mime: Option<&str>,
+        timing: &mut ImageTimings,
+    ) -> Result<Arc<Texture>, String> {
+        timing.EncodedBytes += bytes.len();
+        let start = Instant::now();
+        let format = Identify(bytes, mime)?;
+        timing.Identify += start.elapsed();
+        let start = Instant::now();
+        let hit = self
+            .entries
+            .iter()
+            .find(|entry| entry.format == format && entry.encoded.as_ref() == bytes);
+        timing.Lookup += start.elapsed();
+        if let Some(entry) = hit {
+            timing.Hits += 1;
+            return Ok(entry.rgba8.clone());
+        }
+
+        timing.Misses += 1;
+        let texture = Arc::new(Decode(bytes, format, timing)?);
+        timing.DecodedBytes += texture.Rgba.len();
+        let start = Instant::now();
+        let size = bytes.len() + texture.Rgba.len();
+        if size <= self.limit {
+            while self.bytes + size > self.limit || self.entries.len() >= 128 {
+                let entry = self.entries.pop_front().unwrap();
+                self.bytes -= entry.encoded.len() + entry.rgba8.Rgba.len();
+            }
+            self.entries.push_back(CachedImage {
+                format,
+                encoded: bytes.into(),
+                rgba8: texture.clone(),
+            });
+            self.bytes += size;
+        }
+        timing.Retain += start.elapsed();
+        Ok(texture)
+    }
 }
 
 pub(super) struct Source {
@@ -179,15 +281,38 @@ impl Source {
         &mut self,
         root: &Path,
         path: &Path,
-        cache: &mut BTreeMap<PathBuf, Arc<Texture>>,
+        cache: &mut ImageCache,
     ) -> Result<Vec<Arc<Texture>>, AssetError> {
         let now = Instant::now();
         let mut images = Vec::new();
         let mut usage = 0;
         for image in self.document.images() {
-            let texture = self
-                .DecodeTexture(root, path.parent().unwrap(), image.source(), cache)
-                .map_err(|error| AssetError::New(path, AssetStage::Textures, error))?;
+            let texture = match image.source() {
+                gltf_image::Source::View { view, mime_type } => {
+                    let start = Instant::now();
+                    let offset = view.offset();
+                    let bytes =
+                        &self.buffers[view.buffer().index()].0[offset..offset + view.length()];
+                    self.timings.Images.Extract += start.elapsed();
+                    cache.Load(bytes, Some(mime_type), &mut self.timings.Images)
+                }
+                gltf_image::Source::Uri { uri, mime_type } => DecodeUriTexture(
+                    root,
+                    path.parent().unwrap(),
+                    uri,
+                    mime_type,
+                    cache,
+                    &mut self.timings.Images,
+                ),
+            }
+            .map_err(|error| {
+                let index = image.index();
+                AssetError::New(
+                    path,
+                    AssetStage::Textures,
+                    format!("image {index}: {error}"),
+                )
+            })?;
             usage += texture.Rgba.len();
             if usage > MAX_TEXTURES {
                 return Err(AssetError::New(
@@ -201,40 +326,29 @@ impl Source {
         self.timings.Textures = now.elapsed();
         Ok(images)
     }
+}
 
-    fn DecodeTexture(
-        &self,
-        root: &Path,
-        directory: &Path,
-        source: gltf_image::Source<'_>,
-        cache: &mut BTreeMap<PathBuf, Arc<Texture>>,
-    ) -> Result<Arc<Texture>, String> {
-        match source {
-            gltf_image::Source::View { view, mime_type } => {
-                let bytes = &self.buffers[view.buffer().index()].0
-                    [view.offset()..view.offset() + view.length()];
-                Decode(bytes, Some(mime_type)).map(Arc::new)
-            }
-            gltf_image::Source::Uri { uri, mime_type } if uri.starts_with("data:") => {
-                let bytes = UriBytes(root, directory, uri)?;
-                let declared = uri
-                    .strip_prefix("data:")
-                    .and_then(|rest| rest.split_once(';'))
-                    .map(|(mime, _)| mime);
-                Decode(&bytes, mime_type.or(declared)).map(Arc::new)
-            }
-            gltf_image::Source::Uri { uri, mime_type } => {
-                let path = UriPath(root, directory, uri)?;
-                if let Some(cached) = cache.get(&path) {
-                    return Ok(cached.clone());
-                }
-                let bytes = BoundedRead(&path)?;
-                let texture = Arc::new(Decode(&bytes, mime_type)?);
-                cache.insert(path, texture.clone());
-                Ok(texture)
-            }
-        }
+fn DecodeUriTexture(
+    root: &Path,
+    directory: &Path,
+    uri: &str,
+    mime: Option<&str>,
+    cache: &mut ImageCache,
+    timing: &mut ImageTimings,
+) -> Result<Arc<Texture>, String> {
+    let start = Instant::now();
+    if let Some(data) = uri.strip_prefix("data:") {
+        let bytes = UriBytes(root, directory, uri)?;
+        let declared = data.split_once(';').map(|(mime, _)| mime);
+        timing.Extract += start.elapsed();
+        return cache.Load(&bytes, mime.or(declared), timing);
     }
+    let path = UriPath(root, directory, uri)?;
+    timing.Resolve += start.elapsed();
+    let start = Instant::now();
+    let bytes = BoundedRead(&path)?;
+    timing.ExternalRead += start.elapsed();
+    cache.Load(&bytes, mime, timing)
 }
 
 fn ReadBuffers(
@@ -296,7 +410,7 @@ fn ReadBuffers(
     Ok(buffers)
 }
 
-fn Decode(bytes: &[u8], mime: Option<&str>) -> Result<Texture, String> {
+fn Identify(bytes: &[u8], mime: Option<&str>) -> Result<image::ImageFormat, String> {
     let format = match mime {
         Some("image/png") => image::ImageFormat::Png,
         Some("image/jpeg") => image::ImageFormat::Jpeg,
@@ -306,19 +420,93 @@ fn Decode(bytes: &[u8], mime: Option<&str>) -> Result<Texture, String> {
     if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg) {
         return Err("glTF base color supports PNG and JPEG".into());
     }
+    Ok(format)
+}
+
+fn Decode(
+    bytes: &[u8],
+    format: image::ImageFormat,
+    timing: &mut ImageTimings,
+) -> Result<Texture, String> {
+    let start = Instant::now();
     let mut decoder = image::ImageReader::with_format(Cursor::new(bytes), format);
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(4096);
     limits.max_image_height = Some(4096);
     limits.max_alloc = Some(64 * 1024 * 1024);
     decoder.limits(limits);
-    let image = decoder
-        .decode()
-        .map_err(|error| error.to_string())?
-        .into_rgba8();
-    Ok(Texture {
+    let image = decoder.decode().map_err(|error| error.to_string())?;
+    timing.Decode += start.elapsed();
+    let start = Instant::now();
+    let image = image.into_rgba8();
+    let result = Texture {
         Width: image.width(),
         Height: image.height(),
         Rgba: image.into_raw(),
-    })
+    };
+    timing.Convert += start.elapsed();
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{ExtendedColorType, ImageEncoder, codecs::png::PngEncoder};
+
+    fn Png(color: ExtendedColorType, pixels: &[u8]) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        PngEncoder::new(&mut encoded)
+            .write_image(pixels, 2, 1, color)
+            .unwrap();
+        encoded
+    }
+
+    #[test]
+    fn image_identity_and_rgba_lanes() {
+        let rgba = [11, 21, 31, 0, 128, 132, 246, 63];
+        let bytes = Png(ExtendedColorType::Rgba8, &rgba);
+        let mut cache = ImageCache::default();
+        let mut timing = ImageTimings::default();
+        let image = cache.Load(&bytes, None, &mut timing).unwrap();
+        assert_eq!((image.Width, image.Height), (2, 1));
+        assert_eq!(image.Rgba, rgba);
+        let duplicate = cache.Load(&bytes, Some("image/png"), &mut timing).unwrap();
+        assert!(Arc::ptr_eq(&image, &duplicate));
+        let edited = Png(ExtendedColorType::Rgb8, &[11, 21, 31, 128, 132, 246]);
+        let opaque = cache.Load(&edited, None, &mut timing).unwrap();
+        assert_eq!(opaque.Rgba, [11, 21, 31, 255, 128, 132, 246, 255]);
+        assert!(!Arc::ptr_eq(&image, &opaque));
+        assert_eq!(
+            (timing.Hits, timing.Misses, timing.DecodedBytes),
+            (1, 2, 16)
+        );
+    }
+
+    #[test]
+    fn corrupted_input_never_becomes_a_hit_and_cache_stays_bounded() {
+        let good = Png(ExtendedColorType::Rgba8, &[20; 8]);
+        let second = Png(ExtendedColorType::Rgba8, &[40; 8]);
+        let mut corrupt = good.clone();
+        corrupt.truncate(35);
+        let mut cache = ImageCache {
+            limit: good.len().max(second.len()) + 8,
+            ..Default::default()
+        };
+        let mut timing = ImageTimings::default();
+        assert!(
+            cache
+                .Load(&corrupt, Some("image/png"), &mut timing)
+                .is_err()
+        );
+        assert!(cache.Load(&good, Some("image/jpeg"), &mut timing).is_err());
+        assert_eq!(cache.entries.len(), 0);
+        let live = cache.Load(&good, None, &mut timing).unwrap();
+        cache.Load(&second, None, &mut timing).unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        assert!(cache.bytes <= cache.limit);
+        assert_eq!(live.Rgba, [20; 8]);
+        let reloaded = cache.Load(&good, None, &mut timing).unwrap();
+        assert!(!Arc::ptr_eq(&live, &reloaded));
+        assert_eq!(live.Rgba, reloaded.Rgba);
+    }
 }

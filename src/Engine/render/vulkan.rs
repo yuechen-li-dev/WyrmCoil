@@ -5,8 +5,8 @@ use crate::Engine::asset::gltf::SkinVertex;
 use ash::{Entry, vk};
 use std::ffi::CStr;
 use std::io::Cursor;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[path = "vulkan_skin.rs"]
 mod skin;
@@ -23,7 +23,67 @@ const MAX_INSTANCES: usize = 2048;
 
 pub type VulkanRoomInstance = [[f32; 4]; 5];
 
+pub struct VulkanSkinGeometry<'a> {
+    pub Vertices: &'a [SkinVertex],
+    pub Indices: &'a [u16],
+    pub Joints: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct VulkanSkinInstance {
+    pub Transform: VulkanRoomInstance,
+    pub PaletteBase: u32,
+    pub Mesh: u32,
+}
+
 type Result<T> = std::result::Result<T, String>;
+
+/// Diagnostic wall time for one startup call. The begin record also survives
+/// a call that fails to return. Opt in with WYRMCOIL_VULKAN_STARTUP=1.
+pub struct StartupStage {
+    name: &'static str,
+    start: Option<Instant>,
+}
+
+impl StartupStage {
+    pub fn Enabled() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var("WYRMCOIL_VULKAN_STARTUP").as_deref() == Ok("1"))
+    }
+
+    pub fn Begin(name: &'static str) -> Self {
+        let start = Self::Enabled().then(Instant::now);
+        if start.is_some() {
+            Self::Write(name, "begin", 0);
+        }
+        Self { name, start }
+    }
+
+    pub fn Call<T>(name: &'static str, work: impl FnOnce() -> T) -> T {
+        let _stage = Self::Begin(name);
+        work()
+    }
+
+    fn Write(name: &str, event: &str, micros: u128) {
+        let time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        eprintln!(
+            "wyrmcoil_vk stage={name} event={event} unix_ms={} thread={:?} elapsed_us={micros}",
+            time.as_millis(),
+            std::thread::current().id()
+        );
+    }
+}
+
+impl Drop for StartupStage {
+    fn drop(&mut self) {
+        if let Some(start) = self.start {
+            Self::Write(self.name, "end", start.elapsed().as_micros());
+        }
+    }
+}
 
 fn Check<T>(operation: &str, result: ash::prelude::VkResult<T>) -> Result<T> {
     result.map_err(|error| format!("{operation}: {error:?}"))
@@ -58,24 +118,29 @@ impl Device {
     fn New(luid: [u8; 8]) -> Result<Arc<Self>> {
         // No surface or swapchain extensions are requested. ash loads the installed loader.
         unsafe {
-            let entry = Entry::load().map_err(|error| format!("Load Vulkan: {error}"))?;
+            let entry = StartupStage::Call("loader", || Entry::load())
+                .map_err(|error| format!("Load Vulkan: {error}"))?;
             let info = vk::ApplicationInfo::default()
                 .application_name(c"WyrmCoil")
                 .api_version(vk::API_VERSION_1_3);
             let raw = Check(
                 "Create Vulkan instance",
-                entry.create_instance(
-                    &vk::InstanceCreateInfo::default().application_info(&info),
-                    None,
-                ),
+                StartupStage::Call("instance", || {
+                    entry.create_instance(
+                        &vk::InstanceCreateInfo::default().application_info(&info),
+                        None,
+                    )
+                }),
             )?;
             let instance = Instance { _entry: entry, raw };
             let raw = &instance.raw;
-            let mut selected = None;
-            for physical in Check(
+            let adapters = Check(
                 "Enumerate Vulkan adapters",
-                raw.enumerate_physical_devices(),
-            )? {
+                StartupStage::Call("enumerate_adapters", || raw.enumerate_physical_devices()),
+            )?;
+            let matching = StartupStage::Begin("match_adapter_luid");
+            let mut selected = None;
+            for physical in adapters {
                 let mut identity = vk::PhysicalDeviceIDProperties::default();
                 let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut identity);
                 raw.get_physical_device_properties2(physical, &mut props);
@@ -87,6 +152,8 @@ impl Device {
             }
             let (physical, props) = selected
                 .ok_or_else(|| format!("No Vulkan adapter matches DXGI LUID {luid:02x?}"))?;
+            drop(matching);
+            let capabilities = StartupStage::Begin("physical_capabilities");
             let name = CStr::from_ptr(props.device_name.as_ptr())
                 .to_string_lossy()
                 .into_owned();
@@ -164,13 +231,24 @@ impl Device {
                 .queue_create_infos(&queues)
                 .enabled_extension_names(&names)
                 .push_next(&mut dynamic);
+            let memory = raw.get_physical_device_memory_properties(physical);
+            let caps = props.limits;
+            drop(capabilities);
+            if StartupStage::Enabled() {
+                eprintln!(
+                    "wyrmcoil_vk adapter={name:?} luid={luid:02x?} api={} driver={:#x}",
+                    props.api_version, props.driver_version
+                );
+            }
             let device = Check(
                 "Create Vulkan graphics device",
-                raw.create_device(physical, &info, None),
+                StartupStage::Call("logical_device", || {
+                    raw.create_device(physical, &info, None)
+                }),
             )?;
-            let queue = device.get_device_queue(family, 0);
-            let memory = raw.get_physical_device_memory_properties(physical);
-            let caps = raw.get_physical_device_properties(physical).limits;
+            let queue = StartupStage::Call("graphics_compute_queue", || {
+                device.get_device_queue(family, 0)
+            });
             let max_size = vk::Extent2D {
                 width: limits.max_extent.width,
                 height: limits.max_extent.height,
@@ -253,8 +331,12 @@ impl Buffer {
     }
 
     fn Upload<T: Copy>(&self, data: &[T]) -> Result<()> {
+        self.UploadAt(0, data)
+    }
+
+    fn UploadAt<T: Copy>(&self, offset: usize, data: &[T]) -> Result<()> {
         let length = std::mem::size_of_val(data);
-        if length == 0 || length > self.size {
+        if length == 0 || offset.checked_add(length).is_none_or(|end| end > self.size) {
             return Err(format!(
                 "Vulkan upload is {length} bytes, capacity {}",
                 self.size
@@ -268,11 +350,15 @@ impl Buffer {
                 self.device.raw.map_memory(
                     self.memory,
                     0,
-                    length as u64,
+                    (offset + length) as u64,
                     vk::MemoryMapFlags::empty(),
                 ),
             )?;
-            std::ptr::copy_nonoverlapping(data.as_ptr().cast::<u8>(), ptr.cast::<u8>(), length);
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr().cast::<u8>(),
+                ptr.cast::<u8>().add(offset),
+                length,
+            );
             self.device.raw.unmap_memory(self.memory);
         }
         Ok(())
@@ -354,7 +440,10 @@ impl Image {
         // which the Vulkan import retains independently of the handle reference.
         unsafe {
             let raw = &device.raw;
-            image.raw = Check("Create Vulkan image", raw.create_image(&info, None))?;
+            image.raw = Check(
+                "Create Vulkan image",
+                StartupStage::Call("image_create", || raw.create_image(&info, None)),
+            )?;
             let req = raw.get_image_memory_requirements(image.raw);
             let mut mask = req.memory_type_bits;
             let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(image.raw);
@@ -367,7 +456,13 @@ impl Image {
                 let mut compatible = vk::MemoryWin32HandlePropertiesKHR::default();
                 Check(
                     "Query D3D11 shared handle memory types",
-                    memory.get_memory_win32_handle_properties(SHARED, handle as _, &mut compatible),
+                    StartupStage::Call("external_handle_memory_types", || {
+                        memory.get_memory_win32_handle_properties(
+                            SHARED,
+                            handle as _,
+                            &mut compatible,
+                        )
+                    }),
                 )?;
                 mask &= compatible.memory_type_bits;
                 import = import.handle_type(SHARED).handle(handle as _);
@@ -375,13 +470,20 @@ impl Image {
                 properties = vk::MemoryPropertyFlags::empty();
             }
             alloc = alloc.memory_type_index(device.MemoryType(mask, properties)?);
+            let stage = if external_handle.is_some() {
+                "external_memory_import"
+            } else {
+                "image_memory"
+            };
             image.memory = Check(
                 "Allocate Vulkan image memory",
-                raw.allocate_memory(&alloc, None),
+                StartupStage::Call(stage, || raw.allocate_memory(&alloc, None)),
             )?;
             Check(
                 "Bind Vulkan image memory",
-                raw.bind_image_memory(image.raw, image.memory, 0),
+                StartupStage::Call("image_bind", || {
+                    raw.bind_image_memory(image.raw, image.memory, 0)
+                }),
             )?;
             let view = vk::ImageViewCreateInfo::default()
                 .image(image.raw)
@@ -390,7 +492,7 @@ impl Image {
                 .subresource_range(image.Range());
             image.view = Check(
                 "Create Vulkan image view",
-                raw.create_image_view(&view, None),
+                StartupStage::Call("image_view", || raw.create_image_view(&view, None)),
             )?;
         }
         Ok(image)
@@ -435,6 +537,7 @@ pub struct VulkanRoom {
     command: vk::CommandBuffer,
     fence: vk::Fence,
     in_flight: bool,
+    first_submit_done: bool,
     index_count: u32,
     floor_indices: u32,
     mesh_upload_time: Duration,
@@ -464,6 +567,7 @@ impl VulkanRoom {
             return Err("Invalid Vulkan room mesh".into());
         }
         let device = Device::New(luid)?;
+        let buffers = StartupStage::Begin("room_buffers_and_upload");
         let upload_started = Instant::now();
         let vertices = Buffer::New(
             &device,
@@ -483,6 +587,7 @@ impl VulkanRoom {
             MAX_INSTANCES * size_of::<VulkanRoomInstance>(),
             vk::BufferUsageFlags::VERTEX_BUFFER,
         )?;
+        drop(buffers);
         let mut room = Self {
             device,
             targets: None,
@@ -495,6 +600,7 @@ impl VulkanRoom {
             command: vk::CommandBuffer::null(),
             fence: vk::Fence::null(),
             in_flight: false,
+            first_submit_done: false,
             index_count,
             floor_indices,
             mesh_upload_time,
@@ -509,19 +615,23 @@ impl VulkanRoom {
                 .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
             room.pool = Check(
                 "Create room command pool",
-                raw.create_command_pool(&info, None),
+                StartupStage::Call("command_pool", || raw.create_command_pool(&info, None)),
             )?;
             room.command = Check(
                 "Allocate room commands",
-                raw.allocate_command_buffers(
-                    &vk::CommandBufferAllocateInfo::default()
-                        .command_pool(room.pool)
-                        .command_buffer_count(1),
-                ),
+                StartupStage::Call("command_buffer", || {
+                    raw.allocate_command_buffers(
+                        &vk::CommandBufferAllocateInfo::default()
+                            .command_pool(room.pool)
+                            .command_buffer_count(1),
+                    )
+                }),
             )?[0];
             room.fence = Check(
                 "Create room fence",
-                raw.create_fence(&vk::FenceCreateInfo::default(), None),
+                StartupStage::Call("submission_fence", || {
+                    raw.create_fence(&vk::FenceCreateInfo::default(), None)
+                }),
             )?;
             room.layout = Check(
                 "Create room pipeline layout",
@@ -540,10 +650,10 @@ impl VulkanRoom {
         self.mesh_upload_time
     }
 
-    pub fn SkinUploadStats(&self) -> (u64, Duration) {
-        self.skin
-            .as_ref()
-            .map_or((0, Duration::ZERO), |skin| (skin.uploads, skin.upload_time))
+    pub fn SkinUploadStats(&self) -> (u64, u64, Duration) {
+        self.skin.as_ref().map_or((0, 0, Duration::ZERO), |skin| {
+            (skin.uploads, skin.uploaded_bytes, skin.upload_time)
+        })
     }
 
     pub fn EnableDrawTimings(&mut self) -> Result<()> {
@@ -558,12 +668,12 @@ impl VulkanRoom {
         self.timing.as_ref().map(|timing| timing.Stats())
     }
 
-    /// Attach one immutable skinned mesh before the viewport's first frame.
+    /// Upload the immutable bind meshes before the viewport's first frame.
     pub fn ConfigureSkin(
         &mut self,
-        vertices: &[SkinVertex],
-        indices: &[u16],
+        meshes: &[VulkanSkinGeometry<'_>],
         slots: usize,
+        capacity: usize,
         vertex: (&[u8], &CStr),
         pixel: (&[u8], &CStr),
     ) -> Result<()> {
@@ -572,9 +682,9 @@ impl VulkanRoom {
         }
         self.skin = Some(SkinPass::New(
             &self.device,
-            vertices,
-            indices,
+            meshes,
             slots,
+            capacity,
             vertex,
             pixel,
             COLOR,
@@ -600,8 +710,10 @@ impl VulkanRoom {
             return Err("Vulkan viewport still owns the previous texture".into());
         }
         let size = vk::Extent2D { width, height };
-        let color = Image::New(&self.device, size, Some(handle))?;
-        let depth = Image::New(&self.device, size, None)?;
+        let color = StartupStage::Call("attach_shared_color", || {
+            Image::New(&self.device, size, Some(handle))
+        })?;
+        let depth = StartupStage::Call("depth_resource", || Image::New(&self.device, size, None))?;
         self.targets = Some(Targets {
             color,
             depth,
@@ -647,31 +759,23 @@ impl VulkanRoom {
         &mut self,
         instances: &[VulkanRoomInstance],
         ranges: &[[u32; 3]],
-        instance: usize,
+        skinned: &[VulkanSkinInstance],
         palette: &[[[f32; 4]; 4]],
     ) -> Result<bool> {
-        unsafe { self.SubmitFrame(instances, ranges, Some((instance, palette))) }
+        unsafe { self.SubmitFrame(instances, ranges, Some((skinned, palette))) }
     }
 
     unsafe fn SubmitFrame(
         &mut self,
         instances: &[VulkanRoomInstance],
         ranges: &[[u32; 3]],
-        skin: Option<(usize, &[[[f32; 4]; 4]])>,
+        skin: Option<(&[VulkanSkinInstance], &[[[f32; 4]; 4]])>,
     ) -> Result<bool> {
-        if instances.is_empty() {
+        if instances.is_empty() && skin.is_none() {
             return Ok(false);
         }
-        let regular_count = if let Some((instance, _)) = skin {
-            if instance != instances.len() - 1 || instance != ranges.len() {
-                return Err("Vulkan skin instance must follow the indexed room instances".into());
-            }
-            instance
-        } else {
-            instances.len()
-        };
         if !ranges.is_empty()
-            && (ranges.len() != regular_count
+            && (ranges.len() != instances.len()
                 || ranges.iter().any(|&[start, count, base]| {
                     count == 0
                         || !count.is_multiple_of(3)
@@ -695,13 +799,15 @@ impl VulkanRoom {
             .targets
             .as_ref()
             .ok_or("Vulkan room target is missing")?;
-        if let Some((_, palette)) = skin {
+        if let Some((skinned, palette)) = skin {
             self.skin
                 .as_mut()
                 .ok_or("Vulkan skin pipeline is missing")?
-                .Upload(palette)?;
+                .Prepare(skinned, palette)?;
         }
-        self.instances.Upload(instances)?;
+        if !instances.is_empty() {
+            self.instances.Upload(instances)?;
+        }
         let device = &self.device;
         let command = self.command;
         // Fence completion permits rewriting both the instance buffer and command buffer.
@@ -723,9 +829,9 @@ impl VulkanRoom {
             RecordRoom(
                 self,
                 target,
-                regular_count as u32,
+                instances.len() as u32,
                 ranges,
-                skin.map(|(index, _)| index),
+                skin.map_or(&[], |(draws, _)| draws),
             );
             Check(
                 "Finish Vulkan room commands",
@@ -747,11 +853,15 @@ impl VulkanRoom {
             let submit = vk::SubmitInfo::default()
                 .command_buffers(&commands)
                 .push_next(&mut keyed);
+            let first_submit =
+                (!self.first_submit_done).then(|| StartupStage::Begin("first_queue_submit"));
             Check(
                 "Submit Vulkan room with keyed mutex",
                 device.raw.queue_submit(device.queue, &[submit], self.fence),
             )?;
+            drop(first_submit);
         }
+        self.first_submit_done = true;
         self.targets.as_mut().unwrap().submitted = true;
         self.in_flight = true;
         if let Some(timing) = &mut self.timing {
@@ -792,6 +902,7 @@ fn CreatePipeline(
     let ps = words(pixel.0)?;
     // Both stages have validated SPIR-V and matching vertex/fragment interfaces.
     unsafe {
+        let modules = StartupStage::Begin("shader_modules");
         let vertex_module = Check(
             "Create Vulkan room vertex shader",
             device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&vs), None),
@@ -805,6 +916,7 @@ fn CreatePipeline(
                 return Err(format!("Create Vulkan room pixel shader: {error:?}"));
             }
         };
+        drop(modules);
         let stages = [
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::VERTEX)
@@ -827,7 +939,11 @@ fn CreatePipeline(
             },
             vk::VertexInputBindingDescription {
                 binding: 1,
-                stride: 80,
+                stride: if skinned {
+                    size_of::<VulkanSkinInstance>() as u32
+                } else {
+                    80
+                },
                 input_rate: vk::VertexInputRate::INSTANCE,
             },
         ];
@@ -851,6 +967,12 @@ fn CreatePipeline(
                 binding: 0,
                 format: vk::Format::R32G32B32A32_SFLOAT,
                 offset: 32,
+            });
+            attributes.push(vk::VertexInputAttributeDescription {
+                location: 8,
+                binding: 1,
+                format: vk::Format::R32_UINT,
+                offset: std::mem::offset_of!(VulkanSkinInstance, PaletteBase) as u32,
             });
         }
         let input = vk::PipelineVertexInputStateCreateInfo::default()
@@ -893,7 +1015,14 @@ fn CreatePipeline(
             .dynamic_state(&dynamic)
             .layout(layout)
             .push_next(&mut rendering);
-        let pipeline = device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None);
+        let stage = if skinned {
+            "skin_graphics_pipeline"
+        } else {
+            "room_graphics_pipeline"
+        };
+        let pipeline = StartupStage::Call(stage, || {
+            device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)
+        });
         device.destroy_shader_module(pixel_module, None);
         device.destroy_shader_module(vertex_module, None);
         match pipeline {
@@ -913,7 +1042,7 @@ fn RecordRoom(
     target: &Targets,
     count: u32,
     ranges: &[[u32; 3]],
-    skinned: Option<usize>,
+    skinned: &[VulkanSkinInstance],
 ) {
     let device = &room.device.raw;
     let command = room.command;
@@ -1036,14 +1165,11 @@ fn RecordRoom(
                 device.cmd_draw_indexed(command, room.index_count, count, 0, 0, 0);
             }
         }
-        if let Some(index) = skinned {
+        if !skinned.is_empty() {
             if let Some(timing) = &room.timing {
                 timing.Mark(command, 2);
             }
-            room.skin
-                .as_ref()
-                .unwrap()
-                .Draw(command, room.instances.raw, index as u32);
+            room.skin.as_ref().unwrap().Draw(command, skinned);
             if let Some(timing) = &room.timing {
                 timing.Mark(command, 3);
             }
